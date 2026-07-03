@@ -113,7 +113,7 @@ describe("OpenRoad workspace shell", () => {
     expect(within(screen.getByLabelText("Workspace status")).getByText("Launch Desk")).toBeInTheDocument();
     expect(screen.getByText("No requests yet")).toBeInTheDocument();
     expect(screen.getByText("No request selected")).toBeInTheDocument();
-    expect(screen.getAllByText("Nothing placed yet")).toHaveLength(3);
+    expect(screen.getByText("No roadmap items yet")).toBeInTheDocument();
     expect(screen.getByText("No changelog drafts")).toBeInTheDocument();
   });
 
@@ -171,6 +171,31 @@ describe("OpenRoad workspace shell", () => {
     expect(screen.getByText("Inline markdown in comments")).toBeInTheDocument();
   });
 
+  it("keeps roadmap rows scannable and edits only the selected item", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    const roadmap = screen.getByRole("region", { name: /Now \/ Next \/ Later/ });
+
+    expect(
+      within(roadmap).getByRole("complementary", {
+        name: "Selected roadmap item API rate limit visibility"
+      })
+    ).toBeInTheDocument();
+    expect(screen.getAllByLabelText(/^Lane for /)).toHaveLength(1);
+
+    await user.click(within(roadmap).getByRole("button", { name: /Bulk export to CSV/ }));
+
+    const selectedDetail = within(roadmap).getByRole("complementary", {
+      name: "Selected roadmap item Bulk export to CSV"
+    });
+    expect(within(selectedDetail).getByLabelText("Lane for Bulk export to CSV")).toHaveValue(
+      "Next"
+    );
+    expect(screen.queryByLabelText("Lane for API rate limit visibility")).not.toBeInTheDocument();
+    expect(screen.getAllByLabelText(/^Lane for /)).toHaveLength(1);
+  });
+
   it("creates and edits roadmap items in a blank workspace", async () => {
     const user = userEvent.setup();
     render(<App />);
@@ -192,19 +217,28 @@ describe("OpenRoad workspace shell", () => {
     await user.click(within(form).getByLabelText("Needs review"));
     await user.click(screen.getByRole("button", { name: "Create roadmap item" }));
 
-    expect(screen.getByRole("heading", { name: "Customer-facing roadmap" })).toBeInTheDocument();
-    expect(screen.getByText("Show the next public direction.")).toBeInTheDocument();
-    const roadmapState = screen.getByLabelText("Customer-facing roadmap roadmap state");
+    const selectedDetail = screen.getByRole("complementary", {
+      name: "Selected roadmap item Customer-facing roadmap"
+    });
+    expect(
+      within(selectedDetail).getByRole("heading", { name: "Customer-facing roadmap" })
+    ).toBeInTheDocument();
+    expect(within(selectedDetail).getByText("Show the next public direction.")).toBeInTheDocument();
+    const roadmapState = within(selectedDetail).getByLabelText(
+      "Customer-facing roadmap roadmap state"
+    );
     expect(within(roadmapState).getByText("Public")).toBeInTheDocument();
     expect(within(roadmapState).getByText("High confidence")).toBeInTheDocument();
     expect(within(roadmapState).getByText("Needs review")).toBeInTheDocument();
 
     await user.selectOptions(
-      screen.getByLabelText("Lane for Customer-facing roadmap"),
+      within(selectedDetail).getByLabelText("Lane for Customer-facing roadmap"),
       "Later"
     );
 
-    expect(screen.getByLabelText("Lane for Customer-facing roadmap")).toHaveValue("Later");
+    expect(within(selectedDetail).getByLabelText("Lane for Customer-facing roadmap")).toHaveValue(
+      "Later"
+    );
   });
 
   it("links and unlinks requests and work items from roadmap items", async () => {
@@ -448,7 +482,7 @@ describe("OpenRoad workspace shell", () => {
       within(inboxRegion).queryByRole("button", { name: /Webhook retry controls/ })
     ).not.toBeInTheDocument();
     expect(
-      within(screen.getByRole("complementary", { name: /API rate limit visibility/ })).getByRole(
+      within(screen.getByRole("complementary", { name: "API rate limit visibility" })).getByRole(
         "heading",
         { name: "API rate limit visibility" }
       )
@@ -474,7 +508,7 @@ describe("OpenRoad workspace shell", () => {
     await user.selectOptions(screen.getByRole("combobox", { name: "Archive filter" }), "archived");
 
     expect(
-      within(screen.getByRole("complementary", { name: /API rate limit visibility/ })).getByRole(
+      within(screen.getByRole("complementary", { name: "API rate limit visibility" })).getByRole(
         "heading",
         { name: "API rate limit visibility" }
       )
@@ -486,7 +520,7 @@ describe("OpenRoad workspace shell", () => {
   it("keeps the selected inspector to four major triage actions", () => {
     render(<App />);
 
-    const inspector = screen.getByRole("complementary", { name: /API rate limit visibility/ });
+    const inspector = screen.getByRole("complementary", { name: "API rate limit visibility" });
     expect(within(inspector).getAllByRole("button")).toHaveLength(4);
   });
 
@@ -609,7 +643,7 @@ describe("OpenRoad workspace shell", () => {
     await user.click(screen.getByRole("button", { name: "Unlink API rate limit visibility" }));
 
     expect(
-      within(screen.getByRole("complementary", { name: /API rate limit visibility/ })).getByRole(
+      within(screen.getByRole("complementary", { name: "API rate limit visibility" })).getByRole(
         "heading",
         { name: "API rate limit visibility" }
       )

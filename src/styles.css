@@ -1384,46 +1384,44 @@ dd {
   top: 96px;
 }
 
-.roadmap-lanes {
+.roadmap-workspace {
   display: grid;
-  gap: 8px;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  grid-template-columns: minmax(0, 1fr) minmax(286px, 0.4fr);
   position: relative;
   z-index: 1;
 }
 
-.lane {
-  background: var(--plate);
-  border: 1px solid var(--line);
+.roadmap-lanes {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   min-width: 0;
-  padding: 11px;
-  position: relative;
 }
 
-.lane::before {
-  background: var(--line-strong);
-  content: "";
-  height: 1px;
-  left: 11px;
-  position: absolute;
-  right: 11px;
-  top: 38px;
+.lane {
+  border-top: 1px solid var(--line-strong);
+  min-width: 0;
+  padding-top: 10px;
 }
 
-.lane strong {
+.lane > strong {
   align-items: center;
-  display: block;
+  color: var(--muted);
+  display: flex;
   font-family: var(--label-font);
-  margin-bottom: 14px;
+  font-size: 12px;
+  gap: 8px;
+  margin-bottom: 8px;
+  text-transform: uppercase;
 }
 
-.lane strong::before {
+.lane > strong::before {
   border: 1px solid var(--route);
   content: "";
   display: inline-block;
+  flex: 0 0 auto;
   height: 8px;
-  margin-right: 8px;
-  vertical-align: 1px;
   width: 8px;
 }
 
@@ -1437,7 +1435,7 @@ dd {
 
 .roadmap-item-list {
   display: grid;
-  gap: 9px;
+  gap: 2px;
 }
 
 .lane li {
@@ -1458,30 +1456,48 @@ dd {
   white-space: nowrap;
 }
 
-.roadmap-item {
-  background: color-mix(in oklch, var(--plate) 82%, black);
-  border: 1px solid var(--line);
-  display: grid;
-  gap: 9px;
-  min-width: 0;
-  padding: 10px;
-}
-
-.roadmap-item-header,
 .roadmap-badges,
+.roadmap-detail-header,
 .roadmap-links,
 .link-pill,
-.lane-empty {
+.lane-empty,
+.roadmap-row-meta {
   align-items: center;
   display: flex;
 }
 
-.roadmap-item-header {
+.roadmap-row {
+  background: transparent;
+  border: 1px solid transparent;
+  border-top-color: var(--line);
+  color: var(--ink);
+  display: grid;
   gap: 8px;
-  justify-content: space-between;
+  min-height: 92px;
+  min-width: 0;
+  padding: 10px 8px;
+  text-align: left;
+  width: 100%;
 }
 
-.roadmap-item h3 {
+.roadmap-row:hover {
+  background: color-mix(in oklch, var(--plate) 68%, transparent);
+  border-color: var(--line);
+}
+
+.roadmap-row.selected {
+  background: color-mix(in oklch, var(--plate-2) 70%, transparent);
+  border-color: var(--line-strong);
+}
+
+.roadmap-row-main {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.roadmap-row-main strong,
+.roadmap-detail h3 {
   color: var(--ink);
   font-family: var(--label-font);
   font-size: 14px;
@@ -1489,16 +1505,54 @@ dd {
   margin: 0;
 }
 
-.roadmap-item p {
+.roadmap-row-main small,
+.roadmap-row-meta small,
+.roadmap-detail p {
   color: var(--muted);
   font-size: 13px;
   line-height: 1.45;
   margin: 0;
+  min-width: 0;
+}
+
+.roadmap-row-main small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .roadmap-badges {
   flex-wrap: wrap;
   gap: 6px;
+}
+
+.roadmap-row-meta {
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.roadmap-detail {
+  border-left: 1px solid var(--line-strong);
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding-left: 16px;
+}
+
+.roadmap-detail-header {
+  align-items: flex-start;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.roadmap-detail-header > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.roadmap-detail p {
+  max-width: 62ch;
 }
 
 .roadmap-controls {
@@ -1629,8 +1683,16 @@ dd {
 
   .command-deck,
   .brief-plate,
+  .roadmap-workspace,
   .map-board {
     grid-template-columns: 1fr;
+  }
+
+  .roadmap-detail {
+    border-left: 0;
+    border-top: 1px solid var(--line-strong);
+    padding-left: 0;
+    padding-top: 14px;
   }
 
   .brief-instruments {
@@ -1703,6 +1765,7 @@ dd {
   .request-tools,
   .triage-summary,
   .route-protocol,
+  .roadmap-workspace,
   .roadmap-lanes,
   .roadmap-controls,
   .settings-grid,
@@ -1713,6 +1776,10 @@ dd {
   .triage-summary span + span {
     border-left: 0;
     border-top: 1px solid var(--line);
+  }
+
+  .roadmap-detail {
+    order: -1;
   }
 
   .protocol-step + .protocol-step {

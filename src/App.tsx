@@ -6,6 +6,7 @@ import {
   ChevronDown,
   CircleDot,
   Command,
+  GitMerge,
   Globe2,
   Inbox,
   LayoutDashboard,
@@ -24,6 +25,13 @@ import {
 import { type FormEvent, useMemo, useState } from "react";
 
 const requestStatuses = ["New", "Needs decision", "Planned", "Shipping soon"] as const;
+const requestOwners = ["Unassigned", "Akhil", "Product", "Support", "Maintainer"] as const;
+const triageViews = [
+  { value: "all", label: "All active" },
+  { value: "unassigned", label: "Unassigned" },
+  { value: "needs-decision", label: "Needs decision" },
+  { value: "high-signal", label: "High signal" }
+] as const;
 const integrationChips: IntegrationChip[] = [
   { label: "GitHub", state: "Optional" },
   { label: "Jira", state: "Optional" },
@@ -37,8 +45,10 @@ type NavItem = {
 };
 
 type RequestStatus = (typeof requestStatuses)[number];
+type RequestOwner = (typeof requestOwners)[number];
 type RequestStatusFilter = "All" | RequestStatus;
 type RequestArchiveFilter = "active" | "archived";
+type TriageView = (typeof triageViews)[number]["value"];
 
 type Workspace = {
   id: string;
@@ -61,9 +71,11 @@ type RequestItem = {
   votes: number;
   hasCurrentUserVote: boolean;
   status: RequestStatus;
+  owner: RequestOwner;
   age: string;
   archived: boolean;
   comments: RequestComment[];
+  mergedSources: MergedRequestSource[];
 };
 
 type RequestComment = {
@@ -71,6 +83,22 @@ type RequestComment = {
   author: string;
   body: string;
   age: string;
+};
+
+type MergedRequestSource = {
+  id: string;
+  title: string;
+  description: string;
+  requester: string;
+  source: string;
+  owner: RequestOwner;
+  status: RequestStatus;
+  votes: number;
+  hasCurrentUserVote: boolean;
+  tags: string[];
+  commentCount: number;
+  age: string;
+  mergedAt: string;
 };
 
 type ChangelogItem = {
@@ -126,6 +154,7 @@ const initialWorkspaces: Workspace[] = [
         votes: 142,
         hasCurrentUserVote: false,
         status: "Needs decision",
+        owner: "Unassigned",
         age: "2h ago",
         archived: false,
         comments: [
@@ -135,7 +164,8 @@ const initialWorkspaces: Workspace[] = [
             body: "Three customers asked for a visible limit meter this week.",
             age: "1h ago"
           }
-        ]
+        ],
+        mergedSources: []
       },
       {
         id: "bulk-export-csv",
@@ -148,9 +178,11 @@ const initialWorkspaces: Workspace[] = [
         votes: 97,
         hasCurrentUserVote: false,
         status: "Planned",
+        owner: "Support",
         age: "5h ago",
         archived: false,
-        comments: []
+        comments: [],
+        mergedSources: []
       },
       {
         id: "dark-mode-docs",
@@ -162,9 +194,11 @@ const initialWorkspaces: Workspace[] = [
         votes: 89,
         hasCurrentUserVote: false,
         status: "New",
+        owner: "Unassigned",
         age: "1d ago",
         archived: false,
-        comments: []
+        comments: [],
+        mergedSources: []
       },
       {
         id: "webhook-retry-controls",
@@ -177,9 +211,11 @@ const initialWorkspaces: Workspace[] = [
         votes: 76,
         hasCurrentUserVote: true,
         status: "Shipping soon",
+        owner: "Akhil",
         age: "1d ago",
         archived: false,
-        comments: []
+        comments: [],
+        mergedSources: []
       }
     ],
     roadmap: {
@@ -218,9 +254,11 @@ const initialWorkspaces: Workspace[] = [
         votes: 34,
         hasCurrentUserVote: false,
         status: "New",
+        owner: "Maintainer",
         age: "3h ago",
         archived: false,
-        comments: []
+        comments: [],
+        mergedSources: []
       },
       {
         id: "release-notes-rss",
@@ -232,9 +270,11 @@ const initialWorkspaces: Workspace[] = [
         votes: 21,
         hasCurrentUserVote: false,
         status: "Planned",
+        owner: "Unassigned",
         age: "1d ago",
         archived: false,
-        comments: []
+        comments: [],
+        mergedSources: []
       },
       {
         id: "issue-template-cleanup",
@@ -246,9 +286,11 @@ const initialWorkspaces: Workspace[] = [
         votes: 19,
         hasCurrentUserVote: false,
         status: "Needs decision",
+        owner: "Unassigned",
         age: "2d ago",
         archived: false,
-        comments: []
+        comments: [],
+        mergedSources: []
       }
     ],
     roadmap: {
@@ -295,12 +337,28 @@ function requestMatchesQuery(request: RequestItem, query: string) {
     request.requester,
     request.source,
     request.status,
+    request.owner,
     request.tags.join(" "),
-    request.comments.map((comment) => `${comment.author} ${comment.body}`).join(" ")
+    request.comments.map((comment) => `${comment.author} ${comment.body}`).join(" "),
+    request.mergedSources
+      .map(
+        (source) =>
+          `${source.title} ${source.requester} ${source.source} ${source.tags.join(" ")}`
+      )
+      .join(" ")
   ]
     .join(" ")
     .toLowerCase()
     .includes(normalizedQuery);
+}
+
+function requestMatchesTriageView(request: RequestItem, view: TriageView) {
+  if (view === "unassigned") return request.owner === "Unassigned";
+  if (view === "needs-decision") return request.status === "Needs decision";
+  if (view === "high-signal") {
+    return request.votes >= 80 || request.comments.length > 0 || request.mergedSources.length > 0;
+  }
+  return true;
 }
 
 export function App() {
@@ -313,7 +371,9 @@ export function App() {
   const [requestQuery, setRequestQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<RequestStatusFilter>("All");
   const [archiveFilter, setArchiveFilter] = useState<RequestArchiveFilter>("active");
+  const [triageView, setTriageView] = useState<TriageView>("all");
   const [commentDraft, setCommentDraft] = useState("");
+  const [duplicateMergeTargetId, setDuplicateMergeTargetId] = useState("");
   const [selectedRequestIdByWorkspace, setSelectedRequestIdByWorkspace] = useState<
     Record<string, string | undefined>
   >({});
@@ -328,18 +388,23 @@ export function App() {
   const requestScope = useMemo(
     () =>
       workspace.requests.filter((request) =>
-        archiveFilter === "archived" ? request.archived : !request.archived
+          archiveFilter === "archived" ? request.archived : !request.archived
       ),
     [archiveFilter, workspace.requests]
+  );
+  const activeRequests = useMemo(
+    () => workspace.requests.filter((request) => !request.archived),
+    [workspace.requests]
   );
   const filteredRequests = useMemo(
     () =>
       requestScope.filter(
         (request) =>
+          requestMatchesTriageView(request, triageView) &&
           (statusFilter === "All" || request.status === statusFilter) &&
           requestMatchesQuery(request, requestQuery)
       ),
-    [requestQuery, requestScope, statusFilter]
+    [requestQuery, requestScope, statusFilter, triageView]
   );
   const selectedRequest = useMemo(() => {
     const selectedRequestId = selectedRequestIdByWorkspace[workspace.id];
@@ -350,12 +415,31 @@ export function App() {
     );
   }, [filteredRequests, requestScope, selectedRequestIdByWorkspace, workspace.id]);
   const hasSearchOrStatusFilter = requestQuery.trim() !== "" || statusFilter !== "All";
-  const hasRequestFilters = hasSearchOrStatusFilter || archiveFilter !== "active";
+  const hasSavedViewFilter = triageView !== "all";
+  const hasRequestFilters = hasSearchOrStatusFilter || archiveFilter !== "active" || hasSavedViewFilter;
   const emptyRequestTitle = hasSearchOrStatusFilter
     ? "No matching requests"
+    : hasSavedViewFilter
+      ? "No requests in this view"
     : archiveFilter === "archived"
       ? "No archived requests"
       : "No requests yet";
+  const triageStats = useMemo(
+    () => ({
+      unassigned: filteredRequests.filter((request) => request.owner === "Unassigned").length,
+      needsDecision: filteredRequests.filter((request) => request.status === "Needs decision").length,
+      highSignal: filteredRequests.filter((request) => requestMatchesTriageView(request, "high-signal"))
+        .length
+    }),
+    [filteredRequests]
+  );
+  const mergeCandidates = useMemo(
+    () =>
+      selectedRequest && !selectedRequest.archived
+        ? activeRequests.filter((request) => request.id !== selectedRequest.id)
+        : [],
+    [activeRequests, selectedRequest]
+  );
 
   function updateCurrentWorkspace(updater: (workspace: Workspace) => Workspace) {
     setWorkspaceList((items) =>
@@ -376,6 +460,7 @@ export function App() {
     setRequestQuery("");
     setStatusFilter("All");
     setArchiveFilter("active");
+    setTriageView("all");
   }
 
   function selectRequest(requestId: string | undefined) {
@@ -384,6 +469,7 @@ export function App() {
       [workspace.id]: requestId
     }));
     setCommentDraft("");
+    setDuplicateMergeTargetId("");
   }
 
   function createWorkspace(event: FormEvent<HTMLFormElement>) {
@@ -429,9 +515,11 @@ export function App() {
       votes: 0,
       hasCurrentUserVote: false,
       status: "New",
+      owner: "Unassigned",
       age: "just now",
       archived: false,
-      comments: []
+      comments: [],
+      mergedSources: []
     };
 
     updateCurrentWorkspace((item) => ({
@@ -442,6 +530,7 @@ export function App() {
     setNewRequestDraft(emptyRequestDraft);
     setArchiveFilter("active");
     setStatusFilter("All");
+    setTriageView("all");
     setRequestQuery("");
     setIsAddingRequest(false);
   }
@@ -466,6 +555,63 @@ export function App() {
         ? Math.max(0, request.votes - 1)
         : request.votes + 1
     }));
+  }
+
+  function mergeDuplicateRequest(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedRequest || !duplicateMergeTargetId) return;
+    if (selectedRequest.archived) return;
+    const duplicate = workspace.requests.find(
+      (request) => request.id === duplicateMergeTargetId && !request.archived
+    );
+    if (!duplicate || duplicate.id === selectedRequest.id) return;
+
+    const sourceRecord: MergedRequestSource = {
+      id: duplicate.id,
+      title: duplicate.title,
+      description: duplicate.description,
+      requester: duplicate.requester,
+      source: duplicate.source,
+      owner: duplicate.owner,
+      status: duplicate.status,
+      votes: duplicate.votes,
+      hasCurrentUserVote: duplicate.hasCurrentUserVote,
+      tags: duplicate.tags,
+      commentCount: duplicate.comments.length,
+      age: duplicate.age,
+      mergedAt: "just now"
+    };
+
+    updateCurrentWorkspace((item) => ({
+      ...item,
+      requests: item.requests.flatMap((request) => {
+        if (request.id === duplicate.id) return [];
+        if (request.id !== selectedRequest.id) return [request];
+
+        return [
+          {
+            ...request,
+            votes: request.votes + duplicate.votes,
+            hasCurrentUserVote:
+              request.hasCurrentUserVote || duplicate.hasCurrentUserVote,
+            tags: Array.from(new Set([...request.tags, ...duplicate.tags])),
+            comments: [
+              ...request.comments,
+              ...duplicate.comments.map((comment) => ({
+                ...comment,
+                id: `${duplicate.id}-${comment.id}`
+              }))
+            ],
+            mergedSources: [
+              sourceRecord,
+              ...duplicate.mergedSources,
+              ...request.mergedSources
+            ]
+          }
+        ];
+      })
+    }));
+    selectRequest(selectedRequest.id);
   }
 
   function archiveSelectedRequest() {
@@ -757,6 +903,20 @@ export function App() {
             <div className="request-tools" aria-label="Request filters">
               <SlidersHorizontal aria-hidden="true" size={14} />
               <label>
+                <span>View</span>
+                <select
+                  aria-label="Saved triage view"
+                  onChange={(event) => setTriageView(event.target.value as TriageView)}
+                  value={triageView}
+                >
+                  {triageViews.map((view) => (
+                    <option key={view.value} value={view.value}>
+                      {view.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
                 <span>Status</span>
                 <select
                   aria-label="Status filter"
@@ -793,6 +953,21 @@ export function App() {
               ) : null}
             </div>
 
+            <div className="triage-summary" aria-label="Triage summary">
+              <span>
+                <small>Unassigned</small>
+                <strong>{triageStats.unassigned}</strong>
+              </span>
+              <span>
+                <small>Needs decision</small>
+                <strong>{triageStats.needsDecision}</strong>
+              </span>
+              <span>
+                <small>High signal</small>
+                <strong>{triageStats.highSignal}</strong>
+              </span>
+            </div>
+
             {filteredRequests.length ? (
               <div className="request-list">
                 {filteredRequests.map((request, index) => (
@@ -813,7 +988,8 @@ export function App() {
                     <span className="request-main">
                       <strong>{request.title}</strong>
                       <small>
-                        {request.requester} / {request.source} / {request.age}
+                        {request.requester} / {request.source} / {request.owner} / {request.age}
+                        {request.mergedSources.length ? ` / +${request.mergedSources.length} merged` : ""}
                       </small>
                     </span>
                     <span className="vote-count">{request.votes}</span>
@@ -880,6 +1056,56 @@ export function App() {
                     {selectedRequest.archived ? "Restore request" : "Archive request"}
                   </button>
                 </div>
+
+                <form
+                  className="triage-controls"
+                  aria-label="Triage controls"
+                  onSubmit={mergeDuplicateRequest}
+                >
+                  <label>
+                    <span>Owner</span>
+                    <select
+                      aria-label="Selected request owner"
+                      onChange={(event) =>
+                        updateSelectedRequest((request) => ({
+                          ...request,
+                          owner: event.target.value as RequestOwner
+                        }))
+                      }
+                      value={selectedRequest.owner}
+                    >
+                      {requestOwners.map((owner) => (
+                        <option key={owner} value={owner}>
+                          {owner}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    <span>Duplicate</span>
+                    <select
+                      aria-label="Duplicate request"
+                      disabled={!mergeCandidates.length}
+                      onChange={(event) => setDuplicateMergeTargetId(event.target.value)}
+                      value={duplicateMergeTargetId}
+                    >
+                      <option value="">Choose duplicate</option>
+                      {mergeCandidates.map((request) => (
+                        <option key={request.id} value={request.id}>
+                          {request.title}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <button
+                    className="secondary-action"
+                    disabled={!duplicateMergeTargetId}
+                    type="submit"
+                  >
+                    <GitMerge aria-hidden="true" size={14} />
+                    Merge duplicate
+                  </button>
+                </form>
 
                 <form
                   className="request-editor"
@@ -996,14 +1222,46 @@ export function App() {
                     <dd>{selectedRequest.votes}</dd>
                   </div>
                   <div>
+                    <dt>Owner</dt>
+                    <dd>{selectedRequest.owner}</dd>
+                  </div>
+                  <div>
                     <dt>Comments</dt>
                     <dd>{selectedRequest.comments.length}</dd>
+                  </div>
+                  <div>
+                    <dt>Merged</dt>
+                    <dd>{selectedRequest.mergedSources.length}</dd>
                   </div>
                   <div>
                     <dt>Archive</dt>
                     <dd>{selectedRequest.archived ? "Archived" : "Active"}</dd>
                   </div>
                 </dl>
+
+                {selectedRequest.mergedSources.length ? (
+                  <div className="source-history" aria-label="Merged source history">
+                    <div className="source-history-header">
+                      <GitMerge aria-hidden="true" size={14} />
+                      <strong>Source history</strong>
+                    </div>
+                    {selectedRequest.mergedSources.map((source) => (
+                      <article className="source-history-item" key={source.id}>
+                        <strong>{source.title}</strong>
+                        <p>
+                          {source.requester} / {source.source} / {source.owner} /{" "}
+                          {source.status} / {source.votes} votes / {source.commentCount}{" "}
+                          comments
+                        </p>
+                        <p>{source.description}</p>
+                        <small>
+                          Merged {source.mergedAt}
+                          {source.tags.length ? ` / ${source.tags.join(", ")}` : ""}
+                        </small>
+                      </article>
+                    ))}
+                  </div>
+                ) : null}
 
                 <form className="comment-form" aria-label="Add comment" onSubmit={addComment}>
                   <label>

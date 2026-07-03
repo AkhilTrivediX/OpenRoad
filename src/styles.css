@@ -303,8 +303,8 @@ a:hover {
 .command-bar input::placeholder,
 .workspace-form input::placeholder,
 .request-composer input::placeholder,
-.request-composer textarea::placeholder,
-.comment-form textarea::placeholder {
+  .request-composer textarea::placeholder,
+  .comment-form textarea::placeholder {
   color: var(--muted);
   opacity: 1;
 }
@@ -471,6 +471,19 @@ h2 {
   border-color: var(--line-strong);
 }
 
+.secondary-action:disabled,
+.icon-button:disabled {
+  color: var(--faint);
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+.secondary-action:disabled:hover,
+.icon-button:disabled:hover {
+  background: transparent;
+  border-color: var(--line);
+}
+
 .secondary-action.compact {
   font-size: 13px;
   min-height: 32px;
@@ -498,6 +511,7 @@ h2 {
 .workspace-form label,
 .request-composer label,
 .request-editor label,
+.triage-controls label,
 .comment-form label,
 .request-tools label {
   display: grid;
@@ -508,6 +522,7 @@ h2 {
 .workspace-form label span,
 .request-composer label span,
 .request-editor label span,
+.triage-controls label span,
 .comment-form label span,
 .request-tools label span {
   color: var(--muted);
@@ -521,6 +536,7 @@ h2 {
 .request-editor input,
 .request-editor select,
 .request-editor textarea,
+.triage-controls select,
 .comment-form textarea,
 .request-tools select {
   background: var(--plate);
@@ -619,7 +635,7 @@ h2 {
   border: 1px solid var(--line);
   display: grid;
   gap: 10px;
-  grid-template-columns: auto minmax(130px, 1fr) minmax(150px, 1fr) auto;
+  grid-template-columns: auto repeat(3, minmax(120px, 1fr)) auto;
   margin-bottom: 12px;
   padding: 10px;
 }
@@ -627,6 +643,35 @@ h2 {
 .request-tools > svg {
   align-self: center;
   color: var(--route);
+}
+
+.triage-summary {
+  border: 1px solid var(--line);
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-bottom: 12px;
+}
+
+.triage-summary span {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 9px 10px;
+}
+
+.triage-summary span + span {
+  border-left: 1px solid var(--line);
+}
+
+.triage-summary small {
+  color: var(--muted);
+  font-family: var(--label-font);
+  font-size: 12px;
+}
+
+.triage-summary strong {
+  font-family: var(--mono-font);
+  font-size: 15px;
 }
 
 .request-list {
@@ -807,6 +852,16 @@ h2 {
   margin-bottom: 12px;
 }
 
+.triage-controls {
+  align-items: end;
+  border: 1px solid var(--line);
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(120px, 0.78fr) minmax(150px, 1fr) auto;
+  margin-bottom: 12px;
+  padding: 12px;
+}
+
 .request-editor {
   border: 1px solid var(--line);
   display: grid;
@@ -888,6 +943,46 @@ dd {
   font-size: 13px;
   line-height: 1.55;
   margin-top: 8px;
+}
+
+.source-history {
+  border: 1px solid var(--line);
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 10px;
+}
+
+.source-history-header {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  gap: 7px;
+}
+
+.source-history-header svg {
+  color: var(--route);
+}
+
+.source-history-header strong,
+.source-history-item strong {
+  color: var(--ink);
+  font-family: var(--label-font);
+}
+
+.source-history > p,
+.source-history-item p,
+.source-history-item small {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.source-history-item {
+  background: var(--plate);
+  border: 1px solid var(--line);
+  display: grid;
+  gap: 5px;
+  padding: 9px;
 }
 
 .comment-form {
@@ -1162,10 +1257,17 @@ dd {
   .workspace-form,
   .request-composer,
   .request-editor,
+  .triage-controls,
   .request-tools,
+  .triage-summary,
   .route-protocol,
   .roadmap-lanes {
     grid-template-columns: 1fr;
+  }
+
+  .triage-summary span + span {
+    border-left: 0;
+    border-top: 1px solid var(--line);
   }
 
   .protocol-step + .protocol-step {

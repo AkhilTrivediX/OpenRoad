@@ -190,6 +190,23 @@ describe("OpenRoad workspace shell", () => {
     expect(screen.getAllByText("Shipping soon").length).toBeGreaterThan(0);
   });
 
+  it("assigns an owner during request triage", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    const inboxRegion = screen.getByRole("region", { name: /Requests needing attention/ });
+    await user.click(within(inboxRegion).getByRole("button", { name: /Dark mode for docs site/ }));
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Selected request owner" }),
+      "Product"
+    );
+
+    expect(
+      within(inboxRegion).getByRole("button", { name: /Dark mode for docs site/ })
+    ).toHaveTextContent("Product");
+    expect(screen.getAllByText("Product").length).toBeGreaterThan(0);
+  });
+
   it("adds and removes the current user's vote", async () => {
     const user = userEvent.setup();
     render(<App />);
@@ -225,7 +242,7 @@ describe("OpenRoad workspace shell", () => {
     await user.click(screen.getByRole("button", { name: "Add comment" }));
 
     expect(screen.getByText("Include docs reader preferences.")).toBeInTheDocument();
-    expect(screen.getByText("Akhil")).toBeInTheDocument();
+    expect(within(screen.getByLabelText("Request comments")).getByText("Akhil")).toBeInTheDocument();
   });
 
   it("searches requests and resets a no-results state", async () => {
@@ -268,6 +285,87 @@ describe("OpenRoad workspace shell", () => {
 
     expect(within(inboxRegion).getByRole("button", { name: /Support bulk export to CSV/ })).toBeInTheDocument();
     expect(within(inboxRegion).queryByRole("button", { name: /API rate limit visibility/ })).not.toBeInTheDocument();
+  });
+
+  it("filters requests by saved triage view and resets to all active requests", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    const inboxRegion = screen.getByRole("region", { name: /Requests needing attention/ });
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Saved triage view" }),
+      "unassigned"
+    );
+
+    expect(within(inboxRegion).getByRole("button", { name: /API rate limit visibility/ })).toBeInTheDocument();
+    expect(within(inboxRegion).getByRole("button", { name: /Dark mode for docs site/ })).toBeInTheDocument();
+    expect(within(inboxRegion).queryByRole("button", { name: /Support bulk export to CSV/ })).not.toBeInTheDocument();
+
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Saved triage view" }),
+      "high-signal"
+    );
+
+    expect(within(inboxRegion).getByRole("button", { name: /Support bulk export to CSV/ })).toBeInTheDocument();
+    expect(within(inboxRegion).queryByRole("button", { name: /Webhook retry controls/ })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Reset filters" }));
+
+    expect(within(inboxRegion).getByRole("button", { name: /Webhook retry controls/ })).toBeInTheDocument();
+  });
+
+  it("merges a duplicate request and preserves source history", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    const inboxRegion = screen.getByRole("region", { name: /Requests needing attention/ });
+    await user.click(within(inboxRegion).getByRole("button", { name: /Webhook retry controls/ }));
+    await user.type(screen.getByLabelText("Comment"), "Retry button should show the failure reason.");
+    await user.click(screen.getByRole("button", { name: "Add comment" }));
+    await user.click(within(inboxRegion).getByRole("button", { name: /API rate limit visibility/ }));
+
+    const duplicateSelect = screen.getByRole("combobox", { name: "Duplicate request" });
+    expect(
+      within(duplicateSelect).queryByRole("option", { name: "API rate limit visibility" })
+    ).not.toBeInTheDocument();
+
+    await user.selectOptions(duplicateSelect, "webhook-retry-controls");
+    await user.click(screen.getByRole("button", { name: "Merge duplicate" }));
+
+    expect(
+      within(inboxRegion).queryByRole("button", { name: /Webhook retry controls/ })
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "API rate limit visibility" })).toBeInTheDocument();
+    const sourceHistory = screen.getByLabelText("Merged source history");
+    expect(within(sourceHistory).getByText("Webhook retry controls")).toBeInTheDocument();
+    expect(
+      within(sourceHistory).getByText(
+        /Maintainer note \/ Manual \/ Akhil \/ Shipping soon \/ 76 votes \/ 1 comments/
+      )
+    ).toBeInTheDocument();
+    expect(within(sourceHistory).getByText(/Maintainers need to retry failed webhooks/)).toBeInTheDocument();
+    expect(screen.getByText("Retry button should show the failure reason.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Remove vote" })).toBeInTheDocument();
+    expect(screen.getAllByText("218").length).toBeGreaterThan(0);
+  });
+
+  it("does not merge active requests into an archived selected request", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole("button", { name: "Archive request" }));
+    await user.selectOptions(screen.getByRole("combobox", { name: "Archive filter" }), "archived");
+
+    expect(screen.getByRole("heading", { name: "API rate limit visibility" })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Duplicate request" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Merge duplicate" })).toBeDisabled();
+  });
+
+  it("keeps the selected inspector to four major triage actions", () => {
+    render(<App />);
+
+    const inspector = screen.getByRole("complementary", { name: /API rate limit visibility/ });
+    expect(within(inspector).getAllByRole("button")).toHaveLength(4);
   });
 
   it("archives requests and shows archived requests through the queue filter", async () => {

@@ -7,6 +7,9 @@ dist/
 build/
 .next/
 coverage/
+*.tsbuildinfo
+vite.config.js
+vite.config.d.ts
 
 # Environment
 .env

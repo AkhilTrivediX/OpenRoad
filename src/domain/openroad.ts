@@ -6,7 +6,9 @@ export const roadmapVisibilities = ["Private", "Public"] as const;
 export const roadmapConfidenceLevels = ["Low", "Medium", "High"] as const;
 export const changelogStates = ["Draft", "Ready"] as const;
 export const changelogVisibilities = ["Private", "Public"] as const;
-export const openRoadSchemaVersion = 3;
+export const requestVisibilities = ["Private", "Public"] as const;
+export const commentVisibilities = ["Internal", "Public", "Hidden"] as const;
+export const openRoadSchemaVersion = 4;
 export const openRoadStorageKey = "openroad:state:v1";
 export const openRoadSelectedWorkspaceKey = "openroad:selected-workspace:v1";
 
@@ -18,6 +20,8 @@ export type RoadmapVisibility = (typeof roadmapVisibilities)[number];
 export type RoadmapConfidence = (typeof roadmapConfidenceLevels)[number];
 export type ChangelogState = (typeof changelogStates)[number];
 export type ChangelogVisibility = (typeof changelogVisibilities)[number];
+export type RequestVisibility = (typeof requestVisibilities)[number];
+export type CommentVisibility = (typeof commentVisibilities)[number];
 
 export type OpenRoadState = {
   schemaVersion: typeof openRoadSchemaVersion;
@@ -33,6 +37,7 @@ export type Workspace = {
   workItems: WorkItem[];
   roadmap: Record<RoadmapLane, RoadmapItem[]>;
   changelog: ChangelogItem[];
+  portal: PortalSettings;
   integrations: IntegrationChip[];
 };
 
@@ -47,6 +52,7 @@ export type RequestItem = {
   hasCurrentUserVote: boolean;
   status: RequestStatus;
   owner: RequestOwner;
+  visibility: RequestVisibility;
   age: string;
   archived: boolean;
   comments: RequestComment[];
@@ -58,6 +64,7 @@ export type RequestComment = {
   author: string;
   body: string;
   age: string;
+  visibility: CommentVisibility;
 };
 
 export type WorkItem = {
@@ -130,6 +137,65 @@ export type IntegrationChip = {
   state: "Optional" | "Linked";
 };
 
+export type PortalSettings = {
+  enabled: boolean;
+  allowVoting: boolean;
+  allowComments: boolean;
+  headline: string;
+  intro: string;
+};
+
+export type PublicPortalComment = {
+  id: string;
+  author: string;
+  body: string;
+  age: string;
+};
+
+export type PublicPortalRequest = {
+  id: string;
+  title: string;
+  description: string;
+  tags: string[];
+  votes: number;
+  hasCurrentUserVote: boolean;
+  status: RequestStatus;
+  age: string;
+  comments: PublicPortalComment[];
+};
+
+export type PublicPortalRoadmapItem = {
+  id: string;
+  title: string;
+  summary: string;
+  lane: RoadmapLane;
+  confidence: RoadmapConfidence;
+  isStale: boolean;
+  linkedRequestCount: number;
+};
+
+export type PublicPortalChangelogItem = {
+  id: string;
+  title: string;
+  publicSummary: string;
+  updatedAt: string;
+  linkedRequestCount: number;
+};
+
+export type PublicPortalSnapshot = {
+  enabled: boolean;
+  allowVoting: boolean;
+  allowComments: boolean;
+  headline: string;
+  intro: string;
+  requests: PublicPortalRequest[];
+  requestCount: number;
+  roadmap: Record<RoadmapLane, PublicPortalRoadmapItem[]>;
+  roadmapCount: number;
+  changelog: PublicPortalChangelogItem[];
+  changelogCount: number;
+};
+
 export type LoadOpenRoadResult = {
   error?: string;
   state: OpenRoadState;
@@ -148,6 +214,7 @@ export type OpenRoadAction =
   | { type: "create-changelog-item"; changelogItem: ChangelogItem; workspaceId: string }
   | { type: "replace-changelog-item"; changelogItem: ChangelogItem; workspaceId: string }
   | { type: "delete-changelog-item"; changelogItemId: string; workspaceId: string }
+  | { type: "replace-portal-settings"; portal: PortalSettings; workspaceId: string }
   | { type: "replace-workspace"; workspace: Workspace }
   | { type: "replace-state"; state: OpenRoadState };
 
@@ -156,6 +223,14 @@ export const integrationChips: IntegrationChip[] = [
   { label: "Jira", state: "Optional" },
   { label: "Linear", state: "Optional" }
 ];
+
+export const defaultPortalSettings: PortalSettings = {
+  allowComments: true,
+  allowVoting: true,
+  enabled: true,
+  headline: "Public roadmap",
+  intro: "Vote on requests, follow the roadmap, and read shipped updates without needing an account."
+};
 
 function seedRoadmapItem(
   roadmapItem: Pick<RoadmapItem, "id" | "title" | "summary" | "lane"> &
@@ -234,6 +309,7 @@ export const initialWorkspaces: Workspace[] = [
         hasCurrentUserVote: false,
         status: "Needs decision",
         owner: "Unassigned",
+        visibility: "Public",
         age: "2h ago",
         archived: false,
         comments: [
@@ -241,7 +317,8 @@ export const initialWorkspaces: Workspace[] = [
             id: "api-comment-1",
             author: "Success",
             body: "Three customers asked for a visible limit meter this week.",
-            age: "1h ago"
+            age: "1h ago",
+            visibility: "Internal"
           }
         ],
         mergedSources: []
@@ -258,6 +335,7 @@ export const initialWorkspaces: Workspace[] = [
         hasCurrentUserVote: false,
         status: "Planned",
         owner: "Support",
+        visibility: "Private",
         age: "5h ago",
         archived: false,
         comments: [],
@@ -274,6 +352,7 @@ export const initialWorkspaces: Workspace[] = [
         hasCurrentUserVote: false,
         status: "New",
         owner: "Unassigned",
+        visibility: "Public",
         age: "1d ago",
         archived: false,
         comments: [],
@@ -291,6 +370,7 @@ export const initialWorkspaces: Workspace[] = [
         hasCurrentUserVote: true,
         status: "Shipping soon",
         owner: "Akhil",
+        visibility: "Private",
         age: "1d ago",
         archived: false,
         comments: [],
@@ -379,6 +459,11 @@ export const initialWorkspaces: Workspace[] = [
         visibility: "Private"
       })
     ],
+    portal: {
+      ...defaultPortalSettings,
+      headline: "Acme OSS public board",
+      intro: "Track open requests, planned roadmap work, and release notes from the Acme OSS team."
+    },
     integrations: integrationChips
   },
   {
@@ -399,6 +484,7 @@ export const initialWorkspaces: Workspace[] = [
         hasCurrentUserVote: false,
         status: "New",
         owner: "Maintainer",
+        visibility: "Public",
         age: "3h ago",
         archived: false,
         comments: [],
@@ -415,6 +501,7 @@ export const initialWorkspaces: Workspace[] = [
         hasCurrentUserVote: false,
         status: "Planned",
         owner: "Unassigned",
+        visibility: "Private",
         age: "1d ago",
         archived: false,
         comments: [],
@@ -431,6 +518,7 @@ export const initialWorkspaces: Workspace[] = [
         hasCurrentUserVote: false,
         status: "Needs decision",
         owner: "Unassigned",
+        visibility: "Private",
         age: "2d ago",
         archived: false,
         comments: [],
@@ -485,6 +573,11 @@ export const initialWorkspaces: Workspace[] = [
         visibility: "Private"
       })
     ],
+    portal: {
+      ...defaultPortalSettings,
+      headline: "Maintainer Lab public board",
+      intro: "See what the maintainers are considering, planning, and preparing to ship."
+    },
     integrations: integrationChips
   }
 ];
@@ -585,6 +678,13 @@ export function openRoadReducer(state: OpenRoadState, action: OpenRoadAction): O
     }));
   }
 
+  if (action.type === "replace-portal-settings") {
+    return updateWorkspaceById(state, action.workspaceId, (workspace) => ({
+      ...workspace,
+      portal: cloneValue(action.portal)
+    }));
+  }
+
   if (action.type === "replace-workspace") {
     return {
       ...state,
@@ -674,6 +774,95 @@ function createEmptyRoadmap(): Record<RoadmapLane, RoadmapItem[]> {
     Later: [],
     Next: [],
     Now: []
+  };
+}
+
+function createEmptyPublicRoadmap(): Record<RoadmapLane, PublicPortalRoadmapItem[]> {
+  return {
+    Later: [],
+    Next: [],
+    Now: []
+  };
+}
+
+export function createPublicPortalSnapshot(
+  workspace: Workspace,
+  query = ""
+): PublicPortalSnapshot {
+  const normalizedQuery = normalizeSearchText(query);
+  const allPublicRequests = workspace.requests.filter(
+    (request) => request.visibility === "Public" && !request.archived
+  );
+  const requests = allPublicRequests
+    .filter((request) => {
+      if (!normalizedQuery) return true;
+      return normalizeSearchText(
+        [request.title, request.description, request.tags.join(" ")].join(" ")
+      ).includes(normalizedQuery);
+    })
+    .map(publicPortalRequestFromRequest);
+
+  const roadmap = createEmptyPublicRoadmap();
+  for (const lane of roadmapLanes) {
+    roadmap[lane] = workspace.roadmap[lane]
+      .filter((item) => item.visibility === "Public")
+      .map((item) => ({
+        confidence: item.confidence,
+        id: item.id,
+        isStale: item.isStale,
+        lane: item.lane,
+        linkedRequestCount: item.requestIds.length,
+        summary: item.summary,
+        title: item.title
+      }));
+  }
+
+  const changelog = workspace.changelog
+    .filter((item) => item.visibility === "Public" && item.state === "Ready")
+    .map((item) => ({
+      id: item.id,
+      linkedRequestCount: item.requestIds.length,
+      publicSummary: item.publicSummary,
+      title: item.title,
+      updatedAt: item.updatedAt
+    }));
+
+  return {
+    allowComments: workspace.portal.allowComments,
+    allowVoting: workspace.portal.allowVoting,
+    changelog,
+    changelogCount: changelog.length,
+    enabled: workspace.portal.enabled,
+    headline: workspace.portal.headline,
+    intro: workspace.portal.intro,
+    requestCount: allPublicRequests.length,
+    requests,
+    roadmap,
+    roadmapCount: roadmapLanes.reduce(
+      (count, lane) => count + roadmap[lane].length,
+      0
+    )
+  };
+}
+
+function publicPortalRequestFromRequest(request: RequestItem): PublicPortalRequest {
+  return {
+    age: request.age,
+    comments: request.comments
+      .filter((comment) => comment.visibility === "Public")
+      .map((comment) => ({
+        age: comment.age,
+        author: comment.author,
+        body: comment.body,
+        id: comment.id
+      })),
+    description: request.description,
+    hasCurrentUserVote: request.hasCurrentUserVote,
+    id: request.id,
+    status: request.status,
+    tags: [...request.tags],
+    title: request.title,
+    votes: request.votes
   };
 }
 
@@ -790,6 +979,7 @@ export function migrateOpenRoadState(value: unknown): OpenRoadState {
   if (
     (value.schemaVersion === 1 ||
       value.schemaVersion === 2 ||
+      value.schemaVersion === 3 ||
       value.schemaVersion === 0 ||
       value.schemaVersion === undefined) &&
     Array.isArray(value.workspaces)
@@ -815,6 +1005,8 @@ function migrateWorkspaceFromPreviousSchema(value: unknown): Workspace {
   const migrated = {
     ...value,
     changelog: migrateChangelogFromPreviousSchema(value.changelog),
+    portal: migratePortalSettingsFromPreviousSchema(value.portal),
+    requests: migrateRequestsFromPreviousSchema(value.requests),
     roadmap: migrateRoadmapFromPreviousSchema(value.roadmap),
     workItems: Array.isArray(value.workItems) ? value.workItems : []
   };
@@ -824,6 +1016,69 @@ function migrateWorkspaceFromPreviousSchema(value: unknown): Workspace {
   }
 
   return cloneValue(migrated);
+}
+
+function migratePortalSettingsFromPreviousSchema(value: unknown): PortalSettings {
+  if (isPortalSettings(value)) {
+    return cloneValue(value);
+  }
+
+  return cloneValue(defaultPortalSettings);
+}
+
+function migrateRequestsFromPreviousSchema(value: unknown): RequestItem[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.map((request) => {
+    if (!isRecord(request)) {
+      throw new Error("Saved OpenRoad request cannot be migrated.");
+    }
+
+    const migrated = {
+      ...request,
+      comments: migrateRequestCommentsFromPreviousSchema(request.comments),
+      visibility: requestVisibilities.includes(request.visibility as RequestVisibility)
+        ? request.visibility
+        : request.source === "Portal"
+          ? "Public"
+          : "Private"
+    };
+
+    if (!isRequestItem(migrated)) {
+      throw new Error("Saved OpenRoad request cannot be migrated.");
+    }
+
+    return cloneValue(migrated);
+  });
+}
+
+function migrateRequestCommentsFromPreviousSchema(value: unknown): RequestComment[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.map((comment) => {
+    if (isRequestComment(comment)) return cloneValue(comment);
+    if (
+      isRecord(comment) &&
+      typeof comment.id === "string" &&
+      typeof comment.author === "string" &&
+      typeof comment.body === "string" &&
+      typeof comment.age === "string"
+    ) {
+      return {
+        age: comment.age,
+        author: comment.author,
+        body: comment.body,
+        id: comment.id,
+        visibility: "Internal"
+      };
+    }
+
+    throw new Error("Saved OpenRoad request comment cannot be migrated.");
+  });
 }
 
 function migrateRoadmapFromPreviousSchema(
@@ -936,6 +1191,7 @@ function isWorkspace(value: unknown): value is Workspace {
     value.roadmap.Later.every(isRoadmapItem) &&
     Array.isArray(value.changelog) &&
     value.changelog.every(isChangelogItem) &&
+    isPortalSettings(value.portal) &&
     Array.isArray(value.integrations)
   );
 }
@@ -953,10 +1209,34 @@ function isRequestItem(value: unknown): value is RequestItem {
     typeof value.hasCurrentUserVote === "boolean" &&
     requestStatuses.includes(value.status as RequestStatus) &&
     requestOwners.includes(value.owner as RequestOwner) &&
+    requestVisibilities.includes(value.visibility as RequestVisibility) &&
     typeof value.age === "string" &&
     typeof value.archived === "boolean" &&
     Array.isArray(value.comments) &&
+    value.comments.every(isRequestComment) &&
     Array.isArray(value.mergedSources)
+  );
+}
+
+function isRequestComment(value: unknown): value is RequestComment {
+  return (
+    isRecord(value) &&
+    typeof value.id === "string" &&
+    typeof value.author === "string" &&
+    typeof value.body === "string" &&
+    typeof value.age === "string" &&
+    commentVisibilities.includes(value.visibility as CommentVisibility)
+  );
+}
+
+function isPortalSettings(value: unknown): value is PortalSettings {
+  return (
+    isRecord(value) &&
+    typeof value.enabled === "boolean" &&
+    typeof value.allowVoting === "boolean" &&
+    typeof value.allowComments === "boolean" &&
+    typeof value.headline === "string" &&
+    typeof value.intro === "string"
   );
 }
 
@@ -1028,6 +1308,10 @@ function cloneValue<T>(value: T): T {
 
 function slugify(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+}
+
+function normalizeSearchText(value: string) {
+  return value.trim().toLowerCase();
 }
 
 function getBrowserStorage(): Storage | undefined {

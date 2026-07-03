@@ -509,7 +509,9 @@ h3 {
 .request-composer,
 .work-composer,
 .roadmap-form,
-.changelog-form {
+.changelog-form,
+.portal-settings,
+.portal-comment-form {
   background: var(--rail);
   border: 1px solid var(--line);
   display: grid;
@@ -525,7 +527,9 @@ h3 {
 .request-composer,
 .work-composer,
 .roadmap-form,
-.changelog-form {
+.changelog-form,
+.portal-settings,
+.portal-comment-form {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
@@ -540,7 +544,10 @@ h3 {
 .work-comment-form label,
 .changelog-editor label,
 .roadmap-controls label,
-.request-tools label {
+.request-tools label,
+.portal-settings label,
+.portal-comment-form label,
+.portal-search {
   display: grid;
   gap: 6px;
   min-width: 0;
@@ -557,7 +564,10 @@ h3 {
 .work-comment-form label span,
 .changelog-editor label span,
 .roadmap-controls label span,
-.request-tools label span {
+.request-tools label span,
+.portal-settings label span,
+.portal-comment-form label span,
+.portal-search span {
   color: var(--muted);
   font-family: var(--label-font);
   font-size: 12px;
@@ -590,7 +600,11 @@ h3 {
 .changelog-links select,
 .roadmap-controls select,
 .roadmap-links select,
-.request-tools select {
+.request-tools select,
+.portal-settings input:not([type="checkbox"]),
+.portal-comment-form input,
+.portal-comment-form textarea,
+.portal-search input {
   background: var(--plate);
   border: 1px solid var(--line);
   color: var(--ink);
@@ -607,7 +621,8 @@ h3 {
 .changelog-editor textarea,
 .comment-form textarea,
 .work-comment-form textarea,
-.data-tools textarea {
+.data-tools textarea,
+.portal-comment-form textarea {
   line-height: 1.45;
   min-height: 76px;
   padding: 9px 11px;
@@ -1153,8 +1168,18 @@ dd {
   gap: 6px;
 }
 
-.settings-panel {
+.settings-panel,
+.portal-panel {
   grid-column: 1 / -1;
+}
+
+.portal-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.portal-panel .panel-header {
+  margin-bottom: 0;
 }
 
 .settings-grid {
@@ -1759,6 +1784,303 @@ dd {
   padding: 10px;
 }
 
+.portal-settings {
+  align-items: end;
+  grid-template-columns:
+    repeat(3, max-content)
+    minmax(180px, 0.42fr)
+    minmax(240px, 1fr);
+  margin-bottom: 0;
+  order: 2;
+}
+
+.portal-preview {
+  order: 1;
+}
+
+.toggle-line {
+  align-items: center !important;
+  border: 1px solid var(--line);
+  display: flex !important;
+  gap: 8px;
+  min-height: 38px;
+  padding: 8px 10px;
+}
+
+.toggle-line input {
+  accent-color: var(--route);
+  min-height: auto;
+  width: auto;
+}
+
+.portal-preview {
+  display: grid;
+  gap: 16px;
+}
+
+.portal-hero {
+  align-items: end;
+  border-top: 1px solid var(--line-strong);
+  display: flex;
+  gap: 18px;
+  justify-content: space-between;
+  padding-top: 12px;
+}
+
+.portal-hero h3,
+.portal-detail-header h3,
+.portal-section-header h3,
+.public-roadmap h4,
+.public-changelog h4 {
+  color: var(--ink);
+  font-family: var(--label-font);
+  line-height: 1.25;
+  margin: 0;
+  text-wrap: balance;
+}
+
+.portal-hero h3 {
+  font-size: 22px;
+}
+
+.portal-hero p,
+.portal-request-main small,
+.portal-request-detail p,
+.portal-comments p,
+.public-roadmap p,
+.public-changelog p,
+.muted-line {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+  margin: 0;
+}
+
+.portal-ledger,
+.portal-section-header,
+.portal-detail-header,
+.portal-request-meta,
+.moderation-row {
+  align-items: center;
+  display: flex;
+}
+
+.portal-ledger {
+  border: 1px solid var(--line);
+  flex: 0 0 auto;
+}
+
+.portal-ledger span {
+  display: grid;
+  gap: 2px;
+  min-width: 84px;
+  padding: 8px 10px;
+}
+
+.portal-ledger span + span {
+  border-left: 1px solid var(--line);
+}
+
+.portal-ledger small,
+.portal-request-meta small,
+.portal-section-header small,
+.public-roadmap small,
+.public-changelog small,
+.moderation-row span {
+  color: var(--muted);
+  font-family: var(--label-font);
+  font-size: 12px;
+}
+
+.portal-ledger strong {
+  color: var(--ink);
+  font-family: var(--mono-font);
+  font-size: 16px;
+}
+
+.portal-board {
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 16px;
+  grid-template-columns: minmax(260px, 0.42fr) minmax(0, 1fr);
+  padding-top: 12px;
+}
+
+.portal-section-header {
+  align-items: flex-start;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.portal-section-header.compact {
+  align-items: center;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 6px;
+}
+
+.portal-search {
+  align-items: center !important;
+  display: grid !important;
+  gap: 6px;
+  grid-template-columns: auto auto minmax(180px, 260px);
+}
+
+.portal-search svg {
+  color: var(--muted);
+}
+
+.portal-request-list,
+.portal-request-detail,
+.portal-request-stack,
+.portal-comments,
+.portal-moderation,
+.portal-publish-grid,
+.public-roadmap,
+.public-changelog,
+.public-changelog-list,
+.public-roadmap-lanes {
+  display: grid;
+  min-width: 0;
+}
+
+.portal-request-list,
+.portal-request-detail,
+.portal-comments,
+.portal-moderation,
+.public-roadmap,
+.public-changelog {
+  align-content: start;
+  gap: 10px;
+}
+
+.portal-request-stack {
+  border-top: 1px solid var(--line-strong);
+  gap: 2px;
+  padding-top: 8px;
+}
+
+.portal-request-row {
+  background: transparent;
+  border: 1px solid transparent;
+  border-top-color: var(--line);
+  color: var(--ink);
+  display: grid;
+  gap: 8px;
+  min-height: 84px;
+  padding: 10px 8px;
+  text-align: left;
+  width: 100%;
+}
+
+.portal-request-row:hover,
+.portal-request-row.selected {
+  background: color-mix(in oklch, var(--plate) 68%, transparent);
+  border-color: var(--line);
+}
+
+.portal-request-row.selected {
+  border-color: var(--line-strong);
+}
+
+.portal-request-main {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.portal-request-main strong,
+.portal-comments strong,
+.portal-moderation strong {
+  color: var(--ink);
+  font-family: var(--label-font);
+  font-size: 13px;
+}
+
+.portal-request-main small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.portal-request-meta {
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.portal-request-detail {
+  border-left: 1px solid var(--line-strong);
+  padding-left: 16px;
+}
+
+.portal-detail-header {
+  align-items: flex-start;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.portal-comment-form {
+  background: transparent;
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin: 0;
+  padding: 10px 0 0;
+}
+
+.portal-moderation {
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+
+.moderation-row {
+  border-top: 1px solid var(--line);
+  gap: 10px;
+  justify-content: space-between;
+  min-height: 36px;
+  padding-top: 6px;
+}
+
+.portal-publish-grid {
+  border-top: 1px solid var(--line);
+  gap: 16px;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 0.72fr);
+  padding-top: 12px;
+}
+
+.public-roadmap-lanes {
+  gap: 2px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.public-roadmap-lane {
+  border-top: 1px solid var(--line-strong);
+  display: grid;
+  gap: 8px;
+  padding-top: 8px;
+}
+
+.public-roadmap-lane > strong {
+  color: var(--route);
+  font-family: var(--label-font);
+  font-size: 13px;
+}
+
+.public-roadmap article,
+.public-changelog article {
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 6px;
+  padding: 8px 0 0;
+}
+
+.public-roadmap h4,
+.public-changelog h4 {
+  font-size: 13px;
+}
+
+.public-changelog-list {
+  gap: 8px;
+}
+
 .bottom-status {
   background: var(--rail);
   border-top: 1px solid var(--line);
@@ -1800,16 +2122,27 @@ dd {
   .brief-plate,
   .roadmap-workspace,
   .changelog-workspace,
+  .portal-board,
+  .portal-publish-grid,
   .map-board {
     grid-template-columns: 1fr;
   }
 
   .changelog-detail,
-  .roadmap-detail {
+  .roadmap-detail,
+  .portal-request-detail {
     border-left: 0;
     border-top: 1px solid var(--line-strong);
     padding-left: 0;
     padding-top: 14px;
+  }
+
+  .portal-settings {
+    grid-template-columns: repeat(3, max-content) minmax(180px, 1fr);
+  }
+
+  .portal-settings .wide-field {
+    grid-column: 1 / -1;
   }
 
   .brief-instruments {
@@ -1887,6 +2220,9 @@ dd {
   .roadmap-controls,
   .changelog-workspace,
   .changelog-editor,
+  .portal-settings,
+  .portal-comment-form,
+  .public-roadmap-lanes,
   .settings-grid,
   .work-layout {
     grid-template-columns: 1fr;
@@ -1908,11 +2244,15 @@ dd {
 
   .brief-plate,
   .panel-header,
+  .portal-hero,
+  .portal-section-header,
   .bottom-status {
     align-items: flex-start;
   }
 
   .brief-plate,
+  .portal-hero,
+  .portal-section-header,
   .bottom-status {
     flex-direction: column;
   }
@@ -1924,6 +2264,24 @@ dd {
   .brief-instruments {
     grid-template-columns: repeat(3, minmax(0, 1fr));
     width: 100%;
+  }
+
+  .portal-ledger {
+    width: 100%;
+  }
+
+  .portal-ledger span {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .portal-search {
+    grid-template-columns: auto minmax(0, 1fr);
+    width: 100%;
+  }
+
+  .portal-search span {
+    grid-column: 1 / -1;
   }
 
   .primary-action,

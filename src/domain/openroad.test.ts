@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   clearOpenRoadState,
+  createPublicPortalSnapshot,
   createEntityId,
   createInitialOpenRoadState,
   exportWorkspace,
@@ -35,6 +36,7 @@ function sampleRequest(overrides: Partial<RequestItem> = {}): RequestItem {
     hasCurrentUserVote: false,
     status: "New",
     owner: "Unassigned",
+    visibility: "Private",
     age: "just now",
     archived: false,
     comments: [],
@@ -354,6 +356,165 @@ describe("OpenRoad domain state", () => {
     });
   });
 
+  it("migrates schema version 3 workspaces into portal-ready records", () => {
+    const state = createInitialOpenRoadState();
+    const previous = {
+      schemaVersion: 3,
+      workspaces: state.workspaces.map(({ portal: _portal, requests, ...workspace }) => ({
+        ...workspace,
+        requests: requests.map(({ visibility: _visibility, comments, ...request }) => ({
+          ...request,
+          comments: comments.map(({ visibility: _commentVisibility, ...comment }) => comment)
+        }))
+      }))
+    };
+
+    const migrated = migrateOpenRoadState(previous);
+
+    expect(migrated.schemaVersion).toBe(openRoadSchemaVersion);
+    expect(migrated.workspaces[0].portal).toMatchObject({
+      allowComments: true,
+      allowVoting: true,
+      enabled: true
+    });
+    expect(migrated.workspaces[0].requests[0]).toMatchObject({
+      source: "Portal",
+      visibility: "Public"
+    });
+    expect(migrated.workspaces[0].requests[1]).toMatchObject({
+      source: "Email",
+      visibility: "Private"
+    });
+    expect(migrated.workspaces[0].requests[0].comments[0]).toMatchObject({
+      visibility: "Internal"
+    });
+  });
+
+  it("creates public portal snapshots without leaking private workspace data", () => {
+    const workspace = createInitialOpenRoadState().workspaces[0];
+    const snapshot = createPublicPortalSnapshot(
+      {
+        ...workspace,
+        changelog: [
+          sampleChangelogItem({
+            id: "public-ready",
+            privateNotes: "Secret rollout note.",
+            publicSummary: "Public release wording.",
+            state: "Ready",
+            title: "Public ready release",
+            visibility: "Public"
+          }),
+          sampleChangelogItem({
+            id: "public-draft",
+            publicSummary: "Draft wording.",
+            state: "Draft",
+            title: "Draft should stay hidden",
+            visibility: "Public"
+          }),
+          sampleChangelogItem({
+            id: "private-ready",
+            publicSummary: "Private wording.",
+            state: "Ready",
+            title: "Private should stay hidden",
+            visibility: "Private"
+          })
+        ],
+        requests: [
+          sampleRequest({
+            comments: [
+              {
+                age: "just now",
+                author: "Visitor",
+                body: "Visible public comment.",
+                id: "comment-public",
+                visibility: "Public"
+              },
+              {
+                age: "just now",
+                author: "Team",
+                body: "Internal evidence.",
+                id: "comment-internal",
+                visibility: "Internal"
+              },
+              {
+                age: "just now",
+                author: "Visitor",
+                body: "Hidden public comment.",
+                id: "comment-hidden",
+                visibility: "Hidden"
+              }
+            ],
+            description: "Alpha public description.",
+            id: "public-alpha",
+            source: "Email",
+            tags: ["alpha"],
+            title: "Alpha public request",
+            visibility: "Public"
+          }),
+          sampleRequest({
+            id: "private-alpha",
+            title: "Alpha private request",
+            visibility: "Private"
+          }),
+          sampleRequest({
+            archived: true,
+            id: "archived-alpha",
+            title: "Alpha archived request",
+            visibility: "Public"
+          })
+        ],
+        roadmap: {
+          Later: [
+            sampleRoadmapItem({
+              id: "public-later",
+              lane: "Later",
+              title: "Public later",
+              visibility: "Public"
+            })
+          ],
+          Next: [],
+          Now: [
+            sampleRoadmapItem({
+              id: "private-now",
+              lane: "Now",
+              title: "Private now",
+              visibility: "Private"
+            })
+          ]
+        }
+      },
+      "alpha"
+    );
+
+    expect(snapshot.requests).toHaveLength(1);
+    expect(snapshot.requests[0]).toMatchObject({
+      comments: [
+        {
+          body: "Visible public comment.",
+          id: "comment-public"
+        }
+      ],
+      id: "public-alpha",
+      title: "Alpha public request"
+    });
+    expect(snapshot.requests[0]).not.toHaveProperty("owner");
+    expect(snapshot.requests[0]).not.toHaveProperty("source");
+    expect(snapshot.roadmap.Now).toEqual([]);
+    expect(snapshot.roadmap.Later[0]).toMatchObject({
+      id: "public-later",
+      title: "Public later"
+    });
+    expect(snapshot.changelog).toHaveLength(1);
+    expect(snapshot.changelog[0]).toMatchObject({
+      id: "public-ready",
+      publicSummary: "Public release wording."
+    });
+    expect(JSON.stringify(snapshot)).not.toContain("Secret rollout note.");
+    expect(JSON.stringify(snapshot)).not.toContain("Internal evidence.");
+    expect(JSON.stringify(snapshot)).not.toContain("Hidden public comment.");
+    expect(JSON.stringify(snapshot)).not.toContain("Private should stay hidden");
+  });
+
   it("recovers from corrupt persisted data without throwing", () => {
     localStorage.setItem(openRoadStorageKey, "{not-json");
 
@@ -386,6 +547,8 @@ describe("OpenRoad domain state", () => {
   });
 
   it("rejects invalid workspace imports", () => {
+    const workspace = createInitialOpenRoadState().workspaces[0];
+
     expect(() => importWorkspaceFromJson("{}")).toThrow("schema version");
     expect(() => importWorkspaceFromJson("not-json")).toThrow("valid JSON");
     expect(() =>
@@ -393,8 +556,59 @@ describe("OpenRoad domain state", () => {
         JSON.stringify({
           schemaVersion: openRoadSchemaVersion,
           workspace: {
-            ...createInitialOpenRoadState().workspaces[0],
+            ...workspace,
             changelog: [{ title: "Malformed changelog" }]
+          }
+        })
+      )
+    ).toThrow("valid workspace");
+    expect(() =>
+      importWorkspaceFromJson(
+        JSON.stringify({
+          schemaVersion: openRoadSchemaVersion,
+          workspace: {
+            ...workspace,
+            portal: {
+              ...workspace.portal,
+              allowVoting: "yes"
+            }
+          }
+        })
+      )
+    ).toThrow("valid workspace");
+    expect(() =>
+      importWorkspaceFromJson(
+        JSON.stringify({
+          schemaVersion: openRoadSchemaVersion,
+          workspace: {
+            ...workspace,
+            requests: [
+              {
+                ...workspace.requests[0],
+                visibility: "External"
+              }
+            ]
+          }
+        })
+      )
+    ).toThrow("valid workspace");
+    expect(() =>
+      importWorkspaceFromJson(
+        JSON.stringify({
+          schemaVersion: openRoadSchemaVersion,
+          workspace: {
+            ...workspace,
+            requests: [
+              {
+                ...workspace.requests[0],
+                comments: [
+                  {
+                    ...workspace.requests[0].comments[0],
+                    visibility: "Pending"
+                  }
+                ]
+              }
+            ]
           }
         })
       )

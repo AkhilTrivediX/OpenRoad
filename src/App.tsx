@@ -284,12 +284,15 @@ export function App() {
 
   return (
     <main className="app-shell" aria-label="OpenRoad workspace shell">
-      <aside className="sidebar" aria-label="Primary navigation">
+      <aside className="route-index" aria-label="Primary navigation">
         <div className="brand" aria-label="OpenRoad">
           <span className="brand-mark" aria-hidden="true">
             <RouteGlyph />
           </span>
-          <span>OpenRoad</span>
+          <span className="brand-copy">
+            <strong>OpenRoad</strong>
+            <small>route room</small>
+          </span>
         </div>
 
         <nav className="nav-list">
@@ -302,7 +305,7 @@ export function App() {
                 href={`#${item.label.toLowerCase()}`}
                 key={item.label}
               >
-                <Icon aria-hidden="true" size={18} strokeWidth={1.8} />
+                <Icon aria-hidden="true" size={17} strokeWidth={1.75} />
                 <span>{item.label}</span>
                 {item.count ? <strong>{workspace.inboxCount}</strong> : null}
               </a>
@@ -310,18 +313,18 @@ export function App() {
           })}
         </nav>
 
-        <section className="workspace-card" aria-label="Workspace status">
+        <section className="workspace-plate" aria-label="Workspace status">
           <span>{workspace.plan}</span>
           <strong>{workspace.name}</strong>
           <p>{workspace.summary}</p>
         </section>
       </aside>
 
-      <section className="workspace">
-        <header className="topbar">
+      <section className="operations-deck">
+        <header className="command-deck">
           <label className="workspace-switcher">
             <span className="sr-only">Workspace</span>
-            <LayoutDashboard aria-hidden="true" size={17} />
+            <LayoutDashboard aria-hidden="true" size={16} />
             <select
               aria-label="Workspace"
               onChange={(event) => {
@@ -336,11 +339,11 @@ export function App() {
                 </option>
               ))}
             </select>
-            <ChevronDown aria-hidden="true" size={15} />
+            <ChevronDown aria-hidden="true" size={14} />
           </label>
 
           <div className="command-bar" role="search">
-            <Search aria-hidden="true" size={17} />
+            <Search aria-hidden="true" size={16} />
             <input
               aria-label="Search requests, roadmap items, and changelog entries"
               placeholder="Search requests, roadmap, changelog..."
@@ -360,7 +363,7 @@ export function App() {
               New workspace
             </button>
             <button className="icon-button" aria-label="Notifications">
-              <Bell aria-hidden="true" size={17} />
+              <Bell aria-hidden="true" size={16} />
             </button>
             <span className="avatar" aria-label="Current user Akhil">
               AT
@@ -385,8 +388,8 @@ export function App() {
           </form>
         ) : null}
 
-        <section className="hero-strip" aria-label="Standalone workflow">
-          <div>
+        <section className="brief-plate" id="portal" aria-label="Standalone workflow">
+          <div className="brief-copy">
             <span className="section-label">Standalone first</span>
             <h1>Turn requests into roadmap and changelog updates.</h1>
             <p>
@@ -394,6 +397,18 @@ export function App() {
               delivery sync is useful.
             </p>
           </div>
+
+          <div className="brief-instruments" aria-label="Workspace instruments">
+            <span>
+              <small>Requests</small>
+              <strong>{workspace.inboxCount}</strong>
+            </span>
+            <span>
+              <small>Mode</small>
+              <strong>Standalone</strong>
+            </span>
+          </div>
+
           {isAddingRequest ? null : (
             <button
               aria-controls="request-composer"
@@ -441,22 +456,8 @@ export function App() {
           </form>
         ) : null}
 
-        <section className="progress-rail" aria-label="Activation steps">
-          {[
-            ["Capture request", "Add feedback from users"],
-            ["Move to roadmap", "Choose what to build next"],
-            ["Draft changelog", "Close the loop when shipped"]
-          ].map(([title, detail], index) => (
-            <div className="progress-step" key={title}>
-              <span>{index + 1}</span>
-              <strong>{title}</strong>
-              <small>{detail}</small>
-            </div>
-          ))}
-        </section>
-
-        <section className="content-grid">
-          <section className="panel inbox-panel" aria-labelledby="inbox-title">
+        <section className="map-board">
+          <section className="panel intake-panel" id="inbox" aria-labelledby="inbox-title">
             <div className="panel-header">
               <div>
                 <span className="section-label">Inbox</span>
@@ -467,9 +468,23 @@ export function App() {
               </button>
             </div>
 
+            <div className="route-protocol" aria-label="Activation steps">
+              {[
+                ["Capture request", "Add feedback from users"],
+                ["Move to roadmap", "Choose what to build next"],
+                ["Draft changelog", "Close the loop when shipped"]
+              ].map(([title, detail], index) => (
+                <span className="protocol-step" key={title}>
+                  <small>{String(index + 1).padStart(2, "0")}</small>
+                  <strong>{title}</strong>
+                  <em>{detail}</em>
+                </span>
+              ))}
+            </div>
+
             {workspace.requests.length ? (
               <div className="request-list">
-                {workspace.requests.map((request) => (
+                {workspace.requests.map((request, index) => (
                   <button
                     aria-pressed={selectedRequest?.id === request.id}
                     className={
@@ -486,6 +501,9 @@ export function App() {
                     }
                     type="button"
                   >
+                    <span className="route-node" aria-hidden="true">
+                      {String(index + 1).padStart(2, "0")}
+                    </span>
                     <span className="request-main">
                       <strong>{request.title}</strong>
                       <small>
@@ -562,10 +580,10 @@ export function App() {
               </div>
             )}
 
-            <div className="integration-chips" aria-label="Optional integrations">
+            <div className="integration-chips" id="settings" aria-label="Optional integrations">
               {workspace.integrations.map((integration) => (
                 <span className="integration-chip" key={integration.label}>
-                  <RadioTower aria-hidden="true" size={14} />
+                  <RadioTower aria-hidden="true" size={13} />
                   {integration.label}
                   <small>{integration.state}</small>
                 </span>
@@ -573,7 +591,7 @@ export function App() {
             </div>
           </aside>
 
-          <section className="panel roadmap-panel" aria-labelledby="roadmap-title">
+          <section className="panel route-map-panel" id="roadmap" aria-labelledby="roadmap-title">
             <div className="panel-header">
               <div>
                 <span className="section-label">Roadmap preview</span>
@@ -605,10 +623,7 @@ export function App() {
             </div>
           </section>
 
-          <section
-            className="panel changelog-panel"
-            aria-labelledby="changelog-title"
-          >
+          <section className="panel release-panel" id="changelog" aria-labelledby="changelog-title">
             <div className="panel-header">
               <div>
                 <span className="section-label">Changelog</span>
@@ -640,11 +655,11 @@ export function App() {
 
       <div className="bottom-status" aria-label="System status">
         <span>
-          <CheckCircle2 aria-hidden="true" size={15} />
+          <CheckCircle2 aria-hidden="true" size={14} />
           Standalone mode ready
         </span>
         <span>
-          <MessageSquareText aria-hidden="true" size={15} />
+          <MessageSquareText aria-hidden="true" size={14} />
           {workspace.inboxCount} {workspace.inboxCount === 1 ? "request" : "requests"}
         </span>
       </div>

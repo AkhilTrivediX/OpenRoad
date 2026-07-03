@@ -4,9 +4,9 @@ This file tracks dashboard concept exploration. Generated images should be copie
 
 ## Decision
 
-Selected direction: **Concept B, Signal Rail**.
+Selected direction: **Dark Map Room**.
 
-OpenRoad will use Signal Rail as the main product shell and identity. Concept C, Route Board, remains the preferred reference for the future Roadmap screen. Calm mode remains required as the default density so first-time users are not dropped into a dense cockpit.
+OpenRoad will use a fully dark Workbench Plate and Map Room hybrid as the main product shell and identity. This supersedes the first Signal Rail implementation because that version still looked too close to a generic AI-generated dashboard. Concept C, Route Board, remains the preferred reference for the future Roadmap screen. Calm mode remains required as the default density so first-time users are not dropped into a dense cockpit.
 
 ## Concept A: Calm Desk
 
@@ -24,7 +24,14 @@ Dark, command-oriented workbench. Strong for power users, founders, maintainers,
 
 Strength: strongest brand memory and developer-tool feel. Risk: should not be the default for beginners unless Calm mode exists.
 
-Decision: selected as the main product shell.
+Decision: deprecated as the first implementation direction. Keep the command/workbench speed, but avoid the rounded dark-dashboard treatment.
+
+## Active Direction: Dark Map Room
+
+Dark, hard-edged, route-led product shell. It merges Workbench Plate structure with Map Room topology: square route index, command band, request ledger with route nodes, inspector spec sheet, map-like roadmap lanes, and release stamps.
+
+Strength: strongest break from generic SaaS/card-dashboard visuals while preserving developer-tool seriousness.
+Risk: can become too dense if every surface uses route notation at once; keep the default screen calm and progressively reveal power tools.
 
 ## Concept C: Route Board
 

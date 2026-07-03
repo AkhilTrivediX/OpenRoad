@@ -25,6 +25,19 @@ describe("OpenRoad workspace shell", () => {
     });
   });
 
+  it("keeps primary navigation targets reachable", () => {
+    render(<App />);
+
+    const primaryNav = screen.getByLabelText("Primary navigation");
+    ["Inbox", "Roadmap", "Changelog", "Portal", "Settings"].forEach((item) => {
+      const link = within(primaryNav).getByRole("link", { name: new RegExp(item) });
+      const targetId = link.getAttribute("href")?.replace("#", "");
+
+      expect(targetId).toBeTruthy();
+      expect(document.getElementById(targetId as string)).toBeInTheDocument();
+    });
+  });
+
   it("communicates standalone-first use and optional integrations", () => {
     render(<App />);
 

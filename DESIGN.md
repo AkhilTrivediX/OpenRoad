@@ -22,8 +22,8 @@ The app should borrow the calm precision of developer tools, but the first-time 
 
 ## Visual Direction
 
-- Sharp geometry: 0-6px radius, 1px dividers, no oversized rounded cards.
-- Product surfaces over decoration: panes, tables, inspectors, drawers, tabs.
+- Sharp geometry: 0-2px radius, 1px dividers, no oversized rounded cards.
+- Product surfaces over decoration: route plates, ledgers, inspectors, drawers, tabs.
 - Semantic color only: green for shipped, amber for stale or pending, red for blocked or error, blue/cobalt for selection and links.
 - No gradients, blobs, glassmorphism, decorative card grids, or marketing dashboard tropes.
 - Road/route motifs may appear structurally as lane dividers, route plates, stamps, and timeline marks. They should not become illustrations.
@@ -48,10 +48,10 @@ Concept exploration should compare genuinely different app models:
 
 ## Selected Direction
 
-Signal Rail is the chosen product identity.
+Dark Map Room is the chosen product identity.
 
-Use Signal Rail for the app shell: dark-neutral product surface, compact command bar, sharp navigation rail, contextual inspector patterns, and optional integration chips.
+Use a Workbench Plate and Map Room hybrid for the app shell: fully dark product surface, square route index, command band, route-numbered request ledger, map-like roadmap lanes, contextual inspector spec sheet, and optional integration chips.
 
 Keep Calm mode as the default density for new users. The first implementation must not expose the full power-workbench density by default. The initial shell should show Inbox, Roadmap, Changelog, Portal, and Settings only.
 
-Route Board remains the reference for the future Roadmap screen.
+Route Board remains the reference for the future Roadmap screen, but it should be expressed through the same dark map-room material system.

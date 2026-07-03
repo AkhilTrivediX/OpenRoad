@@ -25,22 +25,42 @@ import {
   Unlink,
   Waypoints
 } from "lucide-react";
-import { type FormEvent, useMemo, useState } from "react";
+import { type FormEvent, useEffect, useMemo, useReducer, useState } from "react";
+import {
+  clearOpenRoadState,
+  createEntityId,
+  createInitialOpenRoadState,
+  exportWorkspace,
+  importWorkspaceFromJson,
+  initialWorkspaces,
+  integrationChips,
+  loadOpenRoadState,
+  loadSelectedWorkspaceId,
+  openRoadReducer,
+  requestOwners,
+  requestStatuses,
+  saveOpenRoadState,
+  saveSelectedWorkspaceId,
+  workStatuses,
+  type ChangelogItem,
+  type MergedRequestSource,
+  type OpenRoadState,
+  type RequestComment,
+  type RequestItem,
+  type RequestOwner,
+  type RequestStatus,
+  type WorkComment,
+  type WorkItem,
+  type Workspace,
+  type WorkStatus
+} from "./domain/openroad";
 
-const requestStatuses = ["New", "Needs decision", "Planned", "Shipping soon"] as const;
-const requestOwners = ["Unassigned", "Akhil", "Product", "Support", "Maintainer"] as const;
-const workStatuses = ["Backlog", "Ready", "In progress", "Done"] as const;
 const triageViews = [
   { value: "all", label: "All active" },
   { value: "unassigned", label: "Unassigned" },
   { value: "needs-decision", label: "Needs decision" },
   { value: "high-signal", label: "High signal" }
 ] as const;
-const integrationChips: IntegrationChip[] = [
-  { label: "GitHub", state: "Optional" },
-  { label: "Jira", state: "Optional" },
-  { label: "Linear", state: "Optional" }
-];
 
 type NavItem = {
   label: "Inbox" | "Work" | "Roadmap" | "Changelog" | "Portal" | "Settings";
@@ -48,94 +68,9 @@ type NavItem = {
   icon: typeof Inbox;
 };
 
-type RequestStatus = (typeof requestStatuses)[number];
-type RequestOwner = (typeof requestOwners)[number];
-type WorkStatus = (typeof workStatuses)[number];
 type RequestStatusFilter = "All" | RequestStatus;
 type RequestArchiveFilter = "active" | "archived";
 type TriageView = (typeof triageViews)[number]["value"];
-
-type Workspace = {
-  id: string;
-  name: string;
-  plan: string;
-  summary: string;
-  requests: RequestItem[];
-  workItems: WorkItem[];
-  roadmap: Record<"Now" | "Next" | "Later", string[]>;
-  changelog: ChangelogItem[];
-  integrations: IntegrationChip[];
-};
-
-type RequestItem = {
-  id: string;
-  title: string;
-  description: string;
-  requester: string;
-  source: string;
-  tags: string[];
-  votes: number;
-  hasCurrentUserVote: boolean;
-  status: RequestStatus;
-  owner: RequestOwner;
-  age: string;
-  archived: boolean;
-  comments: RequestComment[];
-  mergedSources: MergedRequestSource[];
-};
-
-type RequestComment = {
-  id: string;
-  author: string;
-  body: string;
-  age: string;
-};
-
-type WorkItem = {
-  id: string;
-  title: string;
-  description: string;
-  owner: RequestOwner;
-  status: WorkStatus;
-  targetDate: string;
-  requestIds: string[];
-  comments: WorkComment[];
-  createdAt: string;
-};
-
-type WorkComment = {
-  id: string;
-  author: string;
-  body: string;
-  age: string;
-};
-
-type MergedRequestSource = {
-  id: string;
-  title: string;
-  description: string;
-  requester: string;
-  source: string;
-  owner: RequestOwner;
-  status: RequestStatus;
-  votes: number;
-  hasCurrentUserVote: boolean;
-  tags: string[];
-  commentCount: number;
-  age: string;
-  mergedAt: string;
-};
-
-type ChangelogItem = {
-  title: string;
-  state: "Draft" | "Ready";
-  detail: string;
-};
-
-type IntegrationChip = {
-  label: string;
-  state: "Optional" | "Linked";
-};
 
 type RequestDraft = {
   title: string;
@@ -180,181 +115,6 @@ const baseNavItems: NavItem[] = [
 ];
 
 const workNavItem: NavItem = { label: "Work", icon: ListChecks };
-
-const initialWorkspaces: Workspace[] = [
-  {
-    id: "acme",
-    name: "Acme OSS",
-    plan: "Demo workspace",
-    summary: "Standalone feedback loop with optional delivery links.",
-    requests: [
-      {
-        id: "api-rate-limit-visibility",
-        title: "API rate limit visibility",
-        description:
-          "Users cannot tell when they are close to hitting API limits. This blocks debugging and creates repeated support requests.",
-        requester: "CLI user",
-        source: "Portal",
-        tags: ["api", "usage"],
-        votes: 142,
-        hasCurrentUserVote: false,
-        status: "Needs decision",
-        owner: "Unassigned",
-        age: "2h ago",
-        archived: false,
-        comments: [
-          {
-            id: "api-comment-1",
-            author: "Success",
-            body: "Three customers asked for a visible limit meter this week.",
-            age: "1h ago"
-          }
-        ],
-        mergedSources: []
-      },
-      {
-        id: "bulk-export-csv",
-        title: "Support bulk export to CSV",
-        description:
-          "Support needs a quick way to export customer request lists for weekly account reviews.",
-        requester: "Success team",
-        source: "Email",
-        tags: ["export", "success"],
-        votes: 97,
-        hasCurrentUserVote: false,
-        status: "Planned",
-        owner: "Support",
-        age: "5h ago",
-        archived: false,
-        comments: [],
-        mergedSources: []
-      },
-      {
-        id: "dark-mode-docs",
-        title: "Dark mode for docs site",
-        description: "Docs readers want a dark theme that matches the CLI and product UI.",
-        requester: "Docs feedback",
-        source: "Portal",
-        tags: ["docs", "theme"],
-        votes: 89,
-        hasCurrentUserVote: false,
-        status: "New",
-        owner: "Unassigned",
-        age: "1d ago",
-        archived: false,
-        comments: [],
-        mergedSources: []
-      },
-      {
-        id: "webhook-retry-controls",
-        title: "Webhook retry controls",
-        description:
-          "Maintainers need to retry failed webhooks without opening support tickets.",
-        requester: "Maintainer note",
-        source: "Manual",
-        tags: ["webhooks"],
-        votes: 76,
-        hasCurrentUserVote: true,
-        status: "Shipping soon",
-        owner: "Akhil",
-        age: "1d ago",
-        archived: false,
-        comments: [],
-        mergedSources: []
-      }
-    ],
-    workItems: [],
-    roadmap: {
-      Now: ["API rate limit visibility", "Webhook retry controls"],
-      Next: ["Bulk export to CSV", "Saved feedback views"],
-      Later: ["Custom request fields", "Public roadmap RSS"]
-    },
-    changelog: [
-      {
-        title: "Inline markdown in comments",
-        state: "Ready",
-        detail: "Linked to 18 requesters"
-      },
-      {
-        title: "Email digest improvements",
-        state: "Draft",
-        detail: "Needs public wording"
-      }
-    ],
-    integrations: integrationChips
-  },
-  {
-    id: "maintainer",
-    name: "Maintainer Lab",
-    plan: "Community workspace",
-    summary: "A smaller project using OpenRoad without external trackers.",
-    requests: [
-      {
-        id: "contributor-guide-checklist",
-        title: "Contributor guide checklist",
-        description:
-          "First-time contributors need a clear checklist before opening their first pull request.",
-        requester: "First-time contributor",
-        source: "Portal",
-        tags: ["community", "docs"],
-        votes: 34,
-        hasCurrentUserVote: false,
-        status: "New",
-        owner: "Maintainer",
-        age: "3h ago",
-        archived: false,
-        comments: [],
-        mergedSources: []
-      },
-      {
-        id: "release-notes-rss",
-        title: "Release notes RSS",
-        description: "Maintainers want subscribers to follow release notes through RSS.",
-        requester: "Maintainer",
-        source: "Manual",
-        tags: ["release", "rss"],
-        votes: 21,
-        hasCurrentUserVote: false,
-        status: "Planned",
-        owner: "Unassigned",
-        age: "1d ago",
-        archived: false,
-        comments: [],
-        mergedSources: []
-      },
-      {
-        id: "issue-template-cleanup",
-        title: "Issue template cleanup",
-        description: "Community moderators want simpler issue templates for bug reports.",
-        requester: "Community moderator",
-        source: "Manual",
-        tags: ["community"],
-        votes: 19,
-        hasCurrentUserVote: false,
-        status: "Needs decision",
-        owner: "Unassigned",
-        age: "2d ago",
-        archived: false,
-        comments: [],
-        mergedSources: []
-      }
-    ],
-    workItems: [],
-    roadmap: {
-      Now: ["Contributor guide checklist"],
-      Next: ["Release notes RSS"],
-      Later: ["Issue template cleanup"]
-    },
-    changelog: [
-      {
-        title: "New maintainer queue",
-        state: "Draft",
-        detail: "Standalone work item"
-      }
-    ],
-    integrations: integrationChips
-  }
-];
 
 function statusTone(status: RequestStatus | WorkStatus | ChangelogItem["state"]) {
   if (status === "Planned" || status === "Ready" || status === "Done") return "success";
@@ -409,8 +169,31 @@ function requestMatchesTriageView(request: RequestItem, view: TriageView) {
 }
 
 export function App() {
-  const [workspaceList, setWorkspaceList] = useState(initialWorkspaces);
-  const [workspaceId, setWorkspaceId] = useState(initialWorkspaces[0].id);
+  const [loadResult] = useState(() => loadOpenRoadState());
+  const [openRoadState, dispatchOpenRoad] = useReducer(
+    openRoadReducer,
+    loadResult.state
+  );
+  const workspaceList = openRoadState.workspaces as Workspace[];
+  const [workspaceId, setWorkspaceId] = useState(() => {
+    const selectedWorkspaceId = loadSelectedWorkspaceId();
+
+    if (
+      selectedWorkspaceId &&
+      loadResult.state.workspaces.some((item) => item.id === selectedWorkspaceId)
+    ) {
+      return selectedWorkspaceId;
+    }
+
+    return loadResult.state.workspaces[0]?.id ?? initialWorkspaces[0].id;
+  });
+  const [persistenceMessage, setPersistenceMessage] = useState(
+    loadResult.status === "recovered"
+      ? loadResult.error ?? "Saved OpenRoad data could not be loaded. Demo data is active."
+      : ""
+  );
+  const [exportPreview, setExportPreview] = useState("");
+  const [importDraft, setImportDraft] = useState("");
   const [isCreatingWorkspace, setIsCreatingWorkspace] = useState(false);
   const [newWorkspaceName, setNewWorkspaceName] = useState("");
   const [isAddingRequest, setIsAddingRequest] = useState(false);
@@ -434,6 +217,16 @@ export function App() {
     () => workspaceList.find((item) => item.id === workspaceId) ?? workspaceList[0],
     [workspaceId, workspaceList]
   );
+  useEffect(() => {
+    try {
+      saveOpenRoadState(openRoadState as OpenRoadState);
+    } catch {
+      setPersistenceMessage("OpenRoad could not save local workspace data.");
+    }
+  }, [openRoadState]);
+  useEffect(() => {
+    saveSelectedWorkspaceId(workspaceId);
+  }, [workspaceId]);
   const activeRequestCount = useMemo(
     () => workspace.requests.filter((request) => !request.archived).length,
     [workspace.requests]
@@ -528,9 +321,10 @@ export function App() {
   );
 
   function updateCurrentWorkspace(updater: (workspace: Workspace) => Workspace) {
-    setWorkspaceList((items) =>
-      items.map((item) => (item.id === workspace.id ? updater(item) : item))
-    );
+    dispatchOpenRoad({
+      type: "replace-workspace",
+      workspace: updater(workspace)
+    });
   }
 
   function updateRequest(requestId: string, updater: (request: RequestItem) => RequestItem) {
@@ -581,7 +375,7 @@ export function App() {
     if (!name) return;
 
     const createdWorkspace: Workspace = {
-      id: `${name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${Date.now()}`,
+      id: createEntityId(name.toLowerCase().replace(/[^a-z0-9]+/g, "-")),
       name,
       plan: "Standalone workspace",
       summary: "Ready for requests, roadmap, and changelog work.",
@@ -596,7 +390,7 @@ export function App() {
       integrations: integrationChips
     };
 
-    setWorkspaceList((items) => [...items, createdWorkspace]);
+    dispatchOpenRoad({ type: "create-workspace", workspace: createdWorkspace });
     setWorkspaceId(createdWorkspace.id);
     setNewWorkspaceName("");
     setIsCreatingWorkspace(false);
@@ -613,7 +407,7 @@ export function App() {
     if (!title) return;
 
     const createdRequest: RequestItem = {
-      id: `manual-${Date.now()}`,
+      id: createEntityId("manual"),
       title,
       description: newRequestDraft.description.trim(),
       requester: newRequestDraft.requester.trim() || "Manual capture",
@@ -757,7 +551,7 @@ export function App() {
     if (!selectedRequest || !body) return;
 
     const comment: RequestComment = {
-      id: `comment-${Date.now()}`,
+      id: createEntityId("comment"),
       author: "Akhil",
       body,
       age: "just now"
@@ -778,7 +572,7 @@ export function App() {
     const requestIds =
       selectedRequest && newWorkDraft.linkSelectedRequest ? [selectedRequest.id] : [];
     const createdWorkItem: WorkItem = {
-      id: `work-${Date.now()}`,
+      id: createEntityId("work"),
       title,
       description: newWorkDraft.description.trim(),
       owner: newWorkDraft.owner,
@@ -809,7 +603,7 @@ export function App() {
     if (!selectedWorkItem || !body) return;
 
     const comment: WorkComment = {
-      id: `work-comment-${Date.now()}`,
+      id: createEntityId("work-comment"),
       author: "Akhil",
       body,
       age: "just now"
@@ -827,6 +621,47 @@ export function App() {
       ...workItem,
       requestIds: workItem.requestIds.filter((item) => item !== requestId)
     }));
+  }
+
+  function exportCurrentWorkspace() {
+    setExportPreview(exportWorkspace(workspace));
+    setPersistenceMessage("Workspace export is ready.");
+  }
+
+  function importWorkspace(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    try {
+      const importedWorkspace = importWorkspaceFromJson(importDraft);
+      const action = workspaceList.some((item) => item.id === importedWorkspace.id)
+        ? "replace-workspace"
+        : "create-workspace";
+
+      dispatchOpenRoad({ type: action, workspace: importedWorkspace });
+      setWorkspaceId(importedWorkspace.id);
+      setImportDraft("");
+      setExportPreview("");
+      setPersistenceMessage(`Imported ${importedWorkspace.name}.`);
+      resetRequestFilters();
+    } catch (error) {
+      setPersistenceMessage(
+        error instanceof Error ? error.message : "Workspace import failed."
+      );
+    }
+  }
+
+  function resetDemoData() {
+    const nextState = createInitialOpenRoadState();
+    clearOpenRoadState();
+    dispatchOpenRoad({ type: "replace-state", state: nextState });
+    setWorkspaceId(nextState.workspaces[0].id);
+    setPersistenceMessage("Demo data restored.");
+    setExportPreview("");
+    setImportDraft("");
+    setIsCreatingWorkspace(false);
+    setIsAddingRequest(false);
+    setIsAddingWorkItem(false);
+    resetRequestFilters();
   }
 
   return (
@@ -1526,15 +1361,6 @@ export function App() {
               </div>
             )}
 
-            <div className="integration-chips" id="settings" aria-label="Optional integrations">
-              {workspace.integrations.map((integration) => (
-                <span className="integration-chip" key={integration.label}>
-                  <RadioTower aria-hidden="true" size={13} />
-                  {integration.label}
-                  <small>{integration.state}</small>
-                </span>
-              ))}
-            </div>
           </aside>
 
           {isAddingWorkItem || hasWorkItems ? (
@@ -1945,6 +1771,78 @@ export function App() {
                   <p>Draft updates from shipped roadmap items when work starts landing.</p>
                 </div>
               )}
+            </div>
+          </section>
+
+          <section className="panel settings-panel" id="settings" aria-labelledby="settings-title">
+            <div className="panel-header">
+              <div>
+                <span className="section-label">Settings</span>
+                <h2 id="settings-title">Workspace data</h2>
+              </div>
+            </div>
+
+            <div className="settings-grid">
+              <section className="data-tools" aria-label="Workspace data tools">
+                <div className="source-history-header">
+                  <Settings aria-hidden="true" size={14} />
+                  <strong>Local data</strong>
+                </div>
+                {persistenceMessage ? (
+                  <p className="persistence-message" role="status">
+                    {persistenceMessage}
+                  </p>
+                ) : null}
+                <div className="data-tool-actions">
+                  <button
+                    className="secondary-action compact"
+                    onClick={exportCurrentWorkspace}
+                    type="button"
+                  >
+                    Export workspace
+                  </button>
+                  <button
+                    className="secondary-action compact"
+                    onClick={resetDemoData}
+                    type="button"
+                  >
+                    Reset demo data
+                  </button>
+                </div>
+                {exportPreview ? (
+                  <label className="data-textarea">
+                    <span>Workspace export JSON</span>
+                    <textarea readOnly value={exportPreview} />
+                  </label>
+                ) : null}
+                <form className="import-form" aria-label="Import workspace" onSubmit={importWorkspace}>
+                  <label className="data-textarea">
+                    <span>Workspace import JSON</span>
+                    <textarea
+                      onChange={(event) => setImportDraft(event.target.value)}
+                      placeholder="Paste an OpenRoad workspace export"
+                      value={importDraft}
+                    />
+                  </label>
+                  <button
+                    className="secondary-action compact"
+                    disabled={!importDraft.trim()}
+                    type="submit"
+                  >
+                    Import workspace
+                  </button>
+                </form>
+              </section>
+
+              <div className="integration-chips" aria-label="Optional integrations">
+                {workspace.integrations.map((integration) => (
+                  <span className="integration-chip" key={integration.label}>
+                    <RadioTower aria-hidden="true" size={13} />
+                    {integration.label}
+                    <small>{integration.state}</small>
+                  </span>
+                ))}
+              </div>
             </div>
           </section>
         </section>

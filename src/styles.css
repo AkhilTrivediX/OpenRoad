@@ -307,7 +307,8 @@ a:hover {
 .work-composer input::placeholder,
 .work-composer textarea::placeholder,
 .comment-form textarea::placeholder,
-.work-comment-form textarea::placeholder {
+.work-comment-form textarea::placeholder,
+.data-tools textarea::placeholder {
   color: var(--muted);
   opacity: 1;
 }
@@ -564,6 +565,7 @@ h3 {
 .triage-controls select,
 .comment-form textarea,
 .work-comment-form textarea,
+.data-tools textarea,
 .request-tools select {
   background: var(--plate);
   border: 1px solid var(--line);
@@ -577,7 +579,8 @@ h3 {
 .work-composer textarea,
 .request-editor textarea,
 .comment-form textarea,
-.work-comment-form textarea {
+.work-comment-form textarea,
+.data-tools textarea {
   line-height: 1.45;
   min-height: 76px;
   padding: 9px 11px;
@@ -1120,7 +1123,59 @@ dd {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  margin-top: 12px;
+}
+
+.settings-panel {
+  grid-column: 1 / -1;
+}
+
+.settings-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 0.4fr);
+}
+
+.data-tools {
+  border: 1px solid var(--line);
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+}
+
+.persistence-message {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.data-tool-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.data-textarea {
+  display: grid;
+  gap: 6px;
+}
+
+.data-textarea span {
+  color: var(--muted);
+  font-family: var(--label-font);
+  font-size: 12px;
+}
+
+.data-textarea textarea {
+  min-height: 88px;
+}
+
+.import-form {
+  display: grid;
+  gap: 8px;
+}
+
+.import-form .secondary-action {
+  justify-self: start;
 }
 
 .integration-chip {
@@ -1294,7 +1349,8 @@ dd {
 }
 
 .route-map-panel,
-.release-panel {
+.release-panel,
+.settings-panel {
   min-height: 242px;
 }
 
@@ -1517,6 +1573,7 @@ dd {
   .triage-summary,
   .route-protocol,
   .roadmap-lanes,
+  .settings-grid,
   .work-layout {
     grid-template-columns: 1fr;
   }

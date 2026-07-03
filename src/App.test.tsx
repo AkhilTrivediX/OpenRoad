@@ -1,6 +1,6 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { App } from "./App";
 
 async function createWorkItem(
@@ -15,6 +15,10 @@ async function createWorkItem(
 }
 
 describe("OpenRoad workspace shell", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
   it("renders the shell title and default workspace", () => {
     render(<App />);
 
@@ -532,5 +536,64 @@ describe("OpenRoad workspace shell", () => {
       "No linked requests"
     );
     expect(screen.getByText("No requests yet")).toBeInTheDocument();
+  });
+
+  it("persists created requests across app remounts", async () => {
+    const user = userEvent.setup();
+    const { unmount } = render(<App />);
+
+    await user.click(screen.getByRole("button", { name: "New workspace" }));
+    await user.type(screen.getByLabelText("Workspace name"), "Persistent Desk");
+    await user.click(screen.getByRole("button", { name: "Create workspace" }));
+    await user.click(screen.getAllByRole("button", { name: "Add request" })[0]);
+    await user.type(screen.getByLabelText("Request title"), "Keep this request");
+    await user.click(screen.getByRole("button", { name: "Capture request" }));
+
+    unmount();
+    render(<App />);
+
+    expect(screen.getByRole("combobox", { name: "Workspace" })).toHaveDisplayValue(
+      "Persistent Desk"
+    );
+    expect(screen.getByRole("heading", { name: "Keep this request" })).toBeInTheDocument();
+  });
+
+  it("recovers from corrupt local data and can restore demo data", async () => {
+    const user = userEvent.setup();
+    localStorage.setItem("openroad:state:v1", "{not-json");
+    render(<App />);
+
+    expect(
+      screen.getByText(/Saved OpenRoad data could not be loaded/i)
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Reset demo data" }));
+
+    expect(screen.getByText("Demo data restored.")).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Workspace" })).toHaveDisplayValue("Acme OSS");
+  });
+
+  it("exports and imports workspace data", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole("button", { name: "New workspace" }));
+    await user.type(screen.getByLabelText("Workspace name"), "Export Desk");
+    await user.click(screen.getByRole("button", { name: "Create workspace" }));
+    await user.click(screen.getAllByRole("button", { name: "Add request" })[0]);
+    await user.type(screen.getByLabelText("Request title"), "Portable request");
+    await user.click(screen.getByRole("button", { name: "Capture request" }));
+    await user.click(screen.getByRole("button", { name: "Export workspace" }));
+
+    const exported = (screen.getByLabelText("Workspace export JSON") as HTMLTextAreaElement)
+      .value;
+    await user.click(screen.getByRole("button", { name: "Reset demo data" }));
+    fireEvent.change(screen.getByLabelText("Workspace import JSON"), {
+      target: { value: exported }
+    });
+    await user.click(screen.getByRole("button", { name: "Import workspace" }));
+
+    expect(screen.getByRole("combobox", { name: "Workspace" })).toHaveDisplayValue("Export Desk");
+    expect(screen.getByRole("heading", { name: "Portable request" })).toBeInTheDocument();
   });
 });

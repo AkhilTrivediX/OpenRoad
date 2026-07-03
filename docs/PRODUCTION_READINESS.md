@@ -168,28 +168,28 @@ OpenRoad releases must eventually include:
 
 ## Current Readiness Debt
 
-These are known production gaps in the current `main` after Feature 4.
+These are known production gaps in the current `main` after Feature 4.5.
 
-- Data is still in memory and disappears on reload.
-- Domain logic is still mostly inside `App.tsx`.
-- There is no local schema version, import/export, or corrupt-state recovery.
+- Roadmap and changelog are still preview lists, not complete domain workflows.
+- Public/private visibility is not yet modeled for roadmap or changelog content.
+- There is no app-level error boundary yet.
+- Some UI orchestration still lives inside `App.tsx`; app module decomposition is pending.
 - There is no backend, auth, tenancy, or deployment pipeline.
 - There is no CI workflow yet.
 - Browser QA is manual rather than automated end-to-end CI.
 
-This means the next implementation branch should be production foundation work, not another workflow layer.
+This means the next implementation branch should turn roadmap planning into a durable domain workflow before public portal and changelog work.
 
 ## Next Production Move
 
-Next branch: `feat/domain-state-persistence`
+Next branch: `feat/roadmap-now-next-later`
 
 Purpose:
 
-- Extract provider-neutral domain state from `App.tsx`.
-- Introduce a tested reducer/action layer.
-- Add versioned local persistence for Stage 1.
-- Add workspace export/import.
-- Add reset/recovery for corrupt local data.
-- Preserve the current UI behavior while making data durable.
+- Add a durable roadmap item model.
+- Let users place requests/work into Now, Next, and Later.
+- Add public/private visibility flags before portal work.
+- Add confidence and stale indicators without making timeline planning mandatory.
+- Keep roadmap useful in standalone mode with no GitHub, Jira, Linear, or AI dependency.
 
-Roadmap, changelog, portal, and integrations should build on top of this foundation instead of expanding in-memory state.
+Changelog, portal, and integrations should build on top of this roadmap domain instead of treating roadmap lanes as static preview strings.

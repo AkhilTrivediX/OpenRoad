@@ -313,6 +313,8 @@ Planning items:
 
 Branch: `feat/domain-state-persistence`
 
+Status: merged to `main`.
+
 Build:
 
 - Extract domain types and actions.
@@ -333,6 +335,8 @@ Why now:
 
 Branch: `feat/roadmap-now-next-later`
 
+Status: active.
+
 Build:
 
 - Roadmap item model.
@@ -343,7 +347,7 @@ Build:
 
 Dependency:
 
-- Foundation A persistence must exist first.
+- Foundation A persistence is complete.
 
 ### Foundation B.5: App Decomposition
 
@@ -359,7 +363,7 @@ Build:
 
 Dependency:
 
-- Foundation A should define the domain/store boundary first.
+- Foundation A defines the first domain/store boundary.
 
 ### Foundation C: Changelog Domain
 
@@ -564,7 +568,7 @@ Near-term:
 Next:
 
 - Add Playwright end-to-end smoke tests for workspace/request/work/roadmap/changelog flows.
-- Add persistence migration tests.
+- Extend persistence migration tests whenever roadmap/changelog schema changes.
 - Add accessibility checks for primary routes.
 - Add CI that runs `pnpm check`, lint/type checks, and E2E smoke tests.
 
@@ -576,6 +580,6 @@ Next:
 - UI complexity creeping into first-use screens.
 - One-component app growth blocking reliable changes.
 - Tests proving text exists but not proving user workflows.
-- No recovery route for corrupt local or server data.
+- No server recovery route yet.
 
-The next production foundation feature directly addresses the most immediate risks: durability, domain action ownership, and migration safety.
+The next production foundation feature directly addresses roadmap correctness, durable request/work links, and public/private visibility before portal surfaces exist.

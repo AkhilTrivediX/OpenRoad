@@ -37,6 +37,9 @@ import {
   loadOpenRoadState,
   loadSelectedWorkspaceId,
   openRoadReducer,
+  roadmapConfidenceLevels,
+  roadmapLanes,
+  roadmapVisibilities,
   requestOwners,
   requestStatuses,
   saveOpenRoadState,
@@ -45,6 +48,10 @@ import {
   type ChangelogItem,
   type MergedRequestSource,
   type OpenRoadState,
+  type RoadmapConfidence,
+  type RoadmapItem,
+  type RoadmapLane,
+  type RoadmapVisibility,
   type RequestComment,
   type RequestItem,
   type RequestOwner,
@@ -89,6 +96,17 @@ type WorkDraft = {
   linkSelectedRequest: boolean;
 };
 
+type RoadmapDraft = {
+  title: string;
+  summary: string;
+  lane: RoadmapLane;
+  visibility: RoadmapVisibility;
+  confidence: RoadmapConfidence;
+  isStale: boolean;
+  requestId: string;
+  workItemId: string;
+};
+
 const emptyRequestDraft: RequestDraft = {
   title: "",
   description: "",
@@ -106,6 +124,17 @@ const emptyWorkDraft: WorkDraft = {
   linkSelectedRequest: true
 };
 
+const emptyRoadmapDraft: RoadmapDraft = {
+  confidence: "Medium",
+  isStale: false,
+  lane: "Next",
+  requestId: "",
+  summary: "",
+  title: "",
+  visibility: "Private",
+  workItemId: ""
+};
+
 const baseNavItems: NavItem[] = [
   { label: "Inbox", count: true, icon: Inbox },
   { label: "Roadmap", icon: Waypoints },
@@ -121,6 +150,10 @@ function statusTone(status: RequestStatus | WorkStatus | ChangelogItem["state"])
   if (status === "Shipping soon" || status === "In progress") return "info";
   if (status === "Needs decision" || status === "Draft") return "warning";
   return "neutral";
+}
+
+function flattenRoadmap(roadmap: Workspace["roadmap"]) {
+  return roadmapLanes.flatMap((lane) => roadmap[lane]);
 }
 
 function parseTags(value: string) {
@@ -200,6 +233,9 @@ export function App() {
   const [newRequestDraft, setNewRequestDraft] = useState<RequestDraft>(emptyRequestDraft);
   const [isAddingWorkItem, setIsAddingWorkItem] = useState(false);
   const [newWorkDraft, setNewWorkDraft] = useState<WorkDraft>(emptyWorkDraft);
+  const [isAddingRoadmapItem, setIsAddingRoadmapItem] = useState(false);
+  const [newRoadmapDraft, setNewRoadmapDraft] =
+    useState<RoadmapDraft>(emptyRoadmapDraft);
   const [requestQuery, setRequestQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<RequestStatusFilter>("All");
   const [archiveFilter, setArchiveFilter] = useState<RequestArchiveFilter>("active");
@@ -233,6 +269,8 @@ export function App() {
   );
   const workItemCount = workspace.workItems.length;
   const hasWorkItems = workItemCount > 0;
+  const roadmapItems = useMemo(() => flattenRoadmap(workspace.roadmap), [workspace.roadmap]);
+  const roadmapItemCount = roadmapItems.length;
   const navItems = useMemo(() => {
     if (!hasWorkItems) return baseNavItems;
     return [baseNavItems[0], workNavItem, ...baseNavItems.slice(1)];
@@ -396,7 +434,9 @@ export function App() {
     setIsCreatingWorkspace(false);
     setIsAddingRequest(false);
     setIsAddingWorkItem(false);
+    setIsAddingRoadmapItem(false);
     setNewWorkDraft(emptyWorkDraft);
+    setNewRoadmapDraft(emptyRoadmapDraft);
     setWorkCommentDraft("");
     resetRequestFilters();
   }
@@ -623,6 +663,98 @@ export function App() {
     }));
   }
 
+  function startRoadmapItem() {
+    setIsAddingRoadmapItem(true);
+    setNewRoadmapDraft((draft) => ({
+      ...draft,
+      requestId: selectedRequest?.id ?? ""
+    }));
+  }
+
+  function addRoadmapItem(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const title = newRoadmapDraft.title.trim();
+    if (!title) return;
+
+    const createdRoadmapItem: RoadmapItem = {
+      confidence: newRoadmapDraft.confidence,
+      createdAt: "just now",
+      id: createEntityId("roadmap"),
+      isStale: newRoadmapDraft.isStale,
+      lane: newRoadmapDraft.lane,
+      requestIds: newRoadmapDraft.requestId ? [newRoadmapDraft.requestId] : [],
+      summary: newRoadmapDraft.summary.trim(),
+      title,
+      updatedAt: "just now",
+      visibility: newRoadmapDraft.visibility,
+      workItemIds: newRoadmapDraft.workItemId ? [newRoadmapDraft.workItemId] : []
+    };
+
+    dispatchOpenRoad({
+      roadmapItem: createdRoadmapItem,
+      type: "create-roadmap-item",
+      workspaceId: workspace.id
+    });
+    setIsAddingRoadmapItem(false);
+    setNewRoadmapDraft(emptyRoadmapDraft);
+  }
+
+  function findRoadmapItem(roadmapItemId: string) {
+    return roadmapItems.find((item) => item.id === roadmapItemId);
+  }
+
+  function updateRoadmapItem(
+    roadmapItemId: string,
+    updater: (roadmapItem: RoadmapItem) => RoadmapItem
+  ) {
+    const roadmapItem = findRoadmapItem(roadmapItemId);
+    if (!roadmapItem) return;
+
+    dispatchOpenRoad({
+      roadmapItem: updater({ ...roadmapItem, updatedAt: "just now" }),
+      type: "replace-roadmap-item",
+      workspaceId: workspace.id
+    });
+  }
+
+  function linkRequestToRoadmap(roadmapItemId: string, requestId: string) {
+    if (!requestId) return;
+    updateRoadmapItem(roadmapItemId, (roadmapItem) => ({
+      ...roadmapItem,
+      requestIds: Array.from(new Set([...roadmapItem.requestIds, requestId]))
+    }));
+  }
+
+  function unlinkRequestFromRoadmap(roadmapItemId: string, requestId: string) {
+    updateRoadmapItem(roadmapItemId, (roadmapItem) => ({
+      ...roadmapItem,
+      requestIds: roadmapItem.requestIds.filter((item) => item !== requestId)
+    }));
+  }
+
+  function linkWorkItemToRoadmap(roadmapItemId: string, workItemId: string) {
+    if (!workItemId) return;
+    updateRoadmapItem(roadmapItemId, (roadmapItem) => ({
+      ...roadmapItem,
+      workItemIds: Array.from(new Set([...roadmapItem.workItemIds, workItemId]))
+    }));
+  }
+
+  function unlinkWorkItemFromRoadmap(roadmapItemId: string, workItemId: string) {
+    updateRoadmapItem(roadmapItemId, (roadmapItem) => ({
+      ...roadmapItem,
+      workItemIds: roadmapItem.workItemIds.filter((item) => item !== workItemId)
+    }));
+  }
+
+  function removeRoadmapItem(roadmapItemId: string) {
+    dispatchOpenRoad({
+      roadmapItemId,
+      type: "delete-roadmap-item",
+      workspaceId: workspace.id
+    });
+  }
+
   function exportCurrentWorkspace() {
     setExportPreview(exportWorkspace(workspace));
     setPersistenceMessage("Workspace export is ready.");
@@ -661,6 +793,8 @@ export function App() {
     setIsCreatingWorkspace(false);
     setIsAddingRequest(false);
     setIsAddingWorkItem(false);
+    setIsAddingRoadmapItem(false);
+    setNewRoadmapDraft(emptyRoadmapDraft);
     resetRequestFilters();
   }
 
@@ -713,6 +847,7 @@ export function App() {
                 setWorkspaceId(event.target.value);
                 setIsAddingRequest(false);
                 setIsAddingWorkItem(false);
+                setIsAddingRoadmapItem(false);
                 setCommentDraft("");
                 setWorkCommentDraft("");
               }}
@@ -1717,30 +1852,364 @@ export function App() {
           <section className="panel route-map-panel" id="roadmap" aria-labelledby="roadmap-title">
             <div className="panel-header">
               <div>
-                <span className="section-label">Roadmap preview</span>
+                <span className="section-label">Roadmap</span>
                 <h2 id="roadmap-title">Now / Next / Later</h2>
               </div>
-              <a href="#roadmap">Open Roadmap</a>
+              <div className="panel-actions">
+                <span className="panel-count">
+                  {roadmapItemCount} {roadmapItemCount === 1 ? "item" : "items"}
+                </span>
+                {!isAddingRoadmapItem ? (
+                  <button className="secondary-action compact" onClick={startRoadmapItem} type="button">
+                    <Waypoints aria-hidden="true" size={14} />
+                    New roadmap item
+                  </button>
+                ) : null}
+              </div>
             </div>
+
+            {isAddingRoadmapItem ? (
+              <form className="roadmap-form" aria-label="Create roadmap item" onSubmit={addRoadmapItem}>
+                <label>
+                  <span>Roadmap title</span>
+                  <input
+                    autoFocus
+                    onChange={(event) =>
+                      setNewRoadmapDraft((draft) => ({ ...draft, title: event.target.value }))
+                    }
+                    placeholder="e.g. Account-level usage exports"
+                    value={newRoadmapDraft.title}
+                  />
+                </label>
+                <label>
+                  <span>Lane</span>
+                  <select
+                    onChange={(event) =>
+                      setNewRoadmapDraft((draft) => ({
+                        ...draft,
+                        lane: event.target.value as RoadmapLane
+                      }))
+                    }
+                    value={newRoadmapDraft.lane}
+                  >
+                    {roadmapLanes.map((lane) => (
+                      <option key={lane} value={lane}>
+                        {lane}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="wide-field">
+                  <span>Summary</span>
+                  <textarea
+                    onChange={(event) =>
+                      setNewRoadmapDraft((draft) => ({ ...draft, summary: event.target.value }))
+                    }
+                    placeholder="What should a reader understand about this direction?"
+                    value={newRoadmapDraft.summary}
+                  />
+                </label>
+                <label>
+                  <span>Visibility</span>
+                  <select
+                    onChange={(event) =>
+                      setNewRoadmapDraft((draft) => ({
+                        ...draft,
+                        visibility: event.target.value as RoadmapVisibility
+                      }))
+                    }
+                    value={newRoadmapDraft.visibility}
+                  >
+                    {roadmapVisibilities.map((visibility) => (
+                      <option key={visibility} value={visibility}>
+                        {visibility}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  <span>Confidence</span>
+                  <select
+                    onChange={(event) =>
+                      setNewRoadmapDraft((draft) => ({
+                        ...draft,
+                        confidence: event.target.value as RoadmapConfidence
+                      }))
+                    }
+                    value={newRoadmapDraft.confidence}
+                  >
+                    {roadmapConfidenceLevels.map((confidence) => (
+                      <option key={confidence} value={confidence}>
+                        {confidence}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  <span>Linked request</span>
+                  <select
+                    onChange={(event) =>
+                      setNewRoadmapDraft((draft) => ({ ...draft, requestId: event.target.value }))
+                    }
+                    value={newRoadmapDraft.requestId}
+                  >
+                    <option value="">No request link</option>
+                    {workspace.requests.map((request) => (
+                      <option key={request.id} value={request.id}>
+                        {request.title}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  <span>Linked work</span>
+                  <select
+                    onChange={(event) =>
+                      setNewRoadmapDraft((draft) => ({ ...draft, workItemId: event.target.value }))
+                    }
+                    value={newRoadmapDraft.workItemId}
+                  >
+                    <option value="">No work link</option>
+                    {workspace.workItems.map((workItem) => (
+                      <option key={workItem.id} value={workItem.id}>
+                        {workItem.title}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="check-field">
+                  <input
+                    checked={newRoadmapDraft.isStale}
+                    onChange={(event) =>
+                      setNewRoadmapDraft((draft) => ({ ...draft, isStale: event.target.checked }))
+                    }
+                    type="checkbox"
+                  />
+                  <span>Needs review</span>
+                </label>
+                <div className="composer-actions wide-field">
+                  <button className="primary-action" type="submit">
+                    Create roadmap item
+                  </button>
+                  <button
+                    className="secondary-action"
+                    onClick={() => {
+                      setIsAddingRoadmapItem(false);
+                      setNewRoadmapDraft(emptyRoadmapDraft);
+                    }}
+                    type="button"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </form>
+            ) : null}
+
+            {roadmapItemCount === 0 && !isAddingRoadmapItem ? (
+              <div className="empty-state roadmap-empty">
+                <strong>No roadmap items yet</strong>
+                <p>Start with one clear direction, then link requests or work when evidence exists.</p>
+                <button className="primary-action" onClick={startRoadmapItem} type="button">
+                  <Plus aria-hidden="true" size={16} />
+                  New roadmap item
+                </button>
+              </div>
+            ) : null}
+
             <div className="roadmap-lanes">
-              {Object.entries(workspace.roadmap).map(([lane, items]) => (
+              {roadmapLanes.map((lane) => (
                 <div className="lane" key={lane}>
                   <strong>{lane}</strong>
-                  <ul>
-                    {items.length ? (
-                      items.map((item) => (
-                        <li key={item}>
-                          <CircleDot aria-hidden="true" size={12} />
-                          <span>{item}</span>
-                        </li>
-                      ))
+                  <div className="roadmap-item-list">
+                    {workspace.roadmap[lane].length ? (
+                      workspace.roadmap[lane].map((item) => {
+                        const linkedRequests = item.requestIds.flatMap((requestId) => {
+                          const request = workspace.requests.find((entry) => entry.id === requestId);
+                          return request ? [request] : [];
+                        });
+                        const linkedWorkItems = item.workItemIds.flatMap((workItemId) => {
+                          const workItem = workspace.workItems.find((entry) => entry.id === workItemId);
+                          return workItem ? [workItem] : [];
+                        });
+                        const requestChoices = workspace.requests.filter(
+                          (request) => !item.requestIds.includes(request.id)
+                        );
+                        const workChoices = workspace.workItems.filter(
+                          (workItem) => !item.workItemIds.includes(workItem.id)
+                        );
+
+                        return (
+                          <article className="roadmap-item" key={item.id}>
+                            <div className="roadmap-item-header">
+                              <h3>{item.title}</h3>
+                              <button
+                                aria-label={`Remove ${item.title} from roadmap`}
+                                className="icon-button"
+                                onClick={() => removeRoadmapItem(item.id)}
+                                type="button"
+                              >
+                                <Archive aria-hidden="true" size={14} />
+                              </button>
+                            </div>
+                            <p>{item.summary || "No public wording drafted yet."}</p>
+                            <div className="roadmap-badges" aria-label={`${item.title} roadmap state`}>
+                              <span className={`status-badge ${item.visibility === "Public" ? "success" : "neutral"}`}>
+                                {item.visibility}
+                              </span>
+                              <span className="status-badge info">{item.confidence} confidence</span>
+                              {item.isStale ? (
+                                <span className="status-badge warning">Needs review</span>
+                              ) : null}
+                            </div>
+                            <div className="roadmap-controls">
+                              <label>
+                                <span>Lane</span>
+                                <select
+                                  aria-label={`Lane for ${item.title}`}
+                                  onChange={(event) =>
+                                    updateRoadmapItem(item.id, (roadmapItem) => ({
+                                      ...roadmapItem,
+                                      lane: event.target.value as RoadmapLane
+                                    }))
+                                  }
+                                  value={item.lane}
+                                >
+                                  {roadmapLanes.map((option) => (
+                                    <option key={option} value={option}>
+                                      {option}
+                                    </option>
+                                  ))}
+                                </select>
+                              </label>
+                              <label>
+                                <span>Visibility</span>
+                                <select
+                                  aria-label={`Visibility for ${item.title}`}
+                                  onChange={(event) =>
+                                    updateRoadmapItem(item.id, (roadmapItem) => ({
+                                      ...roadmapItem,
+                                      visibility: event.target.value as RoadmapVisibility
+                                    }))
+                                  }
+                                  value={item.visibility}
+                                >
+                                  {roadmapVisibilities.map((option) => (
+                                    <option key={option} value={option}>
+                                      {option}
+                                    </option>
+                                  ))}
+                                </select>
+                              </label>
+                              <label>
+                                <span>Confidence</span>
+                                <select
+                                  aria-label={`Confidence for ${item.title}`}
+                                  onChange={(event) =>
+                                    updateRoadmapItem(item.id, (roadmapItem) => ({
+                                      ...roadmapItem,
+                                      confidence: event.target.value as RoadmapConfidence
+                                    }))
+                                  }
+                                  value={item.confidence}
+                                >
+                                  {roadmapConfidenceLevels.map((option) => (
+                                    <option key={option} value={option}>
+                                      {option}
+                                    </option>
+                                  ))}
+                                </select>
+                              </label>
+                              <label className="check-field">
+                                <input
+                                  aria-label={`Needs review for ${item.title}`}
+                                  checked={item.isStale}
+                                  onChange={(event) =>
+                                    updateRoadmapItem(item.id, (roadmapItem) => ({
+                                      ...roadmapItem,
+                                      isStale: event.target.checked
+                                    }))
+                                  }
+                                  type="checkbox"
+                                />
+                                <span>Needs review</span>
+                              </label>
+                            </div>
+                            <div className="roadmap-links">
+                              <div aria-label={`Requests linked to ${item.title}`}>
+                                <strong>Requests</strong>
+                                {linkedRequests.length ? (
+                                  linkedRequests.map((request) => (
+                                    <button
+                                      className="link-pill"
+                                      key={request.id}
+                                      onClick={() => unlinkRequestFromRoadmap(item.id, request.id)}
+                                      type="button"
+                                    >
+                                      {request.title}
+                                      <Unlink aria-hidden="true" size={12} />
+                                    </button>
+                                  ))
+                                ) : (
+                                  <span>No requests linked</span>
+                                )}
+                                {requestChoices.length ? (
+                                  <select
+                                    aria-label={`Link request to ${item.title}`}
+                                    onChange={(event) => linkRequestToRoadmap(item.id, event.target.value)}
+                                    value=""
+                                  >
+                                    <option value="">Link request</option>
+                                    {requestChoices.map((request) => (
+                                      <option key={request.id} value={request.id}>
+                                        {request.title}
+                                      </option>
+                                    ))}
+                                  </select>
+                                ) : null}
+                              </div>
+                              <div aria-label={`Work linked to ${item.title}`}>
+                                <strong>Work</strong>
+                                {linkedWorkItems.length ? (
+                                  linkedWorkItems.map((workItem) => (
+                                    <button
+                                      className="link-pill"
+                                      key={workItem.id}
+                                      onClick={() => unlinkWorkItemFromRoadmap(item.id, workItem.id)}
+                                      type="button"
+                                    >
+                                      {workItem.title}
+                                      <Unlink aria-hidden="true" size={12} />
+                                    </button>
+                                  ))
+                                ) : (
+                                  <span>No work linked</span>
+                                )}
+                                {workChoices.length ? (
+                                  <select
+                                    aria-label={`Link work to ${item.title}`}
+                                    onChange={(event) => linkWorkItemToRoadmap(item.id, event.target.value)}
+                                    value=""
+                                  >
+                                    <option value="">Link work</option>
+                                    {workChoices.map((workItem) => (
+                                      <option key={workItem.id} value={workItem.id}>
+                                        {workItem.title}
+                                      </option>
+                                    ))}
+                                  </select>
+                                ) : null}
+                              </div>
+                            </div>
+                          </article>
+                        );
+                      })
                     ) : (
-                      <li>
+                      <div className="lane-empty">
                         <CircleDot aria-hidden="true" size={12} />
                         <span>Nothing placed yet</span>
-                      </li>
+                      </div>
                     )}
-                  </ul>
+                  </div>
                 </div>
               ))}
             </div>

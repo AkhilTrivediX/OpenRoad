@@ -1,13 +1,19 @@
 export const requestStatuses = ["New", "Needs decision", "Planned", "Shipping soon"] as const;
 export const requestOwners = ["Unassigned", "Akhil", "Product", "Support", "Maintainer"] as const;
 export const workStatuses = ["Backlog", "Ready", "In progress", "Done"] as const;
-export const openRoadSchemaVersion = 1;
+export const roadmapLanes = ["Now", "Next", "Later"] as const;
+export const roadmapVisibilities = ["Private", "Public"] as const;
+export const roadmapConfidenceLevels = ["Low", "Medium", "High"] as const;
+export const openRoadSchemaVersion = 2;
 export const openRoadStorageKey = "openroad:state:v1";
 export const openRoadSelectedWorkspaceKey = "openroad:selected-workspace:v1";
 
 export type RequestStatus = (typeof requestStatuses)[number];
 export type RequestOwner = (typeof requestOwners)[number];
 export type WorkStatus = (typeof workStatuses)[number];
+export type RoadmapLane = (typeof roadmapLanes)[number];
+export type RoadmapVisibility = (typeof roadmapVisibilities)[number];
+export type RoadmapConfidence = (typeof roadmapConfidenceLevels)[number];
 
 export type OpenRoadState = {
   schemaVersion: typeof openRoadSchemaVersion;
@@ -21,7 +27,7 @@ export type Workspace = {
   summary: string;
   requests: RequestItem[];
   workItems: WorkItem[];
-  roadmap: Record<"Now" | "Next" | "Later", string[]>;
+  roadmap: Record<RoadmapLane, RoadmapItem[]>;
   changelog: ChangelogItem[];
   integrations: IntegrationChip[];
 };
@@ -60,6 +66,20 @@ export type WorkItem = {
   requestIds: string[];
   comments: WorkComment[];
   createdAt: string;
+};
+
+export type RoadmapItem = {
+  id: string;
+  title: string;
+  summary: string;
+  lane: RoadmapLane;
+  visibility: RoadmapVisibility;
+  confidence: RoadmapConfidence;
+  isStale: boolean;
+  requestIds: string[];
+  workItemIds: string[];
+  createdAt: string;
+  updatedAt: string;
 };
 
 export type WorkComment = {
@@ -108,6 +128,9 @@ export type OpenRoadAction =
   | { type: "replace-request"; request: RequestItem; workspaceId: string }
   | { type: "create-work-item"; workItem: WorkItem; workspaceId: string }
   | { type: "replace-work-item"; workItem: WorkItem; workspaceId: string }
+  | { type: "create-roadmap-item"; roadmapItem: RoadmapItem; workspaceId: string }
+  | { type: "replace-roadmap-item"; roadmapItem: RoadmapItem; workspaceId: string }
+  | { type: "delete-roadmap-item"; roadmapItemId: string; workspaceId: string }
   | { type: "replace-workspace"; workspace: Workspace }
   | { type: "replace-state"; state: OpenRoadState };
 
@@ -116,6 +139,30 @@ export const integrationChips: IntegrationChip[] = [
   { label: "Jira", state: "Optional" },
   { label: "Linear", state: "Optional" }
 ];
+
+function seedRoadmapItem(
+  roadmapItem: Pick<RoadmapItem, "id" | "title" | "summary" | "lane"> &
+    Partial<
+      Pick<
+        RoadmapItem,
+        "visibility" | "confidence" | "isStale" | "requestIds" | "workItemIds"
+      >
+    >
+): RoadmapItem {
+  return {
+    confidence: roadmapItem.confidence ?? "Medium",
+    createdAt: "seed",
+    id: roadmapItem.id,
+    isStale: roadmapItem.isStale ?? false,
+    lane: roadmapItem.lane,
+    requestIds: roadmapItem.requestIds ?? [],
+    summary: roadmapItem.summary,
+    title: roadmapItem.title,
+    updatedAt: "seed",
+    visibility: roadmapItem.visibility ?? "Private",
+    workItemIds: roadmapItem.workItemIds ?? []
+  };
+}
 
 export const initialWorkspaces: Workspace[] = [
   {
@@ -201,9 +248,64 @@ export const initialWorkspaces: Workspace[] = [
     ],
     workItems: [],
     roadmap: {
-      Now: ["API rate limit visibility", "Webhook retry controls"],
-      Next: ["Bulk export to CSV", "Saved feedback views"],
-      Later: ["Custom request fields", "Public roadmap RSS"]
+      Now: [
+        seedRoadmapItem({
+          confidence: "High",
+          id: "roadmap-api-rate-limit-visibility",
+          lane: "Now",
+          requestIds: ["api-rate-limit-visibility"],
+          summary: "Expose usage thresholds before CLI users hit API limits.",
+          title: "API rate limit visibility",
+          visibility: "Public"
+        }),
+        seedRoadmapItem({
+          confidence: "Medium",
+          id: "roadmap-webhook-retry-controls",
+          lane: "Now",
+          requestIds: ["webhook-retry-controls"],
+          summary: "Let maintainers retry failed webhooks without support tickets.",
+          title: "Webhook retry controls",
+          visibility: "Private"
+        })
+      ],
+      Next: [
+        seedRoadmapItem({
+          confidence: "Medium",
+          id: "roadmap-bulk-export-csv",
+          lane: "Next",
+          requestIds: ["bulk-export-csv"],
+          summary: "Give Success a weekly account-review export path.",
+          title: "Bulk export to CSV",
+          visibility: "Public"
+        }),
+        seedRoadmapItem({
+          confidence: "Low",
+          id: "roadmap-saved-feedback-views",
+          isStale: true,
+          lane: "Next",
+          summary: "Let teams keep reusable views for high-signal feedback.",
+          title: "Saved feedback views",
+          visibility: "Private"
+        })
+      ],
+      Later: [
+        seedRoadmapItem({
+          confidence: "Low",
+          id: "roadmap-custom-request-fields",
+          lane: "Later",
+          summary: "Support workspace-specific request metadata.",
+          title: "Custom request fields",
+          visibility: "Private"
+        }),
+        seedRoadmapItem({
+          confidence: "Low",
+          id: "roadmap-public-roadmap-rss",
+          lane: "Later",
+          summary: "Expose a followable roadmap feed once public visibility is ready.",
+          title: "Public roadmap RSS",
+          visibility: "Private"
+        })
+      ]
     },
     changelog: [
       {
@@ -277,9 +379,39 @@ export const initialWorkspaces: Workspace[] = [
     ],
     workItems: [],
     roadmap: {
-      Now: ["Contributor guide checklist"],
-      Next: ["Release notes RSS"],
-      Later: ["Issue template cleanup"]
+      Now: [
+        seedRoadmapItem({
+          confidence: "High",
+          id: "roadmap-contributor-guide-checklist",
+          lane: "Now",
+          requestIds: ["contributor-guide-checklist"],
+          summary: "Make first contribution steps visible before a pull request.",
+          title: "Contributor guide checklist",
+          visibility: "Public"
+        })
+      ],
+      Next: [
+        seedRoadmapItem({
+          confidence: "Medium",
+          id: "roadmap-release-notes-rss",
+          lane: "Next",
+          requestIds: ["release-notes-rss"],
+          summary: "Let subscribers follow maintainer release notes through RSS.",
+          title: "Release notes RSS",
+          visibility: "Public"
+        })
+      ],
+      Later: [
+        seedRoadmapItem({
+          confidence: "Low",
+          id: "roadmap-issue-template-cleanup",
+          lane: "Later",
+          requestIds: ["issue-template-cleanup"],
+          summary: "Simplify issue templates for community moderators.",
+          title: "Issue template cleanup",
+          visibility: "Private"
+        })
+      ]
     },
     changelog: [
       {
@@ -343,6 +475,24 @@ export function openRoadReducer(state: OpenRoadState, action: OpenRoadAction): O
     }));
   }
 
+  if (action.type === "create-roadmap-item") {
+    return updateWorkspaceById(state, action.workspaceId, (workspace) =>
+      addRoadmapItemToWorkspace(workspace, action.roadmapItem)
+    );
+  }
+
+  if (action.type === "replace-roadmap-item") {
+    return updateWorkspaceById(state, action.workspaceId, (workspace) =>
+      replaceRoadmapItemInWorkspace(workspace, action.roadmapItem)
+    );
+  }
+
+  if (action.type === "delete-roadmap-item") {
+    return updateWorkspaceById(state, action.workspaceId, (workspace) =>
+      removeRoadmapItemFromWorkspace(workspace, action.roadmapItemId)
+    );
+  }
+
   if (action.type === "replace-workspace") {
     return {
       ...state,
@@ -369,6 +519,69 @@ function updateWorkspaceById(
     workspaces: state.workspaces.map((workspace) =>
       workspace.id === workspaceId ? updater(workspace) : workspace
     )
+  };
+}
+
+function addRoadmapItemToWorkspace(
+  workspace: Workspace,
+  roadmapItem: RoadmapItem
+): Workspace {
+  return {
+    ...workspace,
+    roadmap: {
+      ...workspace.roadmap,
+      [roadmapItem.lane]: [
+        cloneValue(roadmapItem),
+        ...workspace.roadmap[roadmapItem.lane]
+      ]
+    }
+  };
+}
+
+function replaceRoadmapItemInWorkspace(
+  workspace: Workspace,
+  roadmapItem: RoadmapItem
+): Workspace {
+  const nextRoadmap = createEmptyRoadmap();
+  for (const lane of roadmapLanes) {
+    nextRoadmap[lane] = workspace.roadmap[lane].filter(
+      (item) => item.id !== roadmapItem.id
+    );
+  }
+
+  nextRoadmap[roadmapItem.lane] = [
+    cloneValue(roadmapItem),
+    ...nextRoadmap[roadmapItem.lane]
+  ];
+
+  return {
+    ...workspace,
+    roadmap: nextRoadmap
+  };
+}
+
+function removeRoadmapItemFromWorkspace(
+  workspace: Workspace,
+  roadmapItemId: string
+): Workspace {
+  const nextRoadmap = createEmptyRoadmap();
+  for (const lane of roadmapLanes) {
+    nextRoadmap[lane] = workspace.roadmap[lane].filter(
+      (item) => item.id !== roadmapItemId
+    );
+  }
+
+  return {
+    ...workspace,
+    roadmap: nextRoadmap
+  };
+}
+
+function createEmptyRoadmap(): Record<RoadmapLane, RoadmapItem[]> {
+  return {
+    Later: [],
+    Next: [],
+    Now: []
   };
 }
 
@@ -445,8 +658,18 @@ export function importWorkspaceFromJson(value: string): Workspace {
     throw new Error("Import must be an OpenRoad workspace export.");
   }
 
-  if (parsed.schemaVersion !== openRoadSchemaVersion) {
+  if (typeof parsed.schemaVersion !== "number") {
     throw new Error("Import schema version is not supported.");
+  }
+
+  if (
+    parsed.schemaVersion > openRoadSchemaVersion
+  ) {
+    throw new Error("Import schema version is not supported.");
+  }
+
+  if (parsed.schemaVersion !== openRoadSchemaVersion) {
+    return migrateWorkspaceFromPreviousSchema(parsed.workspace);
   }
 
   if (!isWorkspace(parsed.workspace)) {
@@ -472,10 +695,15 @@ export function migrateOpenRoadState(value: unknown): OpenRoadState {
     };
   }
 
-  if ((value.schemaVersion === 0 || value.schemaVersion === undefined) && Array.isArray(value.workspaces)) {
+  if (
+    (value.schemaVersion === 1 ||
+      value.schemaVersion === 0 ||
+      value.schemaVersion === undefined) &&
+    Array.isArray(value.workspaces)
+  ) {
     return {
       schemaVersion: openRoadSchemaVersion,
-      workspaces: value.workspaces.map(migrateWorkspaceV0)
+      workspaces: value.workspaces.map(migrateWorkspaceFromPreviousSchema)
     };
   }
 
@@ -486,13 +714,14 @@ export function migrateOpenRoadState(value: unknown): OpenRoadState {
   throw new Error("Saved OpenRoad schema version is not supported.");
 }
 
-function migrateWorkspaceV0(value: unknown): Workspace {
+function migrateWorkspaceFromPreviousSchema(value: unknown): Workspace {
   if (!isRecord(value)) {
     throw new Error("Saved OpenRoad workspace is invalid.");
   }
 
   const migrated = {
     ...value,
+    roadmap: migrateRoadmapFromPreviousSchema(value.roadmap),
     workItems: Array.isArray(value.workItems) ? value.workItems : []
   };
 
@@ -501,6 +730,49 @@ function migrateWorkspaceV0(value: unknown): Workspace {
   }
 
   return cloneValue(migrated);
+}
+
+function migrateRoadmapFromPreviousSchema(
+  value: unknown
+): Record<RoadmapLane, RoadmapItem[]> {
+  if (!isRecord(value)) {
+    return createEmptyRoadmap();
+  }
+
+  const roadmap = createEmptyRoadmap();
+  for (const lane of roadmapLanes) {
+    const items = value[lane];
+    if (!Array.isArray(items)) continue;
+    roadmap[lane] = items.map((item, index) => {
+      if (isRoadmapItem(item)) return cloneValue(item);
+      if (typeof item === "string") {
+        return roadmapItemFromLegacyTitle(item, lane, index);
+      }
+      throw new Error("Saved OpenRoad roadmap item cannot be migrated.");
+    });
+  }
+
+  return roadmap;
+}
+
+function roadmapItemFromLegacyTitle(
+  title: string,
+  lane: RoadmapLane,
+  index: number
+): RoadmapItem {
+  return {
+    confidence: "Medium",
+    createdAt: "migrated",
+    id: `roadmap-${lane.toLowerCase()}-${index}-${slugify(title)}`,
+    isStale: false,
+    lane,
+    requestIds: [],
+    summary: "",
+    title,
+    updatedAt: "migrated",
+    visibility: "Private",
+    workItemIds: []
+  };
 }
 
 function isWorkspace(value: unknown): value is Workspace {
@@ -516,8 +788,11 @@ function isWorkspace(value: unknown): value is Workspace {
     value.workItems.every(isWorkItem) &&
     isRecord(value.roadmap) &&
     Array.isArray(value.roadmap.Now) &&
+    value.roadmap.Now.every(isRoadmapItem) &&
     Array.isArray(value.roadmap.Next) &&
+    value.roadmap.Next.every(isRoadmapItem) &&
     Array.isArray(value.roadmap.Later) &&
+    value.roadmap.Later.every(isRoadmapItem) &&
     Array.isArray(value.changelog) &&
     Array.isArray(value.integrations)
   );
@@ -558,12 +833,35 @@ function isWorkItem(value: unknown): value is WorkItem {
   );
 }
 
+function isRoadmapItem(value: unknown): value is RoadmapItem {
+  return (
+    isRecord(value) &&
+    typeof value.id === "string" &&
+    typeof value.title === "string" &&
+    typeof value.summary === "string" &&
+    roadmapLanes.includes(value.lane as RoadmapLane) &&
+    roadmapVisibilities.includes(value.visibility as RoadmapVisibility) &&
+    roadmapConfidenceLevels.includes(value.confidence as RoadmapConfidence) &&
+    typeof value.isStale === "boolean" &&
+    Array.isArray(value.requestIds) &&
+    value.requestIds.every((requestId) => typeof requestId === "string") &&
+    Array.isArray(value.workItemIds) &&
+    value.workItemIds.every((workItemId) => typeof workItemId === "string") &&
+    typeof value.createdAt === "string" &&
+    typeof value.updatedAt === "string"
+  );
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
 function cloneValue<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function slugify(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
 }
 
 function getBrowserStorage(): Storage | undefined {

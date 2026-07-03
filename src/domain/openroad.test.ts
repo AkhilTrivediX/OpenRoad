@@ -13,6 +13,7 @@ import {
   openRoadStorageKey,
   saveOpenRoadState,
   saveSelectedWorkspaceId,
+  type RoadmapItem,
   type RequestItem,
   type WorkItem
 } from "./openroad";
@@ -52,6 +53,23 @@ function sampleWorkItem(overrides: Partial<WorkItem> = {}): WorkItem {
     requestIds: [],
     comments: [],
     createdAt: "just now",
+    ...overrides
+  };
+}
+
+function sampleRoadmapItem(overrides: Partial<RoadmapItem> = {}): RoadmapItem {
+  return {
+    confidence: "Medium",
+    createdAt: "just now",
+    id: "roadmap-test",
+    isStale: false,
+    lane: "Next",
+    requestIds: [],
+    summary: "A roadmap item.",
+    title: "Test roadmap",
+    updatedAt: "just now",
+    visibility: "Private",
+    workItemIds: [],
     ...overrides
   };
 }
@@ -117,6 +135,61 @@ describe("OpenRoad domain state", () => {
     });
   });
 
+  it("creates, moves, links, and removes roadmap items through reducer actions", () => {
+    const state = createInitialOpenRoadState();
+    const workspaceId = state.workspaces[0].id;
+    const created = openRoadReducer(state, {
+      roadmapItem: sampleRoadmapItem({
+        lane: "Now",
+        requestIds: ["api-rate-limit-visibility"],
+        workItemIds: ["work-test"]
+      }),
+      type: "create-roadmap-item",
+      workspaceId
+    });
+
+    expect(created.workspaces[0].roadmap.Now[0]).toMatchObject({
+      lane: "Now",
+      requestIds: ["api-rate-limit-visibility"],
+      title: "Test roadmap",
+      workItemIds: ["work-test"]
+    });
+
+    const moved = openRoadReducer(created, {
+      roadmapItem: {
+        ...created.workspaces[0].roadmap.Now[0],
+        confidence: "High",
+        isStale: true,
+        lane: "Later",
+        requestIds: ["api-rate-limit-visibility", "bulk-export-csv"],
+        visibility: "Public"
+      },
+      type: "replace-roadmap-item",
+      workspaceId
+    });
+
+    expect(moved.workspaces[0].roadmap.Now).not.toContainEqual(
+      expect.objectContaining({ id: "roadmap-test" })
+    );
+    expect(moved.workspaces[0].roadmap.Later[0]).toMatchObject({
+      confidence: "High",
+      isStale: true,
+      lane: "Later",
+      requestIds: ["api-rate-limit-visibility", "bulk-export-csv"],
+      visibility: "Public"
+    });
+
+    const removed = openRoadReducer(moved, {
+      roadmapItemId: "roadmap-test",
+      type: "delete-roadmap-item",
+      workspaceId
+    });
+
+    expect(
+      removed.workspaces[0].roadmap.Later.some((item) => item.id === "roadmap-test")
+    ).toBe(false);
+  });
+
   it("saves and loads current schema state", () => {
     const state = openRoadReducer(createInitialOpenRoadState(), {
       request: sampleRequest({ title: "Persisted request" }),
@@ -156,6 +229,34 @@ describe("OpenRoad domain state", () => {
     expect(migrated.workspaces[0].workItems).toEqual([]);
   });
 
+  it("migrates schema version 1 roadmap lane strings into roadmap items", () => {
+    const state = createInitialOpenRoadState();
+    const previous = {
+      schemaVersion: 1,
+      workspaces: state.workspaces.map((workspace) => ({
+        ...workspace,
+        roadmap: {
+          Later: ["Legacy later item"],
+          Next: [],
+          Now: ["Legacy now item"]
+        }
+      }))
+    };
+
+    const migrated = migrateOpenRoadState(previous);
+
+    expect(migrated.schemaVersion).toBe(openRoadSchemaVersion);
+    expect(migrated.workspaces[0].roadmap.Now[0]).toMatchObject({
+      lane: "Now",
+      title: "Legacy now item",
+      visibility: "Private"
+    });
+    expect(migrated.workspaces[0].roadmap.Later[0]).toMatchObject({
+      id: "roadmap-later-0-legacy-later-item",
+      lane: "Later"
+    });
+  });
+
   it("recovers from corrupt persisted data without throwing", () => {
     localStorage.setItem(openRoadStorageKey, "{not-json");
 
@@ -178,11 +279,13 @@ describe("OpenRoad domain state", () => {
   it("exports and imports a valid workspace", () => {
     const workspace = createInitialOpenRoadState().workspaces[0];
     const exported = exportWorkspace(workspace);
+    const imported = importWorkspaceFromJson(exported);
 
-    expect(importWorkspaceFromJson(exported)).toMatchObject({
+    expect(imported).toMatchObject({
       id: "acme",
       name: "Acme OSS"
     });
+    expect(imported.roadmap.Now[0].title).toBe("API rate limit visibility");
   });
 
   it("rejects invalid workspace imports", () => {

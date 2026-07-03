@@ -306,6 +306,8 @@ a:hover {
 .request-composer textarea::placeholder,
 .work-composer input::placeholder,
 .work-composer textarea::placeholder,
+.roadmap-form input::placeholder,
+.roadmap-form textarea::placeholder,
 .comment-form textarea::placeholder,
 .work-comment-form textarea::placeholder,
 .data-tools textarea::placeholder {
@@ -505,7 +507,8 @@ h3 {
 
 .workspace-form,
 .request-composer,
-.work-composer {
+.work-composer,
+.roadmap-form {
   background: var(--rail);
   border: 1px solid var(--line);
   display: grid;
@@ -519,18 +522,21 @@ h3 {
 }
 
 .request-composer,
-.work-composer {
+.work-composer,
+.roadmap-form {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .workspace-form label,
 .request-composer label,
 .work-composer label,
+.roadmap-form label,
 .request-editor label,
 .work-editor label,
 .triage-controls label,
 .comment-form label,
 .work-comment-form label,
+.roadmap-controls label,
 .request-tools label {
   display: grid;
   gap: 6px;
@@ -540,11 +546,13 @@ h3 {
 .workspace-form label span,
 .request-composer label span,
 .work-composer label span,
+.roadmap-form label span,
 .request-editor label span,
 .work-editor label span,
 .triage-controls label span,
 .comment-form label span,
 .work-comment-form label span,
+.roadmap-controls label span,
 .request-tools label span {
   color: var(--muted);
   font-family: var(--label-font);
@@ -557,6 +565,9 @@ h3 {
 .work-composer input,
 .work-composer select,
 .work-composer textarea,
+.roadmap-form input,
+.roadmap-form select,
+.roadmap-form textarea,
 .request-editor input,
 .request-editor select,
 .request-editor textarea,
@@ -566,6 +577,8 @@ h3 {
 .comment-form textarea,
 .work-comment-form textarea,
 .data-tools textarea,
+.roadmap-controls select,
+.roadmap-links select,
 .request-tools select {
   background: var(--plate);
   border: 1px solid var(--line);
@@ -577,6 +590,7 @@ h3 {
 
 .request-composer textarea,
 .work-composer textarea,
+.roadmap-form textarea,
 .request-editor textarea,
 .comment-form textarea,
 .work-comment-form textarea,
@@ -624,6 +638,7 @@ h3 {
   min-width: 0;
   padding: 14px;
   position: relative;
+  scroll-margin-top: 76px;
 }
 
 .panel::after {
@@ -1355,6 +1370,7 @@ dd {
 }
 
 .route-map-panel {
+  grid-column: 1 / -1;
   overflow: hidden;
 }
 
@@ -1419,6 +1435,11 @@ dd {
   padding: 0;
 }
 
+.roadmap-item-list {
+  display: grid;
+  gap: 9px;
+}
+
 .lane li {
   color: var(--muted);
   font-size: 13px;
@@ -1435,6 +1456,112 @@ dd {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.roadmap-item {
+  background: color-mix(in oklch, var(--plate) 82%, black);
+  border: 1px solid var(--line);
+  display: grid;
+  gap: 9px;
+  min-width: 0;
+  padding: 10px;
+}
+
+.roadmap-item-header,
+.roadmap-badges,
+.roadmap-links,
+.link-pill,
+.lane-empty {
+  align-items: center;
+  display: flex;
+}
+
+.roadmap-item-header {
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.roadmap-item h3 {
+  color: var(--ink);
+  font-family: var(--label-font);
+  font-size: 14px;
+  line-height: 1.25;
+  margin: 0;
+}
+
+.roadmap-item p {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+  margin: 0;
+}
+
+.roadmap-badges {
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.roadmap-controls {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.roadmap-links {
+  align-items: stretch;
+  display: grid;
+  gap: 8px;
+}
+
+.roadmap-links > div {
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 6px;
+  padding-top: 8px;
+}
+
+.roadmap-links strong {
+  font-family: var(--label-font);
+  font-size: 12px;
+}
+
+.roadmap-links span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.link-pill {
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--ink);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  gap: 6px;
+  justify-content: space-between;
+  min-height: 30px;
+  padding: 0 8px;
+  text-align: left;
+}
+
+.link-pill:hover {
+  border-color: var(--line-strong);
+}
+
+.lane-empty {
+  color: var(--muted);
+  font-size: 13px;
+  gap: 7px;
+  min-height: 32px;
+}
+
+.lane-empty svg {
+  color: var(--signal);
+  flex: 0 0 auto;
+}
+
+.roadmap-empty {
+  margin-bottom: 10px;
 }
 
 .changelog-list {
@@ -1557,6 +1684,10 @@ dd {
     scrollbar-gutter: stable;
   }
 
+  .panel {
+    scroll-margin-top: 164px;
+  }
+
   .command-deck {
     margin: -10px -10px 10px;
     padding: 10px;
@@ -1573,6 +1704,7 @@ dd {
   .triage-summary,
   .route-protocol,
   .roadmap-lanes,
+  .roadmap-controls,
   .settings-grid,
   .work-layout {
     grid-template-columns: 1fr;

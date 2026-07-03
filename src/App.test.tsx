@@ -14,6 +14,26 @@ async function createWorkItem(
   await user.click(screen.getByRole("button", { name: "Create work item" }));
 }
 
+async function createRequest(
+  user: ReturnType<typeof userEvent.setup>,
+  title = "Roadmap evidence"
+) {
+  await user.click(screen.getAllByRole("button", { name: "Add request" })[0]);
+  await user.type(screen.getByLabelText("Request title"), title);
+  await user.click(screen.getByRole("button", { name: "Capture request" }));
+}
+
+async function createRoadmapItem(
+  user: ReturnType<typeof userEvent.setup>,
+  title = "Customer-facing roadmap"
+) {
+  const roadmap = screen.getByRole("region", { name: /Now \/ Next \/ Later/ });
+  await user.click(within(roadmap).getAllByRole("button", { name: "New roadmap item" })[0]);
+  const form = screen.getByRole("form", { name: "Create roadmap item" });
+  await user.type(within(form).getByLabelText("Roadmap title"), title);
+  await user.click(screen.getByRole("button", { name: "Create roadmap item" }));
+}
+
 describe("OpenRoad workspace shell", () => {
   beforeEach(() => {
     localStorage.clear();
@@ -142,12 +162,89 @@ describe("OpenRoad workspace shell", () => {
 
     expect(screen.getByText("Now / Next / Later")).toBeInTheDocument();
     expect(
-      within(screen.getByRole("region", { name: /Now \/ Next \/ Later/ })).getByText(
-        "API rate limit visibility"
+      within(screen.getByRole("region", { name: /Now \/ Next \/ Later/ })).getByRole(
+        "heading",
+        { name: "API rate limit visibility" }
       )
     ).toBeInTheDocument();
     expect(screen.getByText("Draft queue")).toBeInTheDocument();
     expect(screen.getByText("Inline markdown in comments")).toBeInTheDocument();
+  });
+
+  it("creates and edits roadmap items in a blank workspace", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole("button", { name: "New workspace" }));
+    await user.type(screen.getByLabelText("Workspace name"), "Roadmap Lab");
+    await user.click(screen.getByRole("button", { name: "Create workspace" }));
+
+    const roadmap = screen.getByRole("region", { name: /Now \/ Next \/ Later/ });
+    expect(within(roadmap).getByText("No roadmap items yet")).toBeInTheDocument();
+
+    await user.click(within(roadmap).getAllByRole("button", { name: "New roadmap item" })[0]);
+    const form = screen.getByRole("form", { name: "Create roadmap item" });
+    await user.type(within(form).getByLabelText("Roadmap title"), "Customer-facing roadmap");
+    await user.type(within(form).getByLabelText("Summary"), "Show the next public direction.");
+    await user.selectOptions(within(form).getByLabelText("Lane"), "Now");
+    await user.selectOptions(within(form).getByLabelText("Visibility"), "Public");
+    await user.selectOptions(within(form).getByLabelText("Confidence"), "High");
+    await user.click(within(form).getByLabelText("Needs review"));
+    await user.click(screen.getByRole("button", { name: "Create roadmap item" }));
+
+    expect(screen.getByRole("heading", { name: "Customer-facing roadmap" })).toBeInTheDocument();
+    expect(screen.getByText("Show the next public direction.")).toBeInTheDocument();
+    const roadmapState = screen.getByLabelText("Customer-facing roadmap roadmap state");
+    expect(within(roadmapState).getByText("Public")).toBeInTheDocument();
+    expect(within(roadmapState).getByText("High confidence")).toBeInTheDocument();
+    expect(within(roadmapState).getByText("Needs review")).toBeInTheDocument();
+
+    await user.selectOptions(
+      screen.getByLabelText("Lane for Customer-facing roadmap"),
+      "Later"
+    );
+
+    expect(screen.getByLabelText("Lane for Customer-facing roadmap")).toHaveValue("Later");
+  });
+
+  it("links and unlinks requests and work items from roadmap items", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole("button", { name: "New workspace" }));
+    await user.type(screen.getByLabelText("Workspace name"), "Roadmap Links");
+    await user.click(screen.getByRole("button", { name: "Create workspace" }));
+    await createRequest(user, "Roadmap evidence");
+    await createWorkItem(user, "Ship roadmap evidence", "2026-10-08");
+
+    const roadmap = screen.getByRole("region", { name: /Now \/ Next \/ Later/ });
+    await user.click(within(roadmap).getAllByRole("button", { name: "New roadmap item" })[0]);
+    const form = screen.getByRole("form", { name: "Create roadmap item" });
+    await user.type(within(form).getByLabelText("Roadmap title"), "Evidence-led launch");
+    await user.selectOptions(within(form).getByLabelText("Linked request"), "Roadmap evidence");
+    await user.click(screen.getByRole("button", { name: "Create roadmap item" }));
+    await user.selectOptions(
+      screen.getByLabelText("Link work to Evidence-led launch"),
+      "Ship roadmap evidence"
+    );
+
+    expect(screen.getByLabelText("Requests linked to Evidence-led launch")).toHaveTextContent(
+      "Roadmap evidence"
+    );
+    expect(screen.getByLabelText("Work linked to Evidence-led launch")).toHaveTextContent(
+      "Ship roadmap evidence"
+    );
+
+    await user.click(
+      within(screen.getByLabelText("Requests linked to Evidence-led launch")).getByRole(
+        "button",
+        { name: /Roadmap evidence/ }
+      )
+    );
+
+    expect(screen.getByLabelText("Requests linked to Evidence-led launch")).toHaveTextContent(
+      "No requests linked"
+    );
   });
 
   it("captures a standalone request with details and tags", async () => {
@@ -350,7 +447,12 @@ describe("OpenRoad workspace shell", () => {
     expect(
       within(inboxRegion).queryByRole("button", { name: /Webhook retry controls/ })
     ).not.toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "API rate limit visibility" })).toBeInTheDocument();
+    expect(
+      within(screen.getByRole("complementary", { name: /API rate limit visibility/ })).getByRole(
+        "heading",
+        { name: "API rate limit visibility" }
+      )
+    ).toBeInTheDocument();
     const sourceHistory = screen.getByLabelText("Merged source history");
     expect(within(sourceHistory).getByText("Webhook retry controls")).toBeInTheDocument();
     expect(
@@ -371,7 +473,12 @@ describe("OpenRoad workspace shell", () => {
     await user.click(screen.getByRole("button", { name: "Archive request" }));
     await user.selectOptions(screen.getByRole("combobox", { name: "Archive filter" }), "archived");
 
-    expect(screen.getByRole("heading", { name: "API rate limit visibility" })).toBeInTheDocument();
+    expect(
+      within(screen.getByRole("complementary", { name: /API rate limit visibility/ })).getByRole(
+        "heading",
+        { name: "API rate limit visibility" }
+      )
+    ).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "Duplicate request" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Merge duplicate" })).toBeDisabled();
   });
@@ -501,7 +608,12 @@ describe("OpenRoad workspace shell", () => {
     await createWorkItem(user);
     await user.click(screen.getByRole("button", { name: "Unlink API rate limit visibility" }));
 
-    expect(screen.getByRole("heading", { name: "API rate limit visibility" })).toBeInTheDocument();
+    expect(
+      within(screen.getByRole("complementary", { name: /API rate limit visibility/ })).getByRole(
+        "heading",
+        { name: "API rate limit visibility" }
+      )
+    ).toBeInTheDocument();
     expect(
       within(screen.getByLabelText("Work items")).getByRole("button", {
         name: /Build usage meter/
@@ -558,6 +670,28 @@ describe("OpenRoad workspace shell", () => {
     expect(screen.getByRole("heading", { name: "Keep this request" })).toBeInTheDocument();
   });
 
+  it("persists roadmap edits across app remounts", async () => {
+    const user = userEvent.setup();
+    const { unmount } = render(<App />);
+
+    await user.click(screen.getByRole("button", { name: "New workspace" }));
+    await user.type(screen.getByLabelText("Workspace name"), "Roadmap Memory");
+    await user.click(screen.getByRole("button", { name: "Create workspace" }));
+    await createRoadmapItem(user, "Reload-safe roadmap");
+    await user.selectOptions(screen.getByLabelText("Lane for Reload-safe roadmap"), "Later");
+    await user.selectOptions(screen.getByLabelText("Visibility for Reload-safe roadmap"), "Public");
+
+    unmount();
+    render(<App />);
+
+    expect(screen.getByRole("combobox", { name: "Workspace" })).toHaveDisplayValue(
+      "Roadmap Memory"
+    );
+    expect(screen.getByRole("heading", { name: "Reload-safe roadmap" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Lane for Reload-safe roadmap")).toHaveValue("Later");
+    expect(screen.getByLabelText("Visibility for Reload-safe roadmap")).toHaveValue("Public");
+  });
+
   it("recovers from corrupt local data and can restore demo data", async () => {
     const user = userEvent.setup();
     localStorage.setItem("openroad:state:v1", "{not-json");
@@ -583,6 +717,7 @@ describe("OpenRoad workspace shell", () => {
     await user.click(screen.getAllByRole("button", { name: "Add request" })[0]);
     await user.type(screen.getByLabelText("Request title"), "Portable request");
     await user.click(screen.getByRole("button", { name: "Capture request" }));
+    await createRoadmapItem(user, "Portable roadmap");
     await user.click(screen.getByRole("button", { name: "Export workspace" }));
 
     const exported = (screen.getByLabelText("Workspace export JSON") as HTMLTextAreaElement)
@@ -595,5 +730,6 @@ describe("OpenRoad workspace shell", () => {
 
     expect(screen.getByRole("combobox", { name: "Workspace" })).toHaveDisplayValue("Export Desk");
     expect(screen.getByRole("heading", { name: "Portable request" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Portable roadmap" })).toBeInTheDocument();
   });
 });

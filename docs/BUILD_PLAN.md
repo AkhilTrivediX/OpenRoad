@@ -10,7 +10,7 @@ Each feature must also satisfy `docs/PRODUCTION_READINESS.md` before merging to 
 
 Current stage: Stage 1 Local-First Alpha.
 
-The first four workflow slices prove the standalone loop shape, but the app is not production-ready until user-created data is durable. The next implementation feature is therefore a production foundation feature, not another workflow surface.
+The first four workflow slices plus Feature 4.5 prove the standalone loop shape and local durability. The next implementation feature is the roadmap domain/workflow layer, built on top of persisted requests and work items.
 
 ## Feature 1: Workspace Shell
 
@@ -86,6 +86,8 @@ Acceptance:
 ## Feature 4.5: Domain State And Persistence
 
 Branch: `feat/domain-state-persistence`
+
+Status: merged to `main`.
 
 Build:
 
@@ -190,6 +192,8 @@ Acceptance:
 
 Branch: `feat/roadmap-now-next-later`
 
+Status: active.
+
 Build:
 
 - Now, Next, Later roadmap.
@@ -205,7 +209,7 @@ Acceptance:
 
 Dependencies:
 
-- `feat/domain-state-persistence` must be merged first.
+- `feat/domain-state-persistence` is merged.
 - Roadmap visibility rules must align with the API/auth/tenancy contract before public portal work.
 
 ## Feature 6: Changelog Drafts

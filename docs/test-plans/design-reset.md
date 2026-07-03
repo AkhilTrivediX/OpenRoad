@@ -31,6 +31,9 @@ Replace the first Signal Rail shell with a darker Workbench Plate and Map Room h
 
 - Desktop screenshot must show a clearly different visual system from the previous dark dashboard.
 - Mobile screenshot must not overflow horizontally.
+- App shell must stay fixed to the viewport with no document-level scrolling.
+- Bottom status rail must remain fully visible on desktop and mobile.
+- Long workspace content must scroll inside the operations deck.
 - Primary navigation must keep text labels on mobile.
 - Empty workspace state must remain understandable.
 - The UI must keep text readable and avoid over-dense first-use presentation.
@@ -50,5 +53,6 @@ Passed on 2026-07-03.
 - `pnpm check`: 9 tests passed; production build passed.
 - Impeccable detector: no findings for `src/App.tsx` and `src/styles.css`.
 - In-app browser QA: desktop selected-request state and mobile blank-workspace state had no horizontal overflow.
+- PWA-style shell QA: `documentScroll` and `bodyScroll` were `0`; the bottom status rail stayed visible; `.operations-deck` owned the scrollable content.
 - Focus QA: workspace selector showed the route-colored focus treatment on the command deck.
 - Saved viewport QA screenshots as `design/qa/design-reset-desktop.png` and `design/qa/design-reset-mobile-blank.png`.

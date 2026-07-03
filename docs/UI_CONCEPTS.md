@@ -2,6 +2,12 @@
 
 This file tracks dashboard concept exploration. Generated images should be copied into `design/concepts/` and referenced here.
 
+## Decision
+
+Selected direction: **Concept B, Signal Rail**.
+
+OpenRoad will use Signal Rail as the main product shell and identity. Concept C, Route Board, remains the preferred reference for the future Roadmap screen. Calm mode remains required as the default density so first-time users are not dropped into a dense cockpit.
+
 ## Concept A: Calm Desk
 
 Light, beginner-safe, default OpenRoad. The main flow is Inbox to Roadmap to Changelog, with integrations visible only as small optional status context. Best for first-time users and teams leaving spreadsheets.
@@ -17,6 +23,8 @@ Dark, command-oriented workbench. Strong for power users, founders, maintainers,
 ![Concept B: Signal Rail](../design/concepts/concept-b-signal-rail.png)
 
 Strength: strongest brand memory and developer-tool feel. Risk: should not be the default for beginners unless Calm mode exists.
+
+Decision: selected as the main product shell.
 
 ## Concept C: Route Board
 

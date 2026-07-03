@@ -45,3 +45,13 @@ Concept exploration should compare genuinely different app models:
 2. Signal Rail: dark, command/workbench style for power users.
 3. Route Board: roadmap-lane first, visual planning without clutter.
 4. Ledger Console: table-first, operational, fast for PM and support teams.
+
+## Selected Direction
+
+Signal Rail is the chosen product identity.
+
+Use Signal Rail for the app shell: dark-neutral product surface, compact command bar, sharp navigation rail, contextual inspector patterns, and optional integration chips.
+
+Keep Calm mode as the default density for new users. The first implementation must not expose the full power-workbench density by default. The initial shell should show Inbox, Roadmap, Changelog, Portal, and Settings only.
+
+Route Board remains the reference for the future Roadmap screen.

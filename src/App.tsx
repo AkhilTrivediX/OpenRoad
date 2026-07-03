@@ -10,6 +10,8 @@ import {
   Globe2,
   Inbox,
   LayoutDashboard,
+  Link2,
+  ListChecks,
   MessageCircle,
   MessageSquareText,
   Plus,
@@ -20,12 +22,14 @@ import {
   SlidersHorizontal,
   Tag,
   ThumbsUp,
+  Unlink,
   Waypoints
 } from "lucide-react";
 import { type FormEvent, useMemo, useState } from "react";
 
 const requestStatuses = ["New", "Needs decision", "Planned", "Shipping soon"] as const;
 const requestOwners = ["Unassigned", "Akhil", "Product", "Support", "Maintainer"] as const;
+const workStatuses = ["Backlog", "Ready", "In progress", "Done"] as const;
 const triageViews = [
   { value: "all", label: "All active" },
   { value: "unassigned", label: "Unassigned" },
@@ -39,13 +43,14 @@ const integrationChips: IntegrationChip[] = [
 ];
 
 type NavItem = {
-  label: "Inbox" | "Roadmap" | "Changelog" | "Portal" | "Settings";
+  label: "Inbox" | "Work" | "Roadmap" | "Changelog" | "Portal" | "Settings";
   count?: boolean;
   icon: typeof Inbox;
 };
 
 type RequestStatus = (typeof requestStatuses)[number];
 type RequestOwner = (typeof requestOwners)[number];
+type WorkStatus = (typeof workStatuses)[number];
 type RequestStatusFilter = "All" | RequestStatus;
 type RequestArchiveFilter = "active" | "archived";
 type TriageView = (typeof triageViews)[number]["value"];
@@ -56,6 +61,7 @@ type Workspace = {
   plan: string;
   summary: string;
   requests: RequestItem[];
+  workItems: WorkItem[];
   roadmap: Record<"Now" | "Next" | "Later", string[]>;
   changelog: ChangelogItem[];
   integrations: IntegrationChip[];
@@ -79,6 +85,25 @@ type RequestItem = {
 };
 
 type RequestComment = {
+  id: string;
+  author: string;
+  body: string;
+  age: string;
+};
+
+type WorkItem = {
+  id: string;
+  title: string;
+  description: string;
+  owner: RequestOwner;
+  status: WorkStatus;
+  targetDate: string;
+  requestIds: string[];
+  comments: WorkComment[];
+  createdAt: string;
+};
+
+type WorkComment = {
   id: string;
   author: string;
   body: string;
@@ -120,6 +145,15 @@ type RequestDraft = {
   tags: string;
 };
 
+type WorkDraft = {
+  title: string;
+  description: string;
+  owner: RequestOwner;
+  status: WorkStatus;
+  targetDate: string;
+  linkSelectedRequest: boolean;
+};
+
 const emptyRequestDraft: RequestDraft = {
   title: "",
   description: "",
@@ -128,13 +162,24 @@ const emptyRequestDraft: RequestDraft = {
   tags: ""
 };
 
-const navItems: NavItem[] = [
+const emptyWorkDraft: WorkDraft = {
+  title: "",
+  description: "",
+  owner: "Unassigned",
+  status: "Backlog",
+  targetDate: "",
+  linkSelectedRequest: true
+};
+
+const baseNavItems: NavItem[] = [
   { label: "Inbox", count: true, icon: Inbox },
   { label: "Roadmap", icon: Waypoints },
   { label: "Changelog", icon: BookOpen },
   { label: "Portal", icon: Globe2 },
   { label: "Settings", icon: Settings }
 ];
+
+const workNavItem: NavItem = { label: "Work", icon: ListChecks };
 
 const initialWorkspaces: Workspace[] = [
   {
@@ -218,6 +263,7 @@ const initialWorkspaces: Workspace[] = [
         mergedSources: []
       }
     ],
+    workItems: [],
     roadmap: {
       Now: ["API rate limit visibility", "Webhook retry controls"],
       Next: ["Bulk export to CSV", "Saved feedback views"],
@@ -293,6 +339,7 @@ const initialWorkspaces: Workspace[] = [
         mergedSources: []
       }
     ],
+    workItems: [],
     roadmap: {
       Now: ["Contributor guide checklist"],
       Next: ["Release notes RSS"],
@@ -309,9 +356,9 @@ const initialWorkspaces: Workspace[] = [
   }
 ];
 
-function statusTone(status: RequestStatus | ChangelogItem["state"]) {
-  if (status === "Planned" || status === "Ready") return "success";
-  if (status === "Shipping soon") return "info";
+function statusTone(status: RequestStatus | WorkStatus | ChangelogItem["state"]) {
+  if (status === "Planned" || status === "Ready" || status === "Done") return "success";
+  if (status === "Shipping soon" || status === "In progress") return "info";
   if (status === "Needs decision" || status === "Draft") return "warning";
   return "neutral";
 }
@@ -368,13 +415,19 @@ export function App() {
   const [newWorkspaceName, setNewWorkspaceName] = useState("");
   const [isAddingRequest, setIsAddingRequest] = useState(false);
   const [newRequestDraft, setNewRequestDraft] = useState<RequestDraft>(emptyRequestDraft);
+  const [isAddingWorkItem, setIsAddingWorkItem] = useState(false);
+  const [newWorkDraft, setNewWorkDraft] = useState<WorkDraft>(emptyWorkDraft);
   const [requestQuery, setRequestQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<RequestStatusFilter>("All");
   const [archiveFilter, setArchiveFilter] = useState<RequestArchiveFilter>("active");
   const [triageView, setTriageView] = useState<TriageView>("all");
   const [commentDraft, setCommentDraft] = useState("");
+  const [workCommentDraft, setWorkCommentDraft] = useState("");
   const [duplicateMergeTargetId, setDuplicateMergeTargetId] = useState("");
   const [selectedRequestIdByWorkspace, setSelectedRequestIdByWorkspace] = useState<
+    Record<string, string | undefined>
+  >({});
+  const [selectedWorkItemIdByWorkspace, setSelectedWorkItemIdByWorkspace] = useState<
     Record<string, string | undefined>
   >({});
   const workspace = useMemo(
@@ -385,6 +438,12 @@ export function App() {
     () => workspace.requests.filter((request) => !request.archived).length,
     [workspace.requests]
   );
+  const workItemCount = workspace.workItems.length;
+  const hasWorkItems = workItemCount > 0;
+  const navItems = useMemo(() => {
+    if (!hasWorkItems) return baseNavItems;
+    return [baseNavItems[0], workNavItem, ...baseNavItems.slice(1)];
+  }, [hasWorkItems]);
   const requestScope = useMemo(
     () =>
       workspace.requests.filter((request) =>
@@ -440,6 +499,33 @@ export function App() {
         : [],
     [activeRequests, selectedRequest]
   );
+  const selectedRequestWorkItems = useMemo(
+    () =>
+      selectedRequest
+        ? workspace.workItems.filter((workItem) =>
+            workItem.requestIds.includes(selectedRequest.id)
+          )
+        : [],
+    [selectedRequest, workspace.workItems]
+  );
+  const selectedWorkItem = useMemo(() => {
+    const selectedWorkItemId = selectedWorkItemIdByWorkspace[workspace.id];
+    return (
+      workspace.workItems.find((workItem) => workItem.id === selectedWorkItemId) ??
+      workspace.workItems[0] ??
+      null
+    );
+  }, [selectedWorkItemIdByWorkspace, workspace.id, workspace.workItems]);
+  const selectedWorkItemRequests = useMemo(
+    () =>
+      selectedWorkItem
+        ? selectedWorkItem.requestIds.flatMap((requestId) => {
+            const request = workspace.requests.find((item) => item.id === requestId);
+            return request ? [request] : [];
+          })
+        : [],
+    [selectedWorkItem, workspace.requests]
+  );
 
   function updateCurrentWorkspace(updater: (workspace: Workspace) => Workspace) {
     setWorkspaceList((items) =>
@@ -452,6 +538,15 @@ export function App() {
       ...item,
       requests: item.requests.map((request) =>
         request.id === requestId ? updater(request) : request
+      )
+    }));
+  }
+
+  function updateWorkItem(workItemId: string, updater: (workItem: WorkItem) => WorkItem) {
+    updateCurrentWorkspace((item) => ({
+      ...item,
+      workItems: item.workItems.map((workItem) =>
+        workItem.id === workItemId ? updater(workItem) : workItem
       )
     }));
   }
@@ -472,6 +567,14 @@ export function App() {
     setDuplicateMergeTargetId("");
   }
 
+  function selectWorkItem(workItemId: string | undefined) {
+    setSelectedWorkItemIdByWorkspace((items) => ({
+      ...items,
+      [workspace.id]: workItemId
+    }));
+    setWorkCommentDraft("");
+  }
+
   function createWorkspace(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const name = newWorkspaceName.trim();
@@ -483,6 +586,7 @@ export function App() {
       plan: "Standalone workspace",
       summary: "Ready for requests, roadmap, and changelog work.",
       requests: [],
+      workItems: [],
       roadmap: {
         Now: [],
         Next: [],
@@ -497,6 +601,9 @@ export function App() {
     setNewWorkspaceName("");
     setIsCreatingWorkspace(false);
     setIsAddingRequest(false);
+    setIsAddingWorkItem(false);
+    setNewWorkDraft(emptyWorkDraft);
+    setWorkCommentDraft("");
     resetRequestFilters();
   }
 
@@ -609,7 +716,21 @@ export function App() {
             ]
           }
         ];
-      })
+      }),
+      workItems: item.workItems.map((workItem) =>
+        workItem.requestIds.includes(duplicate.id)
+          ? {
+              ...workItem,
+              requestIds: Array.from(
+                new Set(
+                  workItem.requestIds.map((requestId) =>
+                    requestId === duplicate.id ? selectedRequest.id : requestId
+                  )
+                )
+              )
+            }
+          : workItem
+      )
     }));
     selectRequest(selectedRequest.id);
   }
@@ -647,6 +768,65 @@ export function App() {
       comments: [comment, ...request.comments]
     }));
     setCommentDraft("");
+  }
+
+  function addWorkItem(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const title = newWorkDraft.title.trim();
+    if (!title) return;
+
+    const requestIds =
+      selectedRequest && newWorkDraft.linkSelectedRequest ? [selectedRequest.id] : [];
+    const createdWorkItem: WorkItem = {
+      id: `work-${Date.now()}`,
+      title,
+      description: newWorkDraft.description.trim(),
+      owner: newWorkDraft.owner,
+      status: newWorkDraft.status,
+      targetDate: newWorkDraft.targetDate,
+      requestIds,
+      comments: [],
+      createdAt: "just now"
+    };
+
+    updateCurrentWorkspace((item) => ({
+      ...item,
+      workItems: [createdWorkItem, ...item.workItems]
+    }));
+    selectWorkItem(createdWorkItem.id);
+    setNewWorkDraft({ ...emptyWorkDraft, linkSelectedRequest: Boolean(selectedRequest) });
+    setIsAddingWorkItem(false);
+  }
+
+  function updateSelectedWorkItem(updater: (workItem: WorkItem) => WorkItem) {
+    if (!selectedWorkItem) return;
+    updateWorkItem(selectedWorkItem.id, updater);
+  }
+
+  function addWorkComment(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const body = workCommentDraft.trim();
+    if (!selectedWorkItem || !body) return;
+
+    const comment: WorkComment = {
+      id: `work-comment-${Date.now()}`,
+      author: "Akhil",
+      body,
+      age: "just now"
+    };
+
+    updateWorkItem(selectedWorkItem.id, (workItem) => ({
+      ...workItem,
+      comments: [comment, ...workItem.comments]
+    }));
+    setWorkCommentDraft("");
+  }
+
+  function unlinkRequestFromWorkItem(workItemId: string, requestId: string) {
+    updateWorkItem(workItemId, (workItem) => ({
+      ...workItem,
+      requestIds: workItem.requestIds.filter((item) => item !== requestId)
+    }));
   }
 
   return (
@@ -697,7 +877,9 @@ export function App() {
               onChange={(event) => {
                 setWorkspaceId(event.target.value);
                 setIsAddingRequest(false);
+                setIsAddingWorkItem(false);
                 setCommentDraft("");
+                setWorkCommentDraft("");
               }}
               value={workspaceId}
             >
@@ -731,6 +913,21 @@ export function App() {
               type="button"
             >
               New workspace
+            </button>
+            <button
+              aria-controls="work"
+              className="secondary-action compact"
+              onClick={() => {
+                setIsAddingWorkItem((value) => !value);
+                setNewWorkDraft((draft) => ({
+                  ...draft,
+                  linkSelectedRequest: Boolean(selectedRequest)
+                }));
+              }}
+              type="button"
+            >
+              <ListChecks aria-hidden="true" size={14} />
+              New work item
             </button>
             <button className="icon-button" aria-label="Notifications">
               <Bell aria-hidden="true" size={16} />
@@ -772,6 +969,10 @@ export function App() {
             <span>
               <small>Requests</small>
               <strong>{activeRequestCount}</strong>
+            </span>
+            <span>
+              <small>Work</small>
+              <strong>{workItemCount}</strong>
             </span>
             <span>
               <small>Mode</small>
@@ -1239,6 +1440,29 @@ export function App() {
                   </div>
                 </dl>
 
+                {selectedRequestWorkItems.length ? (
+                  <div className="linked-work" aria-label="Linked work for selected request">
+                    <div className="source-history-header">
+                      <Link2 aria-hidden="true" size={14} />
+                      <strong>Linked work</strong>
+                    </div>
+                    <div className="linked-work-list">
+                      {selectedRequestWorkItems.map((workItem) => (
+                        <article className="linked-work-item" key={workItem.id}>
+                          <span className={`status-badge ${statusTone(workItem.status)}`}>
+                            {workItem.status}
+                          </span>
+                          <strong>{workItem.title}</strong>
+                          <small>
+                            {workItem.owner}
+                            {workItem.targetDate ? ` / Target ${workItem.targetDate}` : ""}
+                          </small>
+                        </article>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+
                 {selectedRequest.mergedSources.length ? (
                   <div className="source-history" aria-label="Merged source history">
                     <div className="source-history-header">
@@ -1313,6 +1537,357 @@ export function App() {
             </div>
           </aside>
 
+          {isAddingWorkItem || hasWorkItems ? (
+            <section className="panel work-panel" id="work" aria-labelledby="work-title">
+              <div className="panel-header">
+                <div>
+                  <span className="section-label">Work</span>
+                  <h2 id="work-title">Internal delivery</h2>
+                </div>
+                <div className="panel-actions">
+                  <span className="panel-count">
+                    {workItemCount} {workItemCount === 1 ? "item" : "items"}
+                  </span>
+                  {!isAddingWorkItem ? (
+                    <button
+                      className="secondary-action compact"
+                      onClick={() => {
+                        setIsAddingWorkItem(true);
+                        setNewWorkDraft((draft) => ({
+                          ...draft,
+                          linkSelectedRequest: Boolean(selectedRequest)
+                        }));
+                      }}
+                      type="button"
+                    >
+                      <ListChecks aria-hidden="true" size={14} />
+                      New work item
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+
+              {isAddingWorkItem ? (
+                <form
+                  aria-label="Create work item"
+                  className="work-composer"
+                  onSubmit={addWorkItem}
+                >
+                  <label>
+                    <span>Work title</span>
+                    <input
+                      autoFocus
+                      onChange={(event) =>
+                        setNewWorkDraft((draft) => ({
+                          ...draft,
+                          title: event.target.value
+                        }))
+                      }
+                      placeholder="e.g. Build usage meter"
+                      value={newWorkDraft.title}
+                    />
+                  </label>
+                  <label>
+                    <span>Owner</span>
+                    <select
+                      aria-label="Work item owner"
+                      onChange={(event) =>
+                        setNewWorkDraft((draft) => ({
+                          ...draft,
+                          owner: event.target.value as RequestOwner
+                        }))
+                      }
+                      value={newWorkDraft.owner}
+                    >
+                      {requestOwners.map((owner) => (
+                        <option key={owner} value={owner}>
+                          {owner}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    <span>Status</span>
+                    <select
+                      aria-label="Work item status"
+                      onChange={(event) =>
+                        setNewWorkDraft((draft) => ({
+                          ...draft,
+                          status: event.target.value as WorkStatus
+                        }))
+                      }
+                      value={newWorkDraft.status}
+                    >
+                      {workStatuses.map((status) => (
+                        <option key={status} value={status}>
+                          {status}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    <span>Target date</span>
+                    <input
+                      aria-label="Work item target date"
+                      onChange={(event) =>
+                        setNewWorkDraft((draft) => ({
+                          ...draft,
+                          targetDate: event.target.value
+                        }))
+                      }
+                      type="date"
+                      value={newWorkDraft.targetDate}
+                    />
+                  </label>
+                  <label className="wide-field">
+                    <span>Description</span>
+                    <textarea
+                      onChange={(event) =>
+                        setNewWorkDraft((draft) => ({
+                          ...draft,
+                          description: event.target.value
+                        }))
+                      }
+                      placeholder="What needs to happen before this can ship?"
+                      value={newWorkDraft.description}
+                    />
+                  </label>
+                  <label className="check-field wide-field">
+                    <input
+                      checked={Boolean(selectedRequest) && newWorkDraft.linkSelectedRequest}
+                      disabled={!selectedRequest}
+                      onChange={(event) =>
+                        setNewWorkDraft((draft) => ({
+                          ...draft,
+                          linkSelectedRequest: event.target.checked
+                        }))
+                      }
+                      type="checkbox"
+                    />
+                    <span>
+                      {selectedRequest
+                        ? `Link selected request: ${selectedRequest.title}`
+                        : "Link selected request"}
+                    </span>
+                  </label>
+                  <div className="composer-actions wide-field">
+                    <button className="primary-action" type="submit">
+                      Create work item
+                    </button>
+                    <button
+                      className="secondary-action"
+                      onClick={() => {
+                        setIsAddingWorkItem(false);
+                        setNewWorkDraft({
+                          ...emptyWorkDraft,
+                          linkSelectedRequest: Boolean(selectedRequest)
+                        });
+                      }}
+                      type="button"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </form>
+              ) : null}
+
+              <div className="work-layout">
+                <div className="work-list" aria-label="Work items">
+                  {workspace.workItems.length ? (
+                    workspace.workItems.map((workItem, index) => (
+                      <button
+                        aria-pressed={selectedWorkItem?.id === workItem.id}
+                        className={
+                          selectedWorkItem?.id === workItem.id
+                            ? "work-row active"
+                            : "work-row"
+                        }
+                        key={workItem.id}
+                        onClick={() => selectWorkItem(workItem.id)}
+                        type="button"
+                      >
+                        <span className="route-node" aria-hidden="true">
+                          {String(index + 1).padStart(2, "0")}
+                        </span>
+                        <span className="work-main">
+                          <strong>{workItem.title}</strong>
+                          <small>
+                            {workItem.owner} / {workItem.targetDate || "No target date"} /{" "}
+                            {workItem.requestIds.length}{" "}
+                            {workItem.requestIds.length === 1 ? "request" : "requests"}
+                          </small>
+                        </span>
+                        <span className={`status-badge ${statusTone(workItem.status)}`}>
+                          {workItem.status}
+                        </span>
+                      </button>
+                    ))
+                  ) : (
+                    <div className="empty-state compact-empty">
+                      <strong>No work items yet</strong>
+                      <p>Create one when a request is ready for delivery planning.</p>
+                    </div>
+                  )}
+                </div>
+
+                <aside className="work-detail" aria-label="Selected work item">
+                  {selectedWorkItem ? (
+                    <>
+                      <div className="work-detail-head">
+                        <div>
+                          <span className="section-label">Selected work</span>
+                          <h3>{selectedWorkItem.title}</h3>
+                        </div>
+                        <span className={`status-badge ${statusTone(selectedWorkItem.status)}`}>
+                          {selectedWorkItem.status}
+                        </span>
+                      </div>
+
+                      <p className="work-description">
+                        {selectedWorkItem.description || "No delivery notes yet."}
+                      </p>
+
+                      <form
+                        className="work-editor"
+                        aria-label="Edit selected work item"
+                        onSubmit={(event) => event.preventDefault()}
+                      >
+                        <label>
+                          <span>Owner</span>
+                          <select
+                            aria-label="Selected work item owner"
+                            onChange={(event) =>
+                              updateSelectedWorkItem((workItem) => ({
+                                ...workItem,
+                                owner: event.target.value as RequestOwner
+                              }))
+                            }
+                            value={selectedWorkItem.owner}
+                          >
+                            {requestOwners.map((owner) => (
+                              <option key={owner} value={owner}>
+                                {owner}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label>
+                          <span>Status</span>
+                          <select
+                            aria-label="Selected work item status"
+                            onChange={(event) =>
+                              updateSelectedWorkItem((workItem) => ({
+                                ...workItem,
+                                status: event.target.value as WorkStatus
+                              }))
+                            }
+                            value={selectedWorkItem.status}
+                          >
+                            {workStatuses.map((status) => (
+                              <option key={status} value={status}>
+                                {status}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label>
+                          <span>Target date</span>
+                          <input
+                            aria-label="Selected work item target date"
+                            onChange={(event) =>
+                              updateSelectedWorkItem((workItem) => ({
+                                ...workItem,
+                                targetDate: event.target.value
+                              }))
+                            }
+                            type="date"
+                            value={selectedWorkItem.targetDate}
+                          />
+                        </label>
+                      </form>
+
+                      <div className="linked-requests" aria-label="Linked requests for selected work item">
+                        <div className="source-history-header">
+                          <Link2 aria-hidden="true" size={14} />
+                          <strong>Request evidence</strong>
+                        </div>
+                        {selectedWorkItemRequests.length ? (
+                          selectedWorkItemRequests.map((request) => (
+                            <article className="linked-request-item" key={request.id}>
+                              <div>
+                                <strong>{request.title}</strong>
+                                <small>
+                                  {request.requester} / {request.source} / {request.votes} votes
+                                </small>
+                              </div>
+                              <button
+                                aria-label={`Unlink ${request.title}`}
+                                className="secondary-action compact"
+                                onClick={() =>
+                                  unlinkRequestFromWorkItem(selectedWorkItem.id, request.id)
+                                }
+                                type="button"
+                              >
+                                <Unlink aria-hidden="true" size={13} />
+                                Unlink
+                              </button>
+                            </article>
+                          ))
+                        ) : (
+                          <div className="empty-state compact-empty">
+                            <strong>No linked requests</strong>
+                            <p>This work item can stay standalone or link to requests later.</p>
+                          </div>
+                        )}
+                      </div>
+
+                      <form
+                        className="work-comment-form"
+                        aria-label="Add work item comment"
+                        onSubmit={addWorkComment}
+                      >
+                        <label>
+                          <span>Work item comment</span>
+                          <textarea
+                            onChange={(event) => setWorkCommentDraft(event.target.value)}
+                            placeholder="Add delivery notes, blockers, or acceptance context"
+                            value={workCommentDraft}
+                          />
+                        </label>
+                        <button className="secondary-action" type="submit">
+                          <MessageCircle aria-hidden="true" size={14} />
+                          Add work comment
+                        </button>
+                      </form>
+
+                      <div className="work-comment-list" aria-label="Work item comments">
+                        {selectedWorkItem.comments.length ? (
+                          selectedWorkItem.comments.map((comment) => (
+                            <article className="comment-item" key={comment.id}>
+                              <strong>{comment.author}</strong>
+                              <p>{comment.body}</p>
+                              <small>{comment.age}</small>
+                            </article>
+                          ))
+                        ) : (
+                          <div className="empty-state compact-empty">
+                            <strong>No work comments yet</strong>
+                            <p>Add delivery context when implementation starts moving.</p>
+                          </div>
+                        )}
+                      </div>
+                    </>
+                  ) : (
+                    <div className="empty-state compact-empty">
+                      <strong>Select work</strong>
+                      <p>Internal delivery details and linked request evidence will appear here.</p>
+                    </div>
+                  )}
+                </aside>
+              </div>
+            </section>
+          ) : null}
+
           <section className="panel route-map-panel" id="roadmap" aria-labelledby="roadmap-title">
             <div className="panel-header">
               <div>
@@ -1383,6 +1958,10 @@ export function App() {
         <span>
           <MessageSquareText aria-hidden="true" size={14} />
           {activeRequestCount} {activeRequestCount === 1 ? "request" : "requests"}
+        </span>
+        <span>
+          <ListChecks aria-hidden="true" size={14} />
+          {workItemCount} {workItemCount === 1 ? "work item" : "work items"}
         </span>
       </div>
     </main>

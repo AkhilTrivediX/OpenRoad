@@ -3,6 +3,17 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { App } from "./App";
 
+async function createWorkItem(
+  user: ReturnType<typeof userEvent.setup>,
+  title = "Build usage meter",
+  targetDate = "2026-07-15"
+) {
+  await user.click(screen.getAllByRole("button", { name: /New work item/ })[0]);
+  await user.type(screen.getByLabelText("Work title"), title);
+  await user.type(screen.getByLabelText("Work item target date"), targetDate);
+  await user.click(screen.getByRole("button", { name: "Create work item" }));
+}
+
 describe("OpenRoad workspace shell", () => {
   it("renders the shell title and default workspace", () => {
     render(<App />);
@@ -427,5 +438,99 @@ describe("OpenRoad workspace shell", () => {
     await user.tab();
 
     expect(screen.getByRole("heading", { name: "Untitled request" })).toBeInTheDocument();
+  });
+
+  it("creates a linked internal work item from the selected request", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    const primaryNav = screen.getByLabelText("Primary navigation");
+    expect(within(primaryNav).queryByRole("link", { name: /Work/ })).not.toBeInTheDocument();
+
+    await createWorkItem(user);
+
+    expect(within(primaryNav).getByRole("link", { name: /Work/ })).toHaveAttribute(
+      "href",
+      "#work"
+    );
+    expect(screen.getByText("1 work item")).toBeInTheDocument();
+    expect(screen.getByLabelText("Linked work for selected request")).toHaveTextContent(
+      "Build usage meter"
+    );
+    expect(screen.getByLabelText("Linked requests for selected work item")).toHaveTextContent(
+      "API rate limit visibility"
+    );
+  });
+
+  it("edits work item owner, status, target date, and comments", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await createWorkItem(user);
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Selected work item owner" }),
+      "Akhil"
+    );
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Selected work item status" }),
+      "In progress"
+    );
+    await user.clear(screen.getByLabelText("Selected work item target date"));
+    await user.type(screen.getByLabelText("Selected work item target date"), "2026-08-02");
+    await user.type(screen.getByLabelText("Work item comment"), "Add acceptance checks.");
+    await user.click(screen.getByRole("button", { name: "Add work comment" }));
+
+    expect(screen.getByRole("combobox", { name: "Selected work item owner" })).toHaveValue(
+      "Akhil"
+    );
+    expect(screen.getByRole("combobox", { name: "Selected work item status" })).toHaveValue(
+      "In progress"
+    );
+    expect(screen.getByLabelText("Selected work item target date")).toHaveValue("2026-08-02");
+    expect(screen.getByText("Add acceptance checks.")).toBeInTheDocument();
+  });
+
+  it("unlinks a request from work without deleting either object", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await createWorkItem(user);
+    await user.click(screen.getByRole("button", { name: "Unlink API rate limit visibility" }));
+
+    expect(screen.getByRole("heading", { name: "API rate limit visibility" })).toBeInTheDocument();
+    expect(
+      within(screen.getByLabelText("Work items")).getByRole("button", {
+        name: /Build usage meter/
+      })
+    ).toBeInTheDocument();
+    expect(screen.queryByLabelText("Linked work for selected request")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Linked requests for selected work item")).toHaveTextContent(
+      "No linked requests"
+    );
+  });
+
+  it("creates standalone work in a blank workspace without exposing Work nav early", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole("button", { name: "New workspace" }));
+    await user.type(screen.getByLabelText("Workspace name"), "Delivery Lab");
+    await user.click(screen.getByRole("button", { name: "Create workspace" }));
+
+    const primaryNav = screen.getByLabelText("Primary navigation");
+    expect(within(primaryNav).queryByRole("link", { name: /Work/ })).not.toBeInTheDocument();
+
+    await createWorkItem(user, "Publish RSS adapter", "2026-09-11");
+
+    expect(within(primaryNav).getByRole("link", { name: /Work/ })).toBeInTheDocument();
+    expect(
+      within(screen.getByLabelText("Work items")).getByRole("button", {
+        name: /Publish RSS adapter/
+      })
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Linked requests for selected work item")).toHaveTextContent(
+      "No linked requests"
+    );
+    expect(screen.getByText("No requests yet")).toBeInTheDocument();
   });
 });

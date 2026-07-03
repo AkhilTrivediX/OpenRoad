@@ -303,8 +303,11 @@ a:hover {
 .command-bar input::placeholder,
 .workspace-form input::placeholder,
 .request-composer input::placeholder,
-  .request-composer textarea::placeholder,
-  .comment-form textarea::placeholder {
+.request-composer textarea::placeholder,
+.work-composer input::placeholder,
+.work-composer textarea::placeholder,
+.comment-form textarea::placeholder,
+.work-comment-form textarea::placeholder {
   color: var(--muted);
   opacity: 1;
 }
@@ -323,6 +326,7 @@ kbd {
 }
 
 .top-actions {
+  flex-wrap: wrap;
   gap: 8px;
   justify-content: flex-end;
 }
@@ -384,6 +388,7 @@ kbd {
 
 h1,
 h2,
+h3,
 p {
   margin: 0;
 }
@@ -403,6 +408,13 @@ h2 {
   margin-top: 3px;
 }
 
+h3 {
+  font-family: var(--label-font);
+  font-size: 15px;
+  line-height: 1.25;
+  margin-top: 3px;
+}
+
 .brief-plate p {
   color: var(--muted);
   font-size: 13px;
@@ -414,8 +426,8 @@ h2 {
 .brief-instruments {
   border: 1px solid var(--line);
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  min-width: 230px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  min-width: 330px;
 }
 
 .brief-instruments span {
@@ -491,7 +503,8 @@ h2 {
 }
 
 .workspace-form,
-.request-composer {
+.request-composer,
+.work-composer {
   background: var(--rail);
   border: 1px solid var(--line);
   display: grid;
@@ -504,15 +517,19 @@ h2 {
   grid-template-columns: minmax(220px, 1fr) auto;
 }
 
-.request-composer {
+.request-composer,
+.work-composer {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .workspace-form label,
 .request-composer label,
+.work-composer label,
 .request-editor label,
+.work-editor label,
 .triage-controls label,
 .comment-form label,
+.work-comment-form label,
 .request-tools label {
   display: grid;
   gap: 6px;
@@ -521,9 +538,12 @@ h2 {
 
 .workspace-form label span,
 .request-composer label span,
+.work-composer label span,
 .request-editor label span,
+.work-editor label span,
 .triage-controls label span,
 .comment-form label span,
+.work-comment-form label span,
 .request-tools label span {
   color: var(--muted);
   font-family: var(--label-font);
@@ -533,11 +553,17 @@ h2 {
 .workspace-form input,
 .request-composer input,
 .request-composer textarea,
+.work-composer input,
+.work-composer select,
+.work-composer textarea,
 .request-editor input,
 .request-editor select,
 .request-editor textarea,
+.work-editor input,
+.work-editor select,
 .triage-controls select,
 .comment-form textarea,
+.work-comment-form textarea,
 .request-tools select {
   background: var(--plate);
   border: 1px solid var(--line);
@@ -548,11 +574,28 @@ h2 {
 }
 
 .request-composer textarea,
+.work-composer textarea,
 .request-editor textarea,
-.comment-form textarea {
+.comment-form textarea,
+.work-comment-form textarea {
   line-height: 1.45;
   min-height: 76px;
   padding: 9px 11px;
+}
+
+.check-field {
+  align-items: center;
+  border: 1px solid var(--line);
+  display: flex !important;
+  gap: 9px;
+  min-height: 38px;
+  padding: 8px 10px;
+}
+
+.check-field input {
+  accent-color: var(--route);
+  min-height: auto;
+  width: auto;
 }
 
 .wide-field {
@@ -598,6 +641,20 @@ h2 {
   margin-bottom: 12px;
   position: relative;
   z-index: 1;
+}
+
+.panel-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.panel-count {
+  color: var(--muted);
+  font-family: var(--label-font);
+  font-size: 12px;
 }
 
 .route-protocol {
@@ -928,6 +985,45 @@ dd {
   min-width: 0;
 }
 
+.linked-work {
+  border: 1px solid var(--line);
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 10px;
+}
+
+.linked-work-list {
+  display: grid;
+  gap: 8px;
+}
+
+.linked-work-item {
+  background: var(--plate);
+  border: 1px solid var(--line);
+  display: grid;
+  gap: 6px;
+  grid-template-columns: auto minmax(0, 1fr);
+  padding: 9px;
+}
+
+.linked-work-item strong,
+.linked-work-item small {
+  grid-column: 2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.linked-work-item strong {
+  font-family: var(--label-font);
+}
+
+.linked-work-item small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .inspector-block {
   background: var(--plate);
   border: 1px solid var(--line);
@@ -1038,6 +1134,163 @@ dd {
 
 .integration-chip small {
   color: var(--muted);
+}
+
+.work-panel {
+  grid-column: 1 / -1;
+}
+
+.work-layout {
+  align-items: start;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(0, 0.94fr) minmax(330px, 1.06fr);
+}
+
+.work-list {
+  align-content: start;
+  border: 1px solid var(--line);
+  display: grid;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.work-row {
+  align-items: center;
+  background: var(--plate);
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  color: var(--ink);
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 40px minmax(0, 1fr) auto;
+  min-height: 64px;
+  padding: 10px 12px;
+  text-align: left;
+  width: 100%;
+}
+
+.work-row:last-child {
+  border-bottom: 0;
+}
+
+.work-row:hover {
+  background: var(--plate-2);
+}
+
+.work-row.active {
+  background: var(--blue-plate);
+}
+
+.work-row.active .route-node {
+  background: var(--route);
+  border-color: var(--route);
+  color: var(--route-ink);
+}
+
+.work-main {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.work-main strong,
+.work-main small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.work-main strong {
+  font-family: var(--label-font);
+}
+
+.work-main small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.work-detail {
+  background: var(--plate);
+  border: 1px solid var(--line);
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 12px;
+}
+
+.work-detail-head {
+  align-items: start;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.work-description {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.work-editor {
+  border: 1px solid var(--line);
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  padding: 12px;
+}
+
+.linked-requests,
+.work-comment-form,
+.work-comment-list {
+  display: grid;
+  gap: 8px;
+}
+
+.linked-requests {
+  border: 1px solid var(--line);
+  padding: 10px;
+}
+
+.linked-request-item {
+  align-items: center;
+  background: var(--rail);
+  border: 1px solid var(--line);
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: 9px;
+}
+
+.linked-request-item div {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.linked-request-item strong,
+.linked-request-item small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.linked-request-item strong {
+  font-family: var(--label-font);
+}
+
+.linked-request-item small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.work-comment-form {
+  border: 1px solid var(--line);
+  padding: 12px;
+}
+
+.work-comment-form .secondary-action {
+  justify-self: start;
 }
 
 .route-map-panel,
@@ -1256,12 +1509,15 @@ dd {
 
   .workspace-form,
   .request-composer,
+  .work-composer,
   .request-editor,
+  .work-editor,
   .triage-controls,
   .request-tools,
   .triage-summary,
   .route-protocol,
-  .roadmap-lanes {
+  .roadmap-lanes,
+  .work-layout {
     grid-template-columns: 1fr;
   }
 
@@ -1291,7 +1547,7 @@ dd {
   }
 
   .brief-instruments {
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     width: 100%;
   }
 
@@ -1309,10 +1565,33 @@ dd {
     grid-template-columns: 34px minmax(0, 1fr);
   }
 
+  .work-row {
+    grid-template-columns: 34px minmax(0, 1fr);
+  }
+
   .vote-count,
   .request-row .status-badge {
     grid-column: 2;
     justify-self: start;
+  }
+
+  .work-row .status-badge {
+    grid-column: 2;
+    justify-self: start;
+  }
+
+  .linked-request-item,
+  .work-detail-head {
+    align-items: stretch;
+    grid-template-columns: 1fr;
+  }
+
+  .linked-request-item {
+    display: grid;
+  }
+
+  .work-detail-head {
+    display: grid;
   }
 
   .detail-list div {

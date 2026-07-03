@@ -508,7 +508,8 @@ h3 {
 .workspace-form,
 .request-composer,
 .work-composer,
-.roadmap-form {
+.roadmap-form,
+.changelog-form {
   background: var(--rail);
   border: 1px solid var(--line);
   display: grid;
@@ -523,7 +524,8 @@ h3 {
 
 .request-composer,
 .work-composer,
-.roadmap-form {
+.roadmap-form,
+.changelog-form {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
@@ -536,6 +538,7 @@ h3 {
 .triage-controls label,
 .comment-form label,
 .work-comment-form label,
+.changelog-editor label,
 .roadmap-controls label,
 .request-tools label {
   display: grid;
@@ -552,6 +555,7 @@ h3 {
 .triage-controls label span,
 .comment-form label span,
 .work-comment-form label span,
+.changelog-editor label span,
 .roadmap-controls label span,
 .request-tools label span {
   color: var(--muted);
@@ -573,10 +577,17 @@ h3 {
 .request-editor textarea,
 .work-editor input,
 .work-editor select,
+.changelog-editor input,
+.changelog-editor select,
+.changelog-editor textarea,
 .triage-controls select,
 .comment-form textarea,
 .work-comment-form textarea,
 .data-tools textarea,
+.changelog-form input,
+.changelog-form select,
+.changelog-form textarea,
+.changelog-links select,
 .roadmap-controls select,
 .roadmap-links select,
 .request-tools select {
@@ -591,7 +602,9 @@ h3 {
 .request-composer textarea,
 .work-composer textarea,
 .roadmap-form textarea,
+.changelog-form textarea,
 .request-editor textarea,
+.changelog-editor textarea,
 .comment-form textarea,
 .work-comment-form textarea,
 .data-tools textarea {
@@ -1618,30 +1631,132 @@ dd {
   margin-bottom: 10px;
 }
 
+.changelog-workspace {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: minmax(260px, 0.42fr) minmax(0, 1fr);
+}
+
+.changelog-list,
+.changelog-detail,
+.changelog-editor,
+.changelog-links,
+.public-preview {
+  display: grid;
+  min-width: 0;
+}
+
 .changelog-list {
+  align-content: start;
+  border-top: 1px solid var(--line-strong);
+  gap: 2px;
+  padding-top: 8px;
+}
+
+.changelog-row {
+  background: transparent;
+  border: 1px solid transparent;
+  border-top-color: var(--line);
+  color: var(--ink);
   display: grid;
   gap: 8px;
+  min-height: 86px;
+  min-width: 0;
+  padding: 10px 8px;
+  text-align: left;
+  width: 100%;
 }
 
-.changelog-item {
-  background: var(--plate);
-  border: 1px solid var(--line);
-  clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 0 100%);
+.changelog-row:hover {
+  background: color-mix(in oklch, var(--plate) 68%, transparent);
+  border-color: var(--line);
+}
+
+.changelog-row.selected {
+  background: color-mix(in oklch, var(--plate-2) 70%, transparent);
+  border-color: var(--line-strong);
+}
+
+.changelog-row-main,
+.changelog-detail-header > div {
   display: grid;
-  gap: 7px;
-  padding: 11px;
+  gap: 5px;
+  min-width: 0;
 }
 
-.changelog-item .status-badge {
-  justify-self: start;
-}
-
-.changelog-item strong {
+.changelog-row-main strong,
+.changelog-detail h3,
+.public-preview strong {
+  color: var(--ink);
   font-family: var(--label-font);
+  font-size: 14px;
+  line-height: 1.25;
+  margin: 0;
 }
 
-.changelog-item small {
+.changelog-row-main small,
+.changelog-row-meta small,
+.public-preview p,
+.public-preview small,
+.changelog-links span {
   color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+  margin: 0;
+  min-width: 0;
+}
+
+.changelog-row-main small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.changelog-row-meta,
+.changelog-detail-header,
+.changelog-badges {
+  align-items: center;
+  display: flex;
+}
+
+.changelog-row-meta,
+.changelog-badges {
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.changelog-detail {
+  border-left: 1px solid var(--line-strong);
+  gap: 12px;
+  padding-left: 16px;
+}
+
+.changelog-detail-header {
+  align-items: flex-start;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.changelog-editor {
+  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.changelog-links {
+  border-top: 1px solid var(--line);
+  gap: 6px;
+  padding-top: 8px;
+}
+
+.changelog-links strong {
+  font-family: var(--label-font);
+  font-size: 12px;
+}
+
+.public-preview {
+  border: 1px solid var(--line);
+  gap: 8px;
+  padding: 10px;
 }
 
 .bottom-status {
@@ -1684,10 +1799,12 @@ dd {
   .command-deck,
   .brief-plate,
   .roadmap-workspace,
+  .changelog-workspace,
   .map-board {
     grid-template-columns: 1fr;
   }
 
+  .changelog-detail,
   .roadmap-detail {
     border-left: 0;
     border-top: 1px solid var(--line-strong);
@@ -1768,6 +1885,8 @@ dd {
   .roadmap-workspace,
   .roadmap-lanes,
   .roadmap-controls,
+  .changelog-workspace,
+  .changelog-editor,
   .settings-grid,
   .work-layout {
     grid-template-columns: 1fr;

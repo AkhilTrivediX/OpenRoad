@@ -13,6 +13,7 @@ import {
   openRoadStorageKey,
   saveOpenRoadState,
   saveSelectedWorkspaceId,
+  type ChangelogItem,
   type RoadmapItem,
   type RequestItem,
   type WorkItem
@@ -67,6 +68,25 @@ function sampleRoadmapItem(overrides: Partial<RoadmapItem> = {}): RoadmapItem {
     requestIds: [],
     summary: "A roadmap item.",
     title: "Test roadmap",
+    updatedAt: "just now",
+    visibility: "Private",
+    workItemIds: [],
+    ...overrides
+  };
+}
+
+function sampleChangelogItem(overrides: Partial<ChangelogItem> = {}): ChangelogItem {
+  return {
+    createdAt: "just now",
+    id: "changelog-test",
+    privateNotes: "Internal rollout notes.",
+    publicSummary: "A public release note.",
+    requestIds: [],
+    roadmapItemIds: [],
+    sourceId: "",
+    sourceType: "Manual",
+    state: "Draft",
+    title: "Test changelog",
     updatedAt: "just now",
     visibility: "Private",
     workItemIds: [],
@@ -190,6 +210,54 @@ describe("OpenRoad domain state", () => {
     ).toBe(false);
   });
 
+  it("creates, replaces, and removes changelog items through reducer actions", () => {
+    const state = createInitialOpenRoadState();
+    const workspaceId = state.workspaces[0].id;
+    const created = openRoadReducer(state, {
+      changelogItem: sampleChangelogItem({
+        requestIds: ["api-rate-limit-visibility"],
+        workItemIds: ["work-test"]
+      }),
+      type: "create-changelog-item",
+      workspaceId
+    });
+
+    expect(created.workspaces[0].changelog[0]).toMatchObject({
+      id: "changelog-test",
+      requestIds: ["api-rate-limit-visibility"],
+      title: "Test changelog",
+      visibility: "Private",
+      workItemIds: ["work-test"]
+    });
+
+    const edited = openRoadReducer(created, {
+      changelogItem: {
+        ...created.workspaces[0].changelog[0],
+        publicSummary: "Ready public wording.",
+        state: "Ready",
+        visibility: "Public"
+      },
+      type: "replace-changelog-item",
+      workspaceId
+    });
+
+    expect(edited.workspaces[0].changelog[0]).toMatchObject({
+      publicSummary: "Ready public wording.",
+      state: "Ready",
+      visibility: "Public"
+    });
+
+    const removed = openRoadReducer(edited, {
+      changelogItemId: "changelog-test",
+      type: "delete-changelog-item",
+      workspaceId
+    });
+
+    expect(
+      removed.workspaces[0].changelog.some((item) => item.id === "changelog-test")
+    ).toBe(false);
+  });
+
   it("saves and loads current schema state", () => {
     const state = openRoadReducer(createInitialOpenRoadState(), {
       request: sampleRequest({ title: "Persisted request" }),
@@ -257,6 +325,35 @@ describe("OpenRoad domain state", () => {
     });
   });
 
+  it("migrates legacy changelog previews into private changelog drafts", () => {
+    const state = createInitialOpenRoadState();
+    const previous = {
+      schemaVersion: 2,
+      workspaces: state.workspaces.map((workspace) => ({
+        ...workspace,
+        changelog: [
+          {
+            detail: "Internal detail that should stay private.",
+            state: "Ready",
+            title: "Legacy release note"
+          }
+        ]
+      }))
+    };
+
+    const migrated = migrateOpenRoadState(previous);
+
+    expect(migrated.schemaVersion).toBe(openRoadSchemaVersion);
+    expect(migrated.workspaces[0].changelog[0]).toMatchObject({
+      id: "changelog-0-legacy-release-note",
+      privateNotes: "Internal detail that should stay private.",
+      publicSummary: "Legacy release note",
+      sourceType: "Manual",
+      title: "Legacy release note",
+      visibility: "Private"
+    });
+  });
+
   it("recovers from corrupt persisted data without throwing", () => {
     localStorage.setItem(openRoadStorageKey, "{not-json");
 
@@ -291,5 +388,16 @@ describe("OpenRoad domain state", () => {
   it("rejects invalid workspace imports", () => {
     expect(() => importWorkspaceFromJson("{}")).toThrow("schema version");
     expect(() => importWorkspaceFromJson("not-json")).toThrow("valid JSON");
+    expect(() =>
+      importWorkspaceFromJson(
+        JSON.stringify({
+          schemaVersion: openRoadSchemaVersion,
+          workspace: {
+            ...createInitialOpenRoadState().workspaces[0],
+            changelog: [{ title: "Malformed changelog" }]
+          }
+        })
+      )
+    ).toThrow("valid workspace");
   });
 });

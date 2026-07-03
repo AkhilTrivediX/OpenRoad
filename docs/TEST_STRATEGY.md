@@ -5,6 +5,8 @@ Testing starts before implementation. Every feature branch must add a checklist 
 ## Global Test Categories
 
 - Unit tests for domain logic.
+- Reducer/action tests for state transitions.
+- Persistence migration tests.
 - Component tests for important UI states.
 - Integration tests for data flows.
 - End-to-end smoke tests for primary workflows.
@@ -12,6 +14,10 @@ Testing starts before implementation. Every feature branch must add a checklist 
 - Regression checks for completed features.
 - Standalone-mode checks to ensure integrations remain optional.
 - Data export/import checks when persistence exists.
+- Permission and public/private visibility checks when auth or public surfaces exist.
+- Security checks for user-authored content, secrets, provider tokens, and public surfaces.
+- Performance checks for realistic workspace sizes.
+- Observability checks for errors, jobs, sync, imports, exports, notifications, and AI actions when those systems exist.
 
 ## Feature Test Plan Template
 
@@ -28,6 +34,70 @@ Each feature must define:
 - Regression checks from previous features.
 - Known risks.
 - Sign-off result.
+- Evidence block with branch, commit SHA, commands, browser viewports, review notes, unresolved risks, and rollback notes.
+
+## Production Gate Checklist
+
+Every feature test plan must answer these before merge:
+
+- Is user-created data durable for the current maturity stage?
+- What data-loss risks were tested?
+- What permissions or visibility rules changed?
+- What schema or data-shape migration is needed?
+- What rollback path exists?
+- What security/privacy risks were reviewed?
+- What performance budget or dataset size was checked?
+- What accessibility evidence was gathered?
+- What browser sizes were checked?
+- What previous features were regression-tested?
+
+## Evidence Block Template
+
+Use this block in every feature test plan sign-off.
+
+Branch:
+
+Commit:
+
+Date:
+
+Commands:
+
+- `pnpm check`: pending
+- Design detector for touched UI files: pending
+- Browser QA: pending
+
+Acceptance:
+
+- Pending.
+
+Accessibility:
+
+- Pending.
+
+Security/Privacy:
+
+- Pending.
+
+Data/Persistence:
+
+- Pending.
+
+Performance:
+
+- Pending.
+
+Review:
+
+- Pending.
+
+Rollback:
+
+- Pending.
+
+Known Risks:
+
+- Pending.
 
 ## Feature 1 Test List: Workspace Shell
 
@@ -123,6 +193,34 @@ Regression checks:
 - Inbox triage still works.
 - Navigation remains simple for new/demo workspace.
 
+## Feature 4.5 Test List: Domain State And Persistence
+
+Objective: prove OpenRoad local-first data is durable and migration-safe before more workflow surface is added.
+
+Tests:
+
+- Reload preserves workspaces.
+- Reload preserves requests.
+- Reload preserves votes, comments, archived state, owner, status, tags, and duplicate source history.
+- Reload preserves work items, links, owner, status, target date, comments, and unlink state.
+- Versioned persisted data can migrate to the current schema.
+- Unknown future schema fails safely with recovery guidance.
+- Corrupt persisted data shows recovery instead of crashing.
+- Reset restores usable demo data.
+- Export workspace data.
+- Import workspace data into a fresh state.
+- Import rejects invalid data without corrupting existing data.
+- Existing demo workflows remain usable after persistence is introduced.
+
+Regression checks:
+
+- Workspace shell still works.
+- Standalone requests still work.
+- Request triage still works.
+- Internal work items still work.
+- Work nav progressive disclosure still works.
+- App shell still avoids document/body scroll.
+
 ## Feature 5 Test List: Roadmap
 
 Objective: prove roadmap communication works clearly.
@@ -142,7 +240,24 @@ Regression checks:
 
 - Request triage still works.
 - Work items still work.
+- Persistent workspace state still works.
 - No external provider required.
+
+## Architecture/Foundation Test Lists
+
+For domain, persistence, API, auth, tenancy, integrations, notifications, and deployment foundation branches, test plans must include:
+
+- Domain invariants.
+- Migration behavior.
+- Rollback behavior.
+- Permission matrix.
+- Validation errors.
+- Cross-workspace isolation.
+- Public/private visibility.
+- Job retry and idempotency when jobs exist.
+- Observability events/logs when operational flows exist.
+- Backup/export/import when data is persisted.
+- Self-host upgrade path when self-host artifacts exist.
 
 ## Feature 6 Test List: Changelog
 

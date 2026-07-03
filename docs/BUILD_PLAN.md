@@ -4,6 +4,14 @@ This plan is standalone-first. Integrations are optional modules built after the
 
 Each feature begins by creating a test checklist in `docs/TEST_STRATEGY.md` or a feature-specific checklist under `docs/test-plans/`.
 
+Each feature must also satisfy `docs/PRODUCTION_READINESS.md` before merging to `main`.
+
+## Current Stage
+
+Current stage: Stage 1 Local-First Alpha.
+
+The first four workflow slices prove the standalone loop shape, but the app is not production-ready until user-created data is durable. The next implementation feature is therefore a production foundation feature, not another workflow surface.
+
 ## Feature 1: Workspace Shell
 
 Branch: `feat/workspace-shell`
@@ -75,6 +83,109 @@ Acceptance:
 - Users can plan delivery inside OpenRoad without an external tracker.
 - Linked work is useful even with zero integrations.
 
+## Feature 4.5: Domain State And Persistence
+
+Branch: `feat/domain-state-persistence`
+
+Build:
+
+- Extract provider-neutral domain types and actions.
+- Introduce reducer/store boundaries.
+- Add stable ID helper.
+- Add versioned local persistence.
+- Add schema migration registry.
+- Add workspace export/import.
+- Add corrupt local state recovery.
+- Add reset workspace data path.
+- Preserve existing workspace, request, triage, and work item UX.
+
+Acceptance:
+
+- User-created workspaces, requests, comments, votes, triage edits, and work items survive reload.
+- Existing demo workspace can still be reset or restored.
+- Corrupt persisted data does not crash the app.
+- Exported workspace data can be imported into a fresh browser state.
+- Current standalone workflows pass unchanged.
+- Future roadmap/changelog features can depend on durable request and work links.
+
+## Production Foundation Track
+
+These foundation branches are part of the product roadmap, not optional cleanup. They must happen before public portal, provider integrations, notifications, hosted beta, or self-host claims.
+
+### App Module Decomposition
+
+Branch: `feat/app-module-decomposition`
+
+Build:
+
+- Split the monolithic app into feature modules.
+- Move domain types/actions out of UI components.
+- Add shared UI primitives.
+- Add domain fixtures.
+- Preserve the current UX.
+
+Acceptance:
+
+- Feature modules have clear ownership.
+- Domain actions are not owned by React view components.
+- Existing tests pass without behavior changes.
+
+### API, Auth, And Tenancy Contract
+
+Branch: `feat/api-auth-tenancy-contract`
+
+Build:
+
+- API shape and error contract.
+- Auth actor model.
+- Workspace membership and role matrix.
+- Public visitor/requester model.
+- Permission test matrix.
+- Cross-workspace isolation rules.
+
+Acceptance:
+
+- Portal and integration work have a real trust boundary before implementation.
+- Public/private visibility is testable.
+- Provider jobs have an installation-scoped actor model.
+
+### Team SaaS Foundation
+
+Branch: `feat/team-saas-foundation`
+
+Build:
+
+- Backend API.
+- Database schema and migrations.
+- Authentication.
+- Workspace membership.
+- Server-side validation.
+- Hosted deployment workflow.
+- Observability baseline.
+
+Acceptance:
+
+- A small team can use OpenRoad with isolated workspace data.
+- Deployments can be smoke-tested and rolled back.
+- Operational errors are visible without exposing logs in default navigation.
+
+### Self-Host Operations Foundation
+
+Branch: `feat/self-host-ops-foundation`
+
+Build:
+
+- Docker Compose path.
+- Admin bootstrap.
+- Backup/restore.
+- Upgrade notes.
+- Environment and secret documentation.
+
+Acceptance:
+
+- Self-host is a real deployment path, not a late marketing checkbox.
+- Backup and restore are documented before public release.
+
 ## Feature 5: Roadmap Now/Next/Later
 
 Branch: `feat/roadmap-now-next-later`
@@ -92,6 +203,11 @@ Acceptance:
 - Public/private state is visible.
 - Timeline is optional, not default.
 
+Dependencies:
+
+- `feat/domain-state-persistence` must be merged first.
+- Roadmap visibility rules must align with the API/auth/tenancy contract before public portal work.
+
 ## Feature 6: Changelog Drafts
 
 Branch: `feat/changelog-drafts`
@@ -107,6 +223,11 @@ Acceptance:
 
 - Shipped work can become a changelog draft without duplicate manual writing.
 - Private/internal details are not exposed by default.
+
+Dependencies:
+
+- Roadmap and work state must be durable.
+- Public/private content boundaries must be defined.
 
 ## Feature 7: Public Portal
 
@@ -124,6 +245,12 @@ Acceptance:
 
 - External users can understand status without seeing internal complexity.
 - Portal works for standalone OpenRoad objects.
+
+Dependencies:
+
+- Public/private visibility rules must be tested.
+- Auth/requester/public visitor model must be defined.
+- Abuse, moderation, and rate-limit plan must exist.
 
 ## Feature 8: Integration Adapter Contract
 
@@ -143,6 +270,12 @@ Acceptance:
 - Provider objects attach to OpenRoad objects.
 - Core workflows do not change when no provider exists.
 - No provider-specific fields appear in core domain tables.
+
+Dependencies:
+
+- Core objects must be durable.
+- Provider anti-corruption boundary must be defined.
+- API/auth/tenancy contract must define integration actors.
 
 ## Feature 9: GitHub Issue Sync
 
@@ -224,19 +357,24 @@ Acceptance:
 - AI never silently changes source-of-truth data.
 - Every AI action is inspectable and requires human approval.
 
-## Feature 14: Self-Host And SaaS Operations
+## Feature 14: Public Release Operations
 
-Branch: `feat/self-host-and-saas-ops`
+Branch: `feat/public-release-ops`
 
 Build:
 
-- Docker self-host path.
-- Export/import.
-- Backup documentation.
-- Billing foundations.
-- Admin controls.
+- Release candidates.
+- Semantic versioning.
+- Docker image publishing.
+- Signed release artifacts if applicable.
+- Security patch process.
+- Support windows.
+- Billing/admin hardening if hosted subscription is enabled.
+- Self-host upgrade documentation.
 
 Acceptance:
 
+- SaaS and self-host releases can be versioned, tested, and rolled back.
 - Free self-host remains useful.
 - Hosted and self-host paths share the same core product behavior.
+- Security patches have an explicit release path.

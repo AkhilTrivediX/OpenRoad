@@ -8,9 +8,9 @@ Each feature must also satisfy `docs/PRODUCTION_READINESS.md` before merging to 
 
 ## Current Stage
 
-Current stage: Stage 1 Local-First Alpha.
+Current stage: Stage 1 Local-First Alpha with a production server foundation.
 
-The first four workflow slices plus Feature 4.5 prove the standalone loop shape and local durability. The next implementation feature is the roadmap domain/workflow layer, built on top of persisted requests and work items.
+The standalone loop now covers workspaces, requests, triage, internal work, roadmap planning, changelog drafts, public portal preview, local durability, and the first production run path. The next production work should harden the API/auth/tenancy contract before real team collaboration or provider integrations.
 
 ## Feature 1: Workspace Shell
 
@@ -170,6 +170,27 @@ Acceptance:
 - A small team can use OpenRoad with isolated workspace data.
 - Deployments can be smoke-tested and rolled back.
 - Operational errors are visible without exposing logs in default navigation.
+
+### Production Server Foundation
+
+Branch: `feat/production-foundation`
+
+Build:
+
+- Production Node server.
+- Same-origin OpenRoad state API.
+- File-backed state store with existing schema migration and validation.
+- Public portal API projection.
+- Production client sync with localStorage fallback.
+- Production start path.
+
+Acceptance:
+
+- `pnpm start` serves the built app and API from one process.
+- Server state persists outside browser localStorage.
+- Invalid and future-schema writes are rejected.
+- Public portal API does not leak private workspace data.
+- Standalone local development remains optional and non-blocking.
 
 ### Self-Host Operations Foundation
 

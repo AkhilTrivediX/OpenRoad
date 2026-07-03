@@ -23,7 +23,15 @@ External providers attach through external links and sync state. Provider-specif
 
 ## Repository Status
 
-This repository is in planning/bootstrap mode. No product implementation has started yet.
+OpenRoad now has a working standalone product loop and a production server foundation:
+
+- React app shell for requests, work, roadmap, changelog, portal, and settings.
+- Versioned OpenRoad domain state with local persistence, import/export, and recovery.
+- Public/private visibility for requests, comments, roadmap items, and changelog entries.
+- Production Node server that serves the built app and same-origin OpenRoad APIs.
+- File-backed server persistence for a single-tenant self-host or evaluation install.
+
+Current production limits are explicit: authentication, team roles, tenant membership, managed database migrations, hosted CI/CD, observability, and provider integrations are planned next-stage work.
 
 Current docs:
 
@@ -44,3 +52,30 @@ Before implementation starts for any feature:
 4. Implement only the scoped feature.
 5. Run the checklist.
 6. Merge only when the feature passes its acceptance and regression gates.
+
+## Local Development
+
+```powershell
+pnpm install
+pnpm dev
+```
+
+## Production Run Path
+
+```powershell
+pnpm install --frozen-lockfile
+pnpm build
+$env:OPENROAD_DATA_FILE="C:\openroad\openroad-state.json"
+$env:PORT="4173"
+pnpm start
+```
+
+The server exposes:
+
+- `GET /api/health`
+- `GET /api/openroad/state`
+- `PUT /api/openroad/state`
+- `POST /api/openroad/actions`
+- `GET /api/openroad/workspaces/:workspaceId/portal`
+
+The full state API is a private/admin surface until auth and tenancy are implemented. The portal API returns only the public projection.

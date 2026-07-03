@@ -168,28 +168,28 @@ OpenRoad releases must eventually include:
 
 ## Current Readiness Debt
 
-These are known production gaps in the current `main` after Feature 4.5.
+These are known production gaps after the production server foundation.
 
-- Roadmap and changelog are still preview lists, not complete domain workflows.
-- Public/private visibility is not yet modeled for roadmap or changelog content.
-- There is no app-level error boundary yet.
+- App-level error boundary is still pending.
 - Some UI orchestration still lives inside `App.tsx`; app module decomposition is pending.
-- There is no backend, auth, tenancy, or deployment pipeline.
-- There is no CI workflow yet.
+- Server persistence is single-tenant and file-backed, not a managed database with migrations, backups, and restore drills.
+- Full-state APIs are private/admin deployment surfaces until authentication and roles exist.
+- Authentication, workspace membership, team roles, tenant isolation, and audit events are not implemented.
+- Hosted deployment pipeline and CI workflow are not implemented.
+- Observability is limited to process logs; structured operational events and dashboards are pending.
+- Public portal abuse controls, requester identity, rate limits, and notification preferences are pending.
 - Browser QA is manual rather than automated end-to-end CI.
-
-This means the next implementation branch should turn roadmap planning into a durable domain workflow before public portal and changelog work.
 
 ## Next Production Move
 
-Next branch: `feat/roadmap-now-next-later`
+Next branch: `feat/api-auth-tenancy-contract`
 
 Purpose:
 
-- Add a durable roadmap item model.
-- Let users place requests/work into Now, Next, and Later.
-- Add public/private visibility flags before portal work.
-- Add confidence and stale indicators without making timeline planning mandatory.
-- Keep roadmap useful in standalone mode with no GitHub, Jira, Linear, or AI dependency.
+- Define REST API versioning, error, validation, pagination, and optimistic concurrency policy.
+- Define actor types for owner, member, public visitor, requester, service account, and integration actor.
+- Define workspace membership and role matrix.
+- Define cross-workspace isolation rules and public/private visibility enforcement.
+- Add permission tests for representative workspace, portal, and integration actor scenarios.
 
-Changelog, portal, and integrations should build on top of this roadmap domain instead of treating roadmap lanes as static preview strings.
+Team SaaS, provider integrations, notifications, and public launch work should build on top of this trust boundary.

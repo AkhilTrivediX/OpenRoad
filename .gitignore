@@ -5,6 +5,7 @@ node_modules/
 # Build output
 dist/
 build/
+server-dist/
 .vite/
 .next/
 coverage/
@@ -16,6 +17,7 @@ vite.config.d.ts
 .env
 .env.*
 !.env.example
+.openroad/
 
 # Logs
 *.log

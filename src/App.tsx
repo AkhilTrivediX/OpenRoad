@@ -249,6 +249,8 @@ export function App() {
   const [selectedWorkItemIdByWorkspace, setSelectedWorkItemIdByWorkspace] = useState<
     Record<string, string | undefined>
   >({});
+  const [selectedRoadmapItemIdByWorkspace, setSelectedRoadmapItemIdByWorkspace] =
+    useState<Record<string, string | undefined>>({});
   const workspace = useMemo(
     () => workspaceList.find((item) => item.id === workspaceId) ?? workspaceList[0],
     [workspaceId, workspaceList]
@@ -357,6 +359,52 @@ export function App() {
         : [],
     [selectedWorkItem, workspace.requests]
   );
+  const selectedRoadmapItem = useMemo(() => {
+    const selectedRoadmapItemId = selectedRoadmapItemIdByWorkspace[workspace.id];
+    return (
+      roadmapItems.find((roadmapItem) => roadmapItem.id === selectedRoadmapItemId) ??
+      roadmapItems[0] ??
+      null
+    );
+  }, [roadmapItems, selectedRoadmapItemIdByWorkspace, workspace.id]);
+  const selectedRoadmapRequests = useMemo(
+    () =>
+      selectedRoadmapItem
+        ? selectedRoadmapItem.requestIds.flatMap((requestId) => {
+            const request = workspace.requests.find((item) => item.id === requestId);
+            return request ? [request] : [];
+          })
+        : [],
+    [selectedRoadmapItem, workspace.requests]
+  );
+  const selectedRoadmapWorkItems = useMemo(
+    () =>
+      selectedRoadmapItem
+        ? selectedRoadmapItem.workItemIds.flatMap((workItemId) => {
+            const workItem = workspace.workItems.find((item) => item.id === workItemId);
+            return workItem ? [workItem] : [];
+          })
+        : [],
+    [selectedRoadmapItem, workspace.workItems]
+  );
+  const selectedRoadmapRequestChoices = useMemo(
+    () =>
+      selectedRoadmapItem
+        ? workspace.requests.filter(
+            (request) => !selectedRoadmapItem.requestIds.includes(request.id)
+          )
+        : [],
+    [selectedRoadmapItem, workspace.requests]
+  );
+  const selectedRoadmapWorkChoices = useMemo(
+    () =>
+      selectedRoadmapItem
+        ? workspace.workItems.filter(
+            (workItem) => !selectedRoadmapItem.workItemIds.includes(workItem.id)
+          )
+        : [],
+    [selectedRoadmapItem, workspace.workItems]
+  );
 
   function updateCurrentWorkspace(updater: (workspace: Workspace) => Workspace) {
     dispatchOpenRoad({
@@ -405,6 +453,13 @@ export function App() {
       [workspace.id]: workItemId
     }));
     setWorkCommentDraft("");
+  }
+
+  function selectRoadmapItem(roadmapItemId: string | undefined) {
+    setSelectedRoadmapItemIdByWorkspace((items) => ({
+      ...items,
+      [workspace.id]: roadmapItemId
+    }));
   }
 
   function createWorkspace(event: FormEvent<HTMLFormElement>) {
@@ -697,6 +752,7 @@ export function App() {
     });
     setIsAddingRoadmapItem(false);
     setNewRoadmapDraft(emptyRoadmapDraft);
+    selectRoadmapItem(createdRoadmapItem.id);
   }
 
   function findRoadmapItem(roadmapItemId: string) {
@@ -748,11 +804,15 @@ export function App() {
   }
 
   function removeRoadmapItem(roadmapItemId: string) {
+    const nextRoadmapItem = roadmapItems.find((item) => item.id !== roadmapItemId);
     dispatchOpenRoad({
       roadmapItemId,
       type: "delete-roadmap-item",
       workspaceId: workspace.id
     });
+    if (selectedRoadmapItem?.id === roadmapItemId) {
+      selectRoadmapItem(nextRoadmapItem?.id);
+    }
   }
 
   function exportCurrentWorkspace() {
@@ -2016,203 +2076,248 @@ export function App() {
               </div>
             ) : null}
 
-            <div className="roadmap-lanes">
-              {roadmapLanes.map((lane) => (
-                <div className="lane" key={lane}>
-                  <strong>{lane}</strong>
-                  <div className="roadmap-item-list">
-                    {workspace.roadmap[lane].length ? (
-                      workspace.roadmap[lane].map((item) => {
-                        const linkedRequests = item.requestIds.flatMap((requestId) => {
-                          const request = workspace.requests.find((entry) => entry.id === requestId);
-                          return request ? [request] : [];
-                        });
-                        const linkedWorkItems = item.workItemIds.flatMap((workItemId) => {
-                          const workItem = workspace.workItems.find((entry) => entry.id === workItemId);
-                          return workItem ? [workItem] : [];
-                        });
-                        const requestChoices = workspace.requests.filter(
-                          (request) => !item.requestIds.includes(request.id)
-                        );
-                        const workChoices = workspace.workItems.filter(
-                          (workItem) => !item.workItemIds.includes(workItem.id)
-                        );
-
-                        return (
-                          <article className="roadmap-item" key={item.id}>
-                            <div className="roadmap-item-header">
-                              <h3>{item.title}</h3>
-                              <button
-                                aria-label={`Remove ${item.title} from roadmap`}
-                                className="icon-button"
-                                onClick={() => removeRoadmapItem(item.id)}
-                                type="button"
-                              >
-                                <Archive aria-hidden="true" size={14} />
-                              </button>
-                            </div>
-                            <p>{item.summary || "No public wording drafted yet."}</p>
-                            <div className="roadmap-badges" aria-label={`${item.title} roadmap state`}>
-                              <span className={`status-badge ${item.visibility === "Public" ? "success" : "neutral"}`}>
-                                {item.visibility}
+            {roadmapItemCount ? (
+              <div className="roadmap-workspace">
+                <div className="roadmap-lanes">
+                  {roadmapLanes.map((lane) => (
+                    <div className="lane" key={lane}>
+                      <strong>{lane}</strong>
+                      <div className="roadmap-item-list">
+                        {workspace.roadmap[lane].length ? (
+                          workspace.roadmap[lane].map((item) => (
+                            <button
+                              aria-label={[
+                                item.title,
+                                item.summary || "No public wording drafted yet",
+                                item.visibility,
+                                `${item.confidence} confidence`,
+                                item.isStale ? "Needs review" : null,
+                                `${item.requestIds.length} requests`,
+                                `${item.workItemIds.length} work items`
+                              ]
+                                .filter(Boolean)
+                                .join(". ")}
+                              aria-pressed={selectedRoadmapItem?.id === item.id}
+                              className={
+                                selectedRoadmapItem?.id === item.id
+                                  ? "roadmap-row selected"
+                                  : "roadmap-row"
+                              }
+                              key={item.id}
+                              onClick={() => selectRoadmapItem(item.id)}
+                              type="button"
+                            >
+                              <span className="roadmap-row-main">
+                                <strong>{item.title}</strong>
+                                <small>{item.summary || "No public wording drafted yet."}</small>
                               </span>
-                              <span className="status-badge info">{item.confidence} confidence</span>
-                              {item.isStale ? (
-                                <span className="status-badge warning">Needs review</span>
-                              ) : null}
-                            </div>
-                            <div className="roadmap-controls">
-                              <label>
-                                <span>Lane</span>
-                                <select
-                                  aria-label={`Lane for ${item.title}`}
-                                  onChange={(event) =>
-                                    updateRoadmapItem(item.id, (roadmapItem) => ({
-                                      ...roadmapItem,
-                                      lane: event.target.value as RoadmapLane
-                                    }))
-                                  }
-                                  value={item.lane}
-                                >
-                                  {roadmapLanes.map((option) => (
-                                    <option key={option} value={option}>
-                                      {option}
-                                    </option>
-                                  ))}
-                                </select>
-                              </label>
-                              <label>
-                                <span>Visibility</span>
-                                <select
-                                  aria-label={`Visibility for ${item.title}`}
-                                  onChange={(event) =>
-                                    updateRoadmapItem(item.id, (roadmapItem) => ({
-                                      ...roadmapItem,
-                                      visibility: event.target.value as RoadmapVisibility
-                                    }))
-                                  }
-                                  value={item.visibility}
-                                >
-                                  {roadmapVisibilities.map((option) => (
-                                    <option key={option} value={option}>
-                                      {option}
-                                    </option>
-                                  ))}
-                                </select>
-                              </label>
-                              <label>
-                                <span>Confidence</span>
-                                <select
-                                  aria-label={`Confidence for ${item.title}`}
-                                  onChange={(event) =>
-                                    updateRoadmapItem(item.id, (roadmapItem) => ({
-                                      ...roadmapItem,
-                                      confidence: event.target.value as RoadmapConfidence
-                                    }))
-                                  }
-                                  value={item.confidence}
-                                >
-                                  {roadmapConfidenceLevels.map((option) => (
-                                    <option key={option} value={option}>
-                                      {option}
-                                    </option>
-                                  ))}
-                                </select>
-                              </label>
-                              <label className="check-field">
-                                <input
-                                  aria-label={`Needs review for ${item.title}`}
-                                  checked={item.isStale}
-                                  onChange={(event) =>
-                                    updateRoadmapItem(item.id, (roadmapItem) => ({
-                                      ...roadmapItem,
-                                      isStale: event.target.checked
-                                    }))
-                                  }
-                                  type="checkbox"
-                                />
-                                <span>Needs review</span>
-                              </label>
-                            </div>
-                            <div className="roadmap-links">
-                              <div aria-label={`Requests linked to ${item.title}`}>
-                                <strong>Requests</strong>
-                                {linkedRequests.length ? (
-                                  linkedRequests.map((request) => (
-                                    <button
-                                      className="link-pill"
-                                      key={request.id}
-                                      onClick={() => unlinkRequestFromRoadmap(item.id, request.id)}
-                                      type="button"
-                                    >
-                                      {request.title}
-                                      <Unlink aria-hidden="true" size={12} />
-                                    </button>
-                                  ))
-                                ) : (
-                                  <span>No requests linked</span>
-                                )}
-                                {requestChoices.length ? (
-                                  <select
-                                    aria-label={`Link request to ${item.title}`}
-                                    onChange={(event) => linkRequestToRoadmap(item.id, event.target.value)}
-                                    value=""
-                                  >
-                                    <option value="">Link request</option>
-                                    {requestChoices.map((request) => (
-                                      <option key={request.id} value={request.id}>
-                                        {request.title}
-                                      </option>
-                                    ))}
-                                  </select>
+                              <span className="roadmap-row-meta" aria-hidden="true">
+                                <span className={`status-badge ${item.visibility === "Public" ? "success" : "neutral"}`}>
+                                  {item.visibility}
+                                </span>
+                                <span className="status-badge info">{item.confidence}</span>
+                                {item.isStale ? (
+                                  <span className="status-badge warning">Review</span>
                                 ) : null}
-                              </div>
-                              <div aria-label={`Work linked to ${item.title}`}>
-                                <strong>Work</strong>
-                                {linkedWorkItems.length ? (
-                                  linkedWorkItems.map((workItem) => (
-                                    <button
-                                      className="link-pill"
-                                      key={workItem.id}
-                                      onClick={() => unlinkWorkItemFromRoadmap(item.id, workItem.id)}
-                                      type="button"
-                                    >
-                                      {workItem.title}
-                                      <Unlink aria-hidden="true" size={12} />
-                                    </button>
-                                  ))
-                                ) : (
-                                  <span>No work linked</span>
-                                )}
-                                {workChoices.length ? (
-                                  <select
-                                    aria-label={`Link work to ${item.title}`}
-                                    onChange={(event) => linkWorkItemToRoadmap(item.id, event.target.value)}
-                                    value=""
-                                  >
-                                    <option value="">Link work</option>
-                                    {workChoices.map((workItem) => (
-                                      <option key={workItem.id} value={workItem.id}>
-                                        {workItem.title}
-                                      </option>
-                                    ))}
-                                  </select>
-                                ) : null}
-                              </div>
-                            </div>
-                          </article>
-                        );
-                      })
-                    ) : (
-                      <div className="lane-empty">
-                        <CircleDot aria-hidden="true" size={12} />
-                        <span>Nothing placed yet</span>
+                                <small>
+                                  {item.requestIds.length} req / {item.workItemIds.length} work
+                                </small>
+                              </span>
+                            </button>
+                          ))
+                        ) : (
+                          <div className="lane-empty">
+                            <CircleDot aria-hidden="true" size={12} />
+                            <span>Nothing placed yet</span>
+                          </div>
+                        )}
                       </div>
-                    )}
-                  </div>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
+
+                {selectedRoadmapItem ? (
+                  <aside
+                    className="roadmap-detail"
+                    aria-label={`Selected roadmap item ${selectedRoadmapItem.title}`}
+                  >
+                    <div className="roadmap-detail-header">
+                      <div>
+                        <span className="section-label">Selected roadmap item</span>
+                        <h3>{selectedRoadmapItem.title}</h3>
+                      </div>
+                      <button
+                        aria-label={`Remove ${selectedRoadmapItem.title} from roadmap`}
+                        className="icon-button"
+                        onClick={() => removeRoadmapItem(selectedRoadmapItem.id)}
+                        type="button"
+                      >
+                        <Archive aria-hidden="true" size={14} />
+                      </button>
+                    </div>
+                    <p>{selectedRoadmapItem.summary || "No public wording drafted yet."}</p>
+                    <div className="roadmap-badges" aria-label={`${selectedRoadmapItem.title} roadmap state`}>
+                      <span className={`status-badge ${selectedRoadmapItem.visibility === "Public" ? "success" : "neutral"}`}>
+                        {selectedRoadmapItem.visibility}
+                      </span>
+                      <span className="status-badge info">
+                        {selectedRoadmapItem.confidence} confidence
+                      </span>
+                      {selectedRoadmapItem.isStale ? (
+                        <span className="status-badge warning">Needs review</span>
+                      ) : null}
+                    </div>
+                    <div className="roadmap-controls">
+                      <label>
+                        <span>Lane</span>
+                        <select
+                          aria-label={`Lane for ${selectedRoadmapItem.title}`}
+                          onChange={(event) =>
+                            updateRoadmapItem(selectedRoadmapItem.id, (roadmapItem) => ({
+                              ...roadmapItem,
+                              lane: event.target.value as RoadmapLane
+                            }))
+                          }
+                          value={selectedRoadmapItem.lane}
+                        >
+                          {roadmapLanes.map((option) => (
+                            <option key={option} value={option}>
+                              {option}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label>
+                        <span>Visibility</span>
+                        <select
+                          aria-label={`Visibility for ${selectedRoadmapItem.title}`}
+                          onChange={(event) =>
+                            updateRoadmapItem(selectedRoadmapItem.id, (roadmapItem) => ({
+                              ...roadmapItem,
+                              visibility: event.target.value as RoadmapVisibility
+                            }))
+                          }
+                          value={selectedRoadmapItem.visibility}
+                        >
+                          {roadmapVisibilities.map((option) => (
+                            <option key={option} value={option}>
+                              {option}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label>
+                        <span>Confidence</span>
+                        <select
+                          aria-label={`Confidence for ${selectedRoadmapItem.title}`}
+                          onChange={(event) =>
+                            updateRoadmapItem(selectedRoadmapItem.id, (roadmapItem) => ({
+                              ...roadmapItem,
+                              confidence: event.target.value as RoadmapConfidence
+                            }))
+                          }
+                          value={selectedRoadmapItem.confidence}
+                        >
+                          {roadmapConfidenceLevels.map((option) => (
+                            <option key={option} value={option}>
+                              {option}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="check-field">
+                        <input
+                          aria-label={`Needs review for ${selectedRoadmapItem.title}`}
+                          checked={selectedRoadmapItem.isStale}
+                          onChange={(event) =>
+                            updateRoadmapItem(selectedRoadmapItem.id, (roadmapItem) => ({
+                              ...roadmapItem,
+                              isStale: event.target.checked
+                            }))
+                          }
+                          type="checkbox"
+                        />
+                        <span>Needs review</span>
+                      </label>
+                    </div>
+                    <div className="roadmap-links">
+                      <div aria-label={`Requests linked to ${selectedRoadmapItem.title}`}>
+                        <strong>Requests</strong>
+                        {selectedRoadmapRequests.length ? (
+                          selectedRoadmapRequests.map((request) => (
+                            <button
+                              className="link-pill"
+                              key={request.id}
+                              onClick={() =>
+                                unlinkRequestFromRoadmap(selectedRoadmapItem.id, request.id)
+                              }
+                              type="button"
+                            >
+                              {request.title}
+                              <Unlink aria-hidden="true" size={12} />
+                            </button>
+                          ))
+                        ) : (
+                          <span>No requests linked</span>
+                        )}
+                        {selectedRoadmapRequestChoices.length ? (
+                          <select
+                            aria-label={`Link request to ${selectedRoadmapItem.title}`}
+                            onChange={(event) =>
+                              linkRequestToRoadmap(selectedRoadmapItem.id, event.target.value)
+                            }
+                            value=""
+                          >
+                            <option value="">Link request</option>
+                            {selectedRoadmapRequestChoices.map((request) => (
+                              <option key={request.id} value={request.id}>
+                                {request.title}
+                              </option>
+                            ))}
+                          </select>
+                        ) : null}
+                      </div>
+                      <div aria-label={`Work linked to ${selectedRoadmapItem.title}`}>
+                        <strong>Work</strong>
+                        {selectedRoadmapWorkItems.length ? (
+                          selectedRoadmapWorkItems.map((workItem) => (
+                            <button
+                              className="link-pill"
+                              key={workItem.id}
+                              onClick={() =>
+                                unlinkWorkItemFromRoadmap(selectedRoadmapItem.id, workItem.id)
+                              }
+                              type="button"
+                            >
+                              {workItem.title}
+                              <Unlink aria-hidden="true" size={12} />
+                            </button>
+                          ))
+                        ) : (
+                          <span>No work linked</span>
+                        )}
+                        {selectedRoadmapWorkChoices.length ? (
+                          <select
+                            aria-label={`Link work to ${selectedRoadmapItem.title}`}
+                            onChange={(event) =>
+                              linkWorkItemToRoadmap(selectedRoadmapItem.id, event.target.value)
+                            }
+                            value=""
+                          >
+                            <option value="">Link work</option>
+                            {selectedRoadmapWorkChoices.map((workItem) => (
+                              <option key={workItem.id} value={workItem.id}>
+                                {workItem.title}
+                              </option>
+                            ))}
+                          </select>
+                        ) : null}
+                      </div>
+                    </div>
+                  </aside>
+                ) : null}
+              </div>
+            ) : null}
           </section>
 
           <section className="panel release-panel" id="changelog" aria-labelledby="changelog-title">

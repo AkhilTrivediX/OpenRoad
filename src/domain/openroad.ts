@@ -4,7 +4,9 @@ export const workStatuses = ["Backlog", "Ready", "In progress", "Done"] as const
 export const roadmapLanes = ["Now", "Next", "Later"] as const;
 export const roadmapVisibilities = ["Private", "Public"] as const;
 export const roadmapConfidenceLevels = ["Low", "Medium", "High"] as const;
-export const openRoadSchemaVersion = 2;
+export const changelogStates = ["Draft", "Ready"] as const;
+export const changelogVisibilities = ["Private", "Public"] as const;
+export const openRoadSchemaVersion = 3;
 export const openRoadStorageKey = "openroad:state:v1";
 export const openRoadSelectedWorkspaceKey = "openroad:selected-workspace:v1";
 
@@ -14,6 +16,8 @@ export type WorkStatus = (typeof workStatuses)[number];
 export type RoadmapLane = (typeof roadmapLanes)[number];
 export type RoadmapVisibility = (typeof roadmapVisibilities)[number];
 export type RoadmapConfidence = (typeof roadmapConfidenceLevels)[number];
+export type ChangelogState = (typeof changelogStates)[number];
+export type ChangelogVisibility = (typeof changelogVisibilities)[number];
 
 export type OpenRoadState = {
   schemaVersion: typeof openRoadSchemaVersion;
@@ -106,9 +110,19 @@ export type MergedRequestSource = {
 };
 
 export type ChangelogItem = {
+  id: string;
   title: string;
-  state: "Draft" | "Ready";
-  detail: string;
+  state: ChangelogState;
+  visibility: ChangelogVisibility;
+  publicSummary: string;
+  privateNotes: string;
+  sourceType: "Manual" | "Roadmap" | "Work";
+  sourceId: string;
+  requestIds: string[];
+  roadmapItemIds: string[];
+  workItemIds: string[];
+  createdAt: string;
+  updatedAt: string;
 };
 
 export type IntegrationChip = {
@@ -131,6 +145,9 @@ export type OpenRoadAction =
   | { type: "create-roadmap-item"; roadmapItem: RoadmapItem; workspaceId: string }
   | { type: "replace-roadmap-item"; roadmapItem: RoadmapItem; workspaceId: string }
   | { type: "delete-roadmap-item"; roadmapItemId: string; workspaceId: string }
+  | { type: "create-changelog-item"; changelogItem: ChangelogItem; workspaceId: string }
+  | { type: "replace-changelog-item"; changelogItem: ChangelogItem; workspaceId: string }
+  | { type: "delete-changelog-item"; changelogItemId: string; workspaceId: string }
   | { type: "replace-workspace"; workspace: Workspace }
   | { type: "replace-state"; state: OpenRoadState };
 
@@ -161,6 +178,40 @@ function seedRoadmapItem(
     updatedAt: "seed",
     visibility: roadmapItem.visibility ?? "Private",
     workItemIds: roadmapItem.workItemIds ?? []
+  };
+}
+
+function seedChangelogItem(
+  changelogItem: Pick<
+    ChangelogItem,
+    "id" | "title" | "state" | "visibility" | "publicSummary"
+  > &
+    Partial<
+      Pick<
+        ChangelogItem,
+        | "privateNotes"
+        | "sourceType"
+        | "sourceId"
+        | "requestIds"
+        | "roadmapItemIds"
+        | "workItemIds"
+      >
+    >
+): ChangelogItem {
+  return {
+    createdAt: "seed",
+    id: changelogItem.id,
+    privateNotes: changelogItem.privateNotes ?? "",
+    publicSummary: changelogItem.publicSummary,
+    requestIds: changelogItem.requestIds ?? [],
+    roadmapItemIds: changelogItem.roadmapItemIds ?? [],
+    sourceId: changelogItem.sourceId ?? "",
+    sourceType: changelogItem.sourceType ?? "Manual",
+    state: changelogItem.state,
+    title: changelogItem.title,
+    updatedAt: "seed",
+    visibility: changelogItem.visibility,
+    workItemIds: changelogItem.workItemIds ?? []
   };
 }
 
@@ -308,16 +359,25 @@ export const initialWorkspaces: Workspace[] = [
       ]
     },
     changelog: [
-      {
-        title: "Inline markdown in comments",
+      seedChangelogItem({
+        id: "changelog-inline-markdown-comments",
+        publicSummary:
+          "Comments now keep lightweight markdown readable when teams collect release evidence.",
+        requestIds: ["api-rate-limit-visibility"],
         state: "Ready",
-        detail: "Linked to 18 requesters"
-      },
-      {
-        title: "Email digest improvements",
+        title: "Inline markdown in comments",
+        visibility: "Public"
+      }),
+      seedChangelogItem({
+        id: "changelog-email-digest-improvements",
+        privateNotes: "Needs customer-facing wording before it can be published.",
+        publicSummary:
+          "A clearer account digest is being prepared for teams that review feedback weekly.",
+        requestIds: ["bulk-export-csv"],
         state: "Draft",
-        detail: "Needs public wording"
-      }
+        title: "Email digest improvements",
+        visibility: "Private"
+      })
     ],
     integrations: integrationChips
   },
@@ -414,11 +474,16 @@ export const initialWorkspaces: Workspace[] = [
       ]
     },
     changelog: [
-      {
-        title: "New maintainer queue",
+      seedChangelogItem({
+        id: "changelog-new-maintainer-queue",
+        privateNotes: "Standalone work item",
+        publicSummary:
+          "Maintainers can now keep contributor requests moving without an external tracker.",
+        requestIds: ["contributor-guide-checklist"],
         state: "Draft",
-        detail: "Standalone work item"
-      }
+        title: "New maintainer queue",
+        visibility: "Private"
+      })
     ],
     integrations: integrationChips
   }
@@ -491,6 +556,33 @@ export function openRoadReducer(state: OpenRoadState, action: OpenRoadAction): O
     return updateWorkspaceById(state, action.workspaceId, (workspace) =>
       removeRoadmapItemFromWorkspace(workspace, action.roadmapItemId)
     );
+  }
+
+  if (action.type === "create-changelog-item") {
+    return updateWorkspaceById(state, action.workspaceId, (workspace) => ({
+      ...workspace,
+      changelog: [cloneValue(action.changelogItem), ...workspace.changelog]
+    }));
+  }
+
+  if (action.type === "replace-changelog-item") {
+    return updateWorkspaceById(state, action.workspaceId, (workspace) => ({
+      ...workspace,
+      changelog: workspace.changelog.map((changelogItem) =>
+        changelogItem.id === action.changelogItem.id
+          ? cloneValue(action.changelogItem)
+          : changelogItem
+      )
+    }));
+  }
+
+  if (action.type === "delete-changelog-item") {
+    return updateWorkspaceById(state, action.workspaceId, (workspace) => ({
+      ...workspace,
+      changelog: workspace.changelog.filter(
+        (changelogItem) => changelogItem.id !== action.changelogItemId
+      )
+    }));
   }
 
   if (action.type === "replace-workspace") {
@@ -697,6 +789,7 @@ export function migrateOpenRoadState(value: unknown): OpenRoadState {
 
   if (
     (value.schemaVersion === 1 ||
+      value.schemaVersion === 2 ||
       value.schemaVersion === 0 ||
       value.schemaVersion === undefined) &&
     Array.isArray(value.workspaces)
@@ -721,6 +814,7 @@ function migrateWorkspaceFromPreviousSchema(value: unknown): Workspace {
 
   const migrated = {
     ...value,
+    changelog: migrateChangelogFromPreviousSchema(value.changelog),
     roadmap: migrateRoadmapFromPreviousSchema(value.roadmap),
     workItems: Array.isArray(value.workItems) ? value.workItems : []
   };
@@ -775,6 +869,53 @@ function roadmapItemFromLegacyTitle(
   };
 }
 
+function migrateChangelogFromPreviousSchema(value: unknown): ChangelogItem[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.map((item, index) => {
+    if (isChangelogItem(item)) return cloneValue(item);
+    if (
+      isRecord(item) &&
+      typeof item.title === "string" &&
+      changelogStates.includes(item.state as ChangelogState) &&
+      typeof item.detail === "string"
+    ) {
+      return changelogItemFromLegacyPreview(
+        {
+          detail: item.detail,
+          state: item.state as ChangelogState,
+          title: item.title
+        },
+        index
+      );
+    }
+    throw new Error("Saved OpenRoad changelog item cannot be migrated.");
+  });
+}
+
+function changelogItemFromLegacyPreview(
+  item: { detail: string; state: ChangelogState; title: string },
+  index: number
+): ChangelogItem {
+  return {
+    createdAt: "migrated",
+    id: `changelog-${index}-${slugify(item.title)}`,
+    privateNotes: item.detail,
+    publicSummary: item.title,
+    requestIds: [],
+    roadmapItemIds: [],
+    sourceId: "",
+    sourceType: "Manual",
+    state: item.state,
+    title: item.title,
+    updatedAt: "migrated",
+    visibility: "Private",
+    workItemIds: []
+  };
+}
+
 function isWorkspace(value: unknown): value is Workspace {
   return (
     isRecord(value) &&
@@ -794,6 +935,7 @@ function isWorkspace(value: unknown): value is Workspace {
     Array.isArray(value.roadmap.Later) &&
     value.roadmap.Later.every(isRoadmapItem) &&
     Array.isArray(value.changelog) &&
+    value.changelog.every(isChangelogItem) &&
     Array.isArray(value.integrations)
   );
 }
@@ -845,6 +987,30 @@ function isRoadmapItem(value: unknown): value is RoadmapItem {
     typeof value.isStale === "boolean" &&
     Array.isArray(value.requestIds) &&
     value.requestIds.every((requestId) => typeof requestId === "string") &&
+    Array.isArray(value.workItemIds) &&
+    value.workItemIds.every((workItemId) => typeof workItemId === "string") &&
+    typeof value.createdAt === "string" &&
+    typeof value.updatedAt === "string"
+  );
+}
+
+function isChangelogItem(value: unknown): value is ChangelogItem {
+  return (
+    isRecord(value) &&
+    typeof value.id === "string" &&
+    typeof value.title === "string" &&
+    changelogStates.includes(value.state as ChangelogState) &&
+    changelogVisibilities.includes(value.visibility as ChangelogVisibility) &&
+    typeof value.publicSummary === "string" &&
+    typeof value.privateNotes === "string" &&
+    (value.sourceType === "Manual" ||
+      value.sourceType === "Roadmap" ||
+      value.sourceType === "Work") &&
+    typeof value.sourceId === "string" &&
+    Array.isArray(value.requestIds) &&
+    value.requestIds.every((requestId) => typeof requestId === "string") &&
+    Array.isArray(value.roadmapItemIds) &&
+    value.roadmapItemIds.every((roadmapItemId) => typeof roadmapItemId === "string") &&
     Array.isArray(value.workItemIds) &&
     value.workItemIds.every((workItemId) => typeof workItemId === "string") &&
     typeof value.createdAt === "string" &&

@@ -28,6 +28,8 @@ import {
 import { type FormEvent, useEffect, useMemo, useReducer, useState } from "react";
 import {
   clearOpenRoadState,
+  changelogStates,
+  changelogVisibilities,
   createEntityId,
   createInitialOpenRoadState,
   exportWorkspace,
@@ -46,6 +48,8 @@ import {
   saveSelectedWorkspaceId,
   workStatuses,
   type ChangelogItem,
+  type ChangelogState,
+  type ChangelogVisibility,
   type MergedRequestSource,
   type OpenRoadState,
   type RoadmapConfidence,
@@ -107,6 +111,31 @@ type RoadmapDraft = {
   workItemId: string;
 };
 
+type ChangelogDraft = {
+  privateNotes: string;
+  publicSummary: string;
+  requestIds: string[];
+  roadmapItemIds: string[];
+  sourceKey: string;
+  sourceType: ChangelogItem["sourceType"];
+  state: ChangelogState;
+  title: string;
+  visibility: ChangelogVisibility;
+  workItemIds: string[];
+};
+
+type ChangelogSourceChoice = {
+  label: string;
+  privateNotes: string;
+  publicSummary: string;
+  requestIds: string[];
+  roadmapItemIds: string[];
+  sourceKey: string;
+  sourceType: ChangelogItem["sourceType"];
+  title: string;
+  workItemIds: string[];
+};
+
 const emptyRequestDraft: RequestDraft = {
   title: "",
   description: "",
@@ -133,6 +162,19 @@ const emptyRoadmapDraft: RoadmapDraft = {
   title: "",
   visibility: "Private",
   workItemId: ""
+};
+
+const emptyChangelogDraft: ChangelogDraft = {
+  privateNotes: "",
+  publicSummary: "",
+  requestIds: [],
+  roadmapItemIds: [],
+  sourceKey: "manual",
+  sourceType: "Manual",
+  state: "Draft",
+  title: "",
+  visibility: "Private",
+  workItemIds: []
 };
 
 const baseNavItems: NavItem[] = [
@@ -236,6 +278,9 @@ export function App() {
   const [isAddingRoadmapItem, setIsAddingRoadmapItem] = useState(false);
   const [newRoadmapDraft, setNewRoadmapDraft] =
     useState<RoadmapDraft>(emptyRoadmapDraft);
+  const [isAddingChangelogItem, setIsAddingChangelogItem] = useState(false);
+  const [newChangelogDraft, setNewChangelogDraft] =
+    useState<ChangelogDraft>(emptyChangelogDraft);
   const [requestQuery, setRequestQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<RequestStatusFilter>("All");
   const [archiveFilter, setArchiveFilter] = useState<RequestArchiveFilter>("active");
@@ -250,6 +295,8 @@ export function App() {
     Record<string, string | undefined>
   >({});
   const [selectedRoadmapItemIdByWorkspace, setSelectedRoadmapItemIdByWorkspace] =
+    useState<Record<string, string | undefined>>({});
+  const [selectedChangelogItemIdByWorkspace, setSelectedChangelogItemIdByWorkspace] =
     useState<Record<string, string | undefined>>({});
   const workspace = useMemo(
     () => workspaceList.find((item) => item.id === workspaceId) ?? workspaceList[0],
@@ -405,6 +452,82 @@ export function App() {
         : [],
     [selectedRoadmapItem, workspace.workItems]
   );
+  const changelogSourceChoices = useMemo<ChangelogSourceChoice[]>(() => {
+    const manualChoice: ChangelogSourceChoice = {
+      label: "Manual draft",
+      privateNotes: "",
+      publicSummary: "",
+      requestIds: [],
+      roadmapItemIds: [],
+      sourceKey: "manual",
+      sourceType: "Manual",
+      title: "",
+      workItemIds: []
+    };
+    const workChoices = workspace.workItems
+      .filter((workItem) => workItem.status === "Done")
+      .map((workItem) => ({
+        label: `Done work: ${workItem.title}`,
+        privateNotes: [
+          `Source: ${workItem.title}`,
+          workItem.owner !== "Unassigned" ? `Owner: ${workItem.owner}` : null,
+          workItem.targetDate ? `Target date: ${workItem.targetDate}` : null
+        ]
+          .filter(Boolean)
+          .join(". "),
+        publicSummary: workItem.description || `${workItem.title} is now available.`,
+        requestIds: [...workItem.requestIds],
+        roadmapItemIds: [],
+        sourceKey: `work:${workItem.id}`,
+        sourceType: "Work" as const,
+        title: workItem.title,
+        workItemIds: [workItem.id]
+      }));
+    const roadmapChoices = roadmapItems.map((roadmapItem) => ({
+      label: `Roadmap: ${roadmapItem.title}`,
+      privateNotes: [
+        `Roadmap lane: ${roadmapItem.lane}`,
+        `Visibility: ${roadmapItem.visibility}`,
+        `${roadmapItem.confidence} confidence`
+      ].join(". "),
+      publicSummary: roadmapItem.summary || `${roadmapItem.title} is moving forward.`,
+      requestIds: [...roadmapItem.requestIds],
+      roadmapItemIds: [roadmapItem.id],
+      sourceKey: `roadmap:${roadmapItem.id}`,
+      sourceType: "Roadmap" as const,
+      title: roadmapItem.title,
+      workItemIds: [...roadmapItem.workItemIds]
+    }));
+
+    return [manualChoice, ...workChoices, ...roadmapChoices];
+  }, [roadmapItems, workspace.workItems]);
+  const selectedChangelogItem = useMemo(() => {
+    const selectedChangelogItemId = selectedChangelogItemIdByWorkspace[workspace.id];
+    return (
+      workspace.changelog.find((changelogItem) => changelogItem.id === selectedChangelogItemId) ??
+      workspace.changelog[0] ??
+      null
+    );
+  }, [selectedChangelogItemIdByWorkspace, workspace.changelog, workspace.id]);
+  const selectedChangelogRequests = useMemo(
+    () =>
+      selectedChangelogItem
+        ? selectedChangelogItem.requestIds.flatMap((requestId) => {
+            const request = workspace.requests.find((item) => item.id === requestId);
+            return request ? [request] : [];
+          })
+        : [],
+    [selectedChangelogItem, workspace.requests]
+  );
+  const selectedChangelogRequestChoices = useMemo(
+    () =>
+      selectedChangelogItem
+        ? workspace.requests.filter(
+            (request) => !selectedChangelogItem.requestIds.includes(request.id)
+          )
+        : [],
+    [selectedChangelogItem, workspace.requests]
+  );
 
   function updateCurrentWorkspace(updater: (workspace: Workspace) => Workspace) {
     dispatchOpenRoad({
@@ -462,6 +585,35 @@ export function App() {
     }));
   }
 
+  function selectChangelogItem(changelogItemId: string | undefined) {
+    setSelectedChangelogItemIdByWorkspace((items) => ({
+      ...items,
+      [workspace.id]: changelogItemId
+    }));
+  }
+
+  function getChangelogSourceChoice(sourceKey: string) {
+    return (
+      changelogSourceChoices.find((choice) => choice.sourceKey === sourceKey) ??
+      changelogSourceChoices[0]
+    );
+  }
+
+  function applyChangelogSource(sourceKey: string) {
+    const sourceChoice = getChangelogSourceChoice(sourceKey);
+    setNewChangelogDraft((draft) => ({
+      ...draft,
+      privateNotes: sourceChoice.privateNotes,
+      publicSummary: sourceChoice.publicSummary,
+      requestIds: sourceChoice.requestIds,
+      roadmapItemIds: sourceChoice.roadmapItemIds,
+      sourceKey: sourceChoice.sourceKey,
+      sourceType: sourceChoice.sourceType,
+      title: sourceChoice.title,
+      workItemIds: sourceChoice.workItemIds
+    }));
+  }
+
   function createWorkspace(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const name = newWorkspaceName.trim();
@@ -490,8 +642,10 @@ export function App() {
     setIsAddingRequest(false);
     setIsAddingWorkItem(false);
     setIsAddingRoadmapItem(false);
+    setIsAddingChangelogItem(false);
     setNewWorkDraft(emptyWorkDraft);
     setNewRoadmapDraft(emptyRoadmapDraft);
+    setNewChangelogDraft(emptyChangelogDraft);
     setWorkCommentDraft("");
     resetRequestFilters();
   }
@@ -815,6 +969,97 @@ export function App() {
     }
   }
 
+  function startChangelogItem() {
+    setIsAddingChangelogItem(true);
+    setNewChangelogDraft(emptyChangelogDraft);
+  }
+
+  function addChangelogItem(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const title = newChangelogDraft.title.trim();
+    if (!title) return;
+
+    const sourceId =
+      newChangelogDraft.sourceKey === "manual"
+        ? ""
+        : newChangelogDraft.sourceKey.split(":").slice(1).join(":");
+    const createdChangelogItem: ChangelogItem = {
+      createdAt: "just now",
+      id: createEntityId("changelog"),
+      privateNotes: newChangelogDraft.privateNotes.trim(),
+      publicSummary: newChangelogDraft.publicSummary.trim(),
+      requestIds: Array.from(new Set(newChangelogDraft.requestIds)),
+      roadmapItemIds: Array.from(new Set(newChangelogDraft.roadmapItemIds)),
+      sourceId,
+      sourceType: newChangelogDraft.sourceType,
+      state: newChangelogDraft.state,
+      title,
+      updatedAt: "just now",
+      visibility: newChangelogDraft.visibility,
+      workItemIds: Array.from(new Set(newChangelogDraft.workItemIds))
+    };
+
+    dispatchOpenRoad({
+      changelogItem: createdChangelogItem,
+      type: "create-changelog-item",
+      workspaceId: workspace.id
+    });
+    setIsAddingChangelogItem(false);
+    setNewChangelogDraft(emptyChangelogDraft);
+    selectChangelogItem(createdChangelogItem.id);
+  }
+
+  function updateChangelogItem(
+    changelogItemId: string,
+    updater: (changelogItem: ChangelogItem) => ChangelogItem
+  ) {
+    const changelogItem = workspace.changelog.find((item) => item.id === changelogItemId);
+    if (!changelogItem) return;
+
+    dispatchOpenRoad({
+      changelogItem: updater({ ...changelogItem, updatedAt: "just now" }),
+      type: "replace-changelog-item",
+      workspaceId: workspace.id
+    });
+  }
+
+  function linkRequestToChangelog(changelogItemId: string, requestId: string) {
+    if (!requestId) return;
+    updateChangelogItem(changelogItemId, (changelogItem) => ({
+      ...changelogItem,
+      requestIds: Array.from(new Set([...changelogItem.requestIds, requestId]))
+    }));
+  }
+
+  function unlinkRequestFromChangelog(changelogItemId: string, requestId: string) {
+    updateChangelogItem(changelogItemId, (changelogItem) => ({
+      ...changelogItem,
+      requestIds: changelogItem.requestIds.filter((item) => item !== requestId)
+    }));
+  }
+
+  function removeChangelogItem(changelogItemId: string) {
+    const nextChangelogItem = workspace.changelog.find((item) => item.id !== changelogItemId);
+    dispatchOpenRoad({
+      changelogItemId,
+      type: "delete-changelog-item",
+      workspaceId: workspace.id
+    });
+    if (selectedChangelogItem?.id === changelogItemId) {
+      selectChangelogItem(nextChangelogItem?.id);
+    }
+  }
+
+  function changelogSourceLabel(changelogItem: ChangelogItem) {
+    if (changelogItem.sourceType === "Manual") return "Manual draft";
+    if (changelogItem.sourceType === "Work") {
+      const workItem = workspace.workItems.find((item) => item.id === changelogItem.sourceId);
+      return workItem ? `Work: ${workItem.title}` : "Work source removed";
+    }
+    const roadmapItem = roadmapItems.find((item) => item.id === changelogItem.sourceId);
+    return roadmapItem ? `Roadmap: ${roadmapItem.title}` : "Roadmap source removed";
+  }
+
   function exportCurrentWorkspace() {
     setExportPreview(exportWorkspace(workspace));
     setPersistenceMessage("Workspace export is ready.");
@@ -834,6 +1079,8 @@ export function App() {
       setImportDraft("");
       setExportPreview("");
       setPersistenceMessage(`Imported ${importedWorkspace.name}.`);
+      setIsAddingChangelogItem(false);
+      setNewChangelogDraft(emptyChangelogDraft);
       resetRequestFilters();
     } catch (error) {
       setPersistenceMessage(
@@ -854,7 +1101,9 @@ export function App() {
     setIsAddingRequest(false);
     setIsAddingWorkItem(false);
     setIsAddingRoadmapItem(false);
+    setIsAddingChangelogItem(false);
     setNewRoadmapDraft(emptyRoadmapDraft);
+    setNewChangelogDraft(emptyChangelogDraft);
     resetRequestFilters();
   }
 
@@ -908,8 +1157,10 @@ export function App() {
                 setIsAddingRequest(false);
                 setIsAddingWorkItem(false);
                 setIsAddingRoadmapItem(false);
+                setIsAddingChangelogItem(false);
                 setCommentDraft("");
                 setWorkCommentDraft("");
+                setNewChangelogDraft(emptyChangelogDraft);
               }}
               value={workspaceId}
             >
@@ -2326,26 +2577,343 @@ export function App() {
                 <span className="section-label">Changelog</span>
                 <h2 id="changelog-title">Draft queue</h2>
               </div>
-              <a href="#changelog">Open Changelog</a>
+              <div className="panel-actions">
+                <span className="status-badge neutral">
+                  {workspace.changelog.length} {workspace.changelog.length === 1 ? "draft" : "drafts"}
+                </span>
+                {!isAddingChangelogItem ? (
+                  <button className="secondary-action compact" onClick={startChangelogItem} type="button">
+                    <Plus aria-hidden="true" size={14} />
+                    New changelog draft
+                  </button>
+                ) : null}
+              </div>
             </div>
-            <div className="changelog-list">
-              {workspace.changelog.length ? (
-                workspace.changelog.map((item) => (
-                  <article className="changelog-item" key={item.title}>
-                    <span className={`status-badge ${statusTone(item.state)}`}>
-                      {item.state}
-                    </span>
-                    <strong>{item.title}</strong>
-                    <small>{item.detail}</small>
-                  </article>
-                ))
-              ) : (
-                <div className="empty-state compact-empty">
-                  <strong>No changelog drafts</strong>
-                  <p>Draft updates from shipped roadmap items when work starts landing.</p>
+
+            {isAddingChangelogItem ? (
+              <form className="changelog-form" aria-label="Create changelog draft" onSubmit={addChangelogItem}>
+                <label className="wide-field">
+                  <span>Source</span>
+                  <select
+                    aria-label="Changelog source"
+                    onChange={(event) => applyChangelogSource(event.target.value)}
+                    value={newChangelogDraft.sourceKey}
+                  >
+                    {changelogSourceChoices.map((sourceChoice) => (
+                      <option key={sourceChoice.sourceKey} value={sourceChoice.sourceKey}>
+                        {sourceChoice.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  <span>Title</span>
+                  <input
+                    aria-label="Changelog title"
+                    onChange={(event) =>
+                      setNewChangelogDraft((draft) => ({ ...draft, title: event.target.value }))
+                    }
+                    value={newChangelogDraft.title}
+                  />
+                </label>
+                <label>
+                  <span>Visibility</span>
+                  <select
+                    aria-label="Changelog visibility"
+                    onChange={(event) =>
+                      setNewChangelogDraft((draft) => ({
+                        ...draft,
+                        visibility: event.target.value as ChangelogVisibility
+                      }))
+                    }
+                    value={newChangelogDraft.visibility}
+                  >
+                    {changelogVisibilities.map((visibility) => (
+                      <option key={visibility} value={visibility}>
+                        {visibility}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="wide-field">
+                  <span>Public wording</span>
+                  <textarea
+                    aria-label="Public wording"
+                    onChange={(event) =>
+                      setNewChangelogDraft((draft) => ({
+                        ...draft,
+                        publicSummary: event.target.value
+                      }))
+                    }
+                    value={newChangelogDraft.publicSummary}
+                  />
+                </label>
+                <label className="wide-field">
+                  <span>Private notes</span>
+                  <textarea
+                    aria-label="Private notes"
+                    onChange={(event) =>
+                      setNewChangelogDraft((draft) => ({
+                        ...draft,
+                        privateNotes: event.target.value
+                      }))
+                    }
+                    value={newChangelogDraft.privateNotes}
+                  />
+                </label>
+                <label>
+                  <span>State</span>
+                  <select
+                    aria-label="Changelog state"
+                    onChange={(event) =>
+                      setNewChangelogDraft((draft) => ({
+                        ...draft,
+                        state: event.target.value as ChangelogState
+                      }))
+                    }
+                    value={newChangelogDraft.state}
+                  >
+                    {changelogStates.map((state) => (
+                      <option key={state} value={state}>
+                        {state}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <div className="composer-actions">
+                  <button className="primary-action" type="submit">
+                    Create changelog draft
+                  </button>
+                  <button
+                    className="secondary-action"
+                    onClick={() => {
+                      setIsAddingChangelogItem(false);
+                      setNewChangelogDraft(emptyChangelogDraft);
+                    }}
+                    type="button"
+                  >
+                    Cancel
+                  </button>
                 </div>
-              )}
-            </div>
+              </form>
+            ) : null}
+
+            {workspace.changelog.length === 0 && !isAddingChangelogItem ? (
+              <div className="empty-state compact-empty">
+                <strong>No changelog drafts</strong>
+                <p>Draft updates from shipped work or roadmap items when there is something to announce.</p>
+                <button className="primary-action" onClick={startChangelogItem} type="button">
+                  <Plus aria-hidden="true" size={16} />
+                  New changelog draft
+                </button>
+              </div>
+            ) : null}
+
+            {workspace.changelog.length ? (
+              <div className="changelog-workspace">
+                <div className="changelog-list" aria-label="Changelog drafts">
+                  {workspace.changelog.map((item) => (
+                    <button
+                      aria-label={[
+                        item.title,
+                        item.state,
+                        item.visibility,
+                        changelogSourceLabel(item),
+                        `${item.requestIds.length} linked requests`
+                      ].join(". ")}
+                      aria-pressed={selectedChangelogItem?.id === item.id}
+                      className={
+                        selectedChangelogItem?.id === item.id
+                          ? "changelog-row selected"
+                          : "changelog-row"
+                      }
+                      key={item.id}
+                      onClick={() => selectChangelogItem(item.id)}
+                      type="button"
+                    >
+                      <span className="changelog-row-main">
+                        <strong>{item.title}</strong>
+                        <small>{item.publicSummary || "No public wording drafted yet."}</small>
+                      </span>
+                      <span className="changelog-row-meta" aria-hidden="true">
+                        <span className={`status-badge ${statusTone(item.state)}`}>
+                          {item.state}
+                        </span>
+                        <span className={`status-badge ${item.visibility === "Public" ? "success" : "neutral"}`}>
+                          {item.visibility}
+                        </span>
+                        <small>{item.requestIds.length} request links</small>
+                      </span>
+                    </button>
+                  ))}
+                </div>
+
+                {selectedChangelogItem ? (
+                  <aside
+                    className="changelog-detail"
+                    aria-label={`Selected changelog draft ${selectedChangelogItem.title}`}
+                  >
+                    <div className="changelog-detail-header">
+                      <div>
+                        <span className="section-label">Selected changelog draft</span>
+                        <h3>{selectedChangelogItem.title}</h3>
+                      </div>
+                      <button
+                        aria-label={`Remove ${selectedChangelogItem.title} from changelog`}
+                        className="icon-button"
+                        onClick={() => removeChangelogItem(selectedChangelogItem.id)}
+                        type="button"
+                      >
+                        <Archive aria-hidden="true" size={14} />
+                      </button>
+                    </div>
+
+                    <div className="changelog-badges">
+                      <span className={`status-badge ${statusTone(selectedChangelogItem.state)}`}>
+                        {selectedChangelogItem.state}
+                      </span>
+                      <span className={`status-badge ${selectedChangelogItem.visibility === "Public" ? "success" : "neutral"}`}>
+                        {selectedChangelogItem.visibility}
+                      </span>
+                      <span className="status-badge info">
+                        {changelogSourceLabel(selectedChangelogItem)}
+                      </span>
+                    </div>
+
+                    <div className="changelog-editor">
+                      <label className="wide-field">
+                        <span>Title</span>
+                        <input
+                          aria-label={`Title for ${selectedChangelogItem.title}`}
+                          onChange={(event) =>
+                            updateChangelogItem(selectedChangelogItem.id, (changelogItem) => ({
+                              ...changelogItem,
+                              title: event.target.value
+                            }))
+                          }
+                          value={selectedChangelogItem.title}
+                        />
+                      </label>
+                      <label>
+                        <span>State</span>
+                        <select
+                          aria-label={`State for ${selectedChangelogItem.title}`}
+                          onChange={(event) =>
+                            updateChangelogItem(selectedChangelogItem.id, (changelogItem) => ({
+                              ...changelogItem,
+                              state: event.target.value as ChangelogState
+                            }))
+                          }
+                          value={selectedChangelogItem.state}
+                        >
+                          {changelogStates.map((state) => (
+                            <option key={state} value={state}>
+                              {state}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label>
+                        <span>Visibility</span>
+                        <select
+                          aria-label={`Visibility for ${selectedChangelogItem.title}`}
+                          onChange={(event) =>
+                            updateChangelogItem(selectedChangelogItem.id, (changelogItem) => ({
+                              ...changelogItem,
+                              visibility: event.target.value as ChangelogVisibility
+                            }))
+                          }
+                          value={selectedChangelogItem.visibility}
+                        >
+                          {changelogVisibilities.map((visibility) => (
+                            <option key={visibility} value={visibility}>
+                              {visibility}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="wide-field">
+                        <span>Public wording</span>
+                        <textarea
+                          aria-label={`Public wording for ${selectedChangelogItem.title}`}
+                          onChange={(event) =>
+                            updateChangelogItem(selectedChangelogItem.id, (changelogItem) => ({
+                              ...changelogItem,
+                              publicSummary: event.target.value
+                            }))
+                          }
+                          value={selectedChangelogItem.publicSummary}
+                        />
+                      </label>
+                      <label className="wide-field">
+                        <span>Private notes</span>
+                        <textarea
+                          aria-label={`Private notes for ${selectedChangelogItem.title}`}
+                          onChange={(event) =>
+                            updateChangelogItem(selectedChangelogItem.id, (changelogItem) => ({
+                              ...changelogItem,
+                              privateNotes: event.target.value
+                            }))
+                          }
+                          value={selectedChangelogItem.privateNotes}
+                        />
+                      </label>
+                    </div>
+
+                    <div className="changelog-links" aria-label={`Requests linked to ${selectedChangelogItem.title}`}>
+                      <strong>Requesters to notify later</strong>
+                      {selectedChangelogRequests.length ? (
+                        selectedChangelogRequests.map((request) => (
+                          <button
+                            className="link-pill"
+                            key={request.id}
+                            onClick={() =>
+                              unlinkRequestFromChangelog(selectedChangelogItem.id, request.id)
+                            }
+                            type="button"
+                          >
+                            {request.title}
+                            <Unlink aria-hidden="true" size={12} />
+                          </button>
+                        ))
+                      ) : (
+                        <span>No requesters linked</span>
+                      )}
+                      {selectedChangelogRequestChoices.length ? (
+                        <select
+                          aria-label={`Link request to ${selectedChangelogItem.title}`}
+                          onChange={(event) =>
+                            linkRequestToChangelog(selectedChangelogItem.id, event.target.value)
+                          }
+                          value=""
+                        >
+                          <option value="">Link request</option>
+                          {selectedChangelogRequestChoices.map((request) => (
+                            <option key={request.id} value={request.id}>
+                              {request.title}
+                            </option>
+                          ))}
+                        </select>
+                      ) : null}
+                    </div>
+
+                    <section
+                      className="public-preview"
+                      aria-label={`Public preview for ${selectedChangelogItem.title}`}
+                    >
+                      <span className="section-label">Public preview</span>
+                      <strong>{selectedChangelogItem.title}</strong>
+                      <p>{selectedChangelogItem.publicSummary || "No public wording drafted yet."}</p>
+                      <small>
+                        {selectedChangelogItem.visibility === "Public"
+                          ? "Visible to public surfaces when portal publishing exists."
+                          : "Private draft; hidden from public surfaces."}
+                      </small>
+                    </section>
+                  </aside>
+                ) : null}
+              </div>
+            ) : null}
           </section>
 
           <section className="panel settings-panel" id="settings" aria-labelledby="settings-title">

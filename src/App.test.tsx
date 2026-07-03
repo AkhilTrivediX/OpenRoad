@@ -168,7 +168,11 @@ describe("OpenRoad workspace shell", () => {
       )
     ).toBeInTheDocument();
     expect(screen.getByText("Draft queue")).toBeInTheDocument();
-    expect(screen.getByText("Inline markdown in comments")).toBeInTheDocument();
+    expect(
+      within(screen.getByLabelText("Changelog drafts")).getByRole("button", {
+        name: /Inline markdown in comments/
+      })
+    ).toBeInTheDocument();
   });
 
   it("keeps roadmap rows scannable and edits only the selected item", async () => {
@@ -278,6 +282,114 @@ describe("OpenRoad workspace shell", () => {
 
     expect(screen.getByLabelText("Requests linked to Evidence-led launch")).toHaveTextContent(
       "No requests linked"
+    );
+  });
+
+  it("creates a manual changelog draft and keeps private notes out of public preview", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole("button", { name: "New workspace" }));
+    await user.type(screen.getByLabelText("Workspace name"), "Release Desk");
+    await user.click(screen.getByRole("button", { name: "Create workspace" }));
+
+    const changelog = screen.getByRole("region", { name: "Draft queue" });
+    expect(within(changelog).getByText("No changelog drafts")).toBeInTheDocument();
+
+    await user.click(within(changelog).getAllByRole("button", { name: "New changelog draft" })[0]);
+    const form = screen.getByRole("form", { name: "Create changelog draft" });
+    await user.type(within(form).getByLabelText("Changelog title"), "July release");
+    await user.type(within(form).getByLabelText("Public wording"), "We shipped a calmer release flow.");
+    await user.type(within(form).getByLabelText("Private notes"), "Internal rollout key stays here.");
+    await user.click(screen.getByRole("button", { name: "Create changelog draft" }));
+
+    const selectedDetail = screen.getByRole("complementary", {
+      name: "Selected changelog draft July release"
+    });
+    expect(within(selectedDetail).getByLabelText("Visibility for July release")).toHaveValue(
+      "Private"
+    );
+    expect(within(selectedDetail).getByText("Internal rollout key stays here.")).toBeInTheDocument();
+
+    const publicPreview = screen.getByRole("region", {
+      name: "Public preview for July release"
+    });
+    expect(within(publicPreview).getByText("We shipped a calmer release flow.")).toBeInTheDocument();
+    expect(within(publicPreview).queryByText("Internal rollout key stays here.")).not.toBeInTheDocument();
+  });
+
+  it("creates a changelog draft from Done work and carries linked requests", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole("button", { name: "New workspace" }));
+    await user.type(screen.getByLabelText("Workspace name"), "Work Release Desk");
+    await user.click(screen.getByRole("button", { name: "Create workspace" }));
+    await createRequest(user, "Release requester");
+    await createWorkItem(user, "Ship release source", "2026-10-18");
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Selected work item status" }),
+      "Done"
+    );
+
+    const changelog = screen.getByRole("region", { name: "Draft queue" });
+    await user.click(within(changelog).getAllByRole("button", { name: "New changelog draft" })[0]);
+    const form = screen.getByRole("form", { name: "Create changelog draft" });
+    const sourceSelect = within(form).getByLabelText("Changelog source");
+    const workSource = within(form).getByRole("option", {
+      name: "Done work: Ship release source"
+    }) as HTMLOptionElement;
+    await user.selectOptions(
+      sourceSelect,
+      workSource.value
+    );
+    await user.click(screen.getByRole("button", { name: "Create changelog draft" }));
+
+    const selectedDetail = screen.getByRole("complementary", {
+      name: "Selected changelog draft Ship release source"
+    });
+    expect(within(selectedDetail).getByText("Work: Ship release source")).toBeInTheDocument();
+    expect(screen.getByLabelText("Requests linked to Ship release source")).toHaveTextContent(
+      "Release requester"
+    );
+  });
+
+  it("creates a changelog draft from roadmap and edits request links", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    const changelog = screen.getByRole("region", { name: "Draft queue" });
+    await user.click(within(changelog).getAllByRole("button", { name: "New changelog draft" })[0]);
+    const form = screen.getByRole("form", { name: "Create changelog draft" });
+    await user.selectOptions(
+      within(form).getByLabelText("Changelog source"),
+      "roadmap:roadmap-bulk-export-csv"
+    );
+    await user.click(screen.getByRole("button", { name: "Create changelog draft" }));
+
+    expect(screen.getByRole("complementary", {
+      name: "Selected changelog draft Bulk export to CSV"
+    })).toBeInTheDocument();
+    expect(screen.getByLabelText("Requests linked to Bulk export to CSV")).toHaveTextContent(
+      "Support bulk export to CSV"
+    );
+
+    await user.click(
+      within(screen.getByLabelText("Requests linked to Bulk export to CSV")).getByRole(
+        "button",
+        { name: /Support bulk export to CSV/ }
+      )
+    );
+    expect(screen.getByLabelText("Requests linked to Bulk export to CSV")).toHaveTextContent(
+      "No requesters linked"
+    );
+
+    await user.selectOptions(
+      screen.getByLabelText("Link request to Bulk export to CSV"),
+      "api-rate-limit-visibility"
+    );
+    expect(screen.getByLabelText("Requests linked to Bulk export to CSV")).toHaveTextContent(
+      "API rate limit visibility"
     );
   });
 
@@ -726,6 +838,40 @@ describe("OpenRoad workspace shell", () => {
     expect(screen.getByLabelText("Visibility for Reload-safe roadmap")).toHaveValue("Public");
   });
 
+  it("persists changelog drafts across app remounts", async () => {
+    const user = userEvent.setup();
+    const { unmount } = render(<App />);
+
+    await user.click(screen.getByRole("button", { name: "New workspace" }));
+    await user.type(screen.getByLabelText("Workspace name"), "Changelog Memory");
+    await user.click(screen.getByRole("button", { name: "Create workspace" }));
+    const changelog = screen.getByRole("region", { name: "Draft queue" });
+    await user.click(within(changelog).getAllByRole("button", { name: "New changelog draft" })[0]);
+    const form = screen.getByRole("form", { name: "Create changelog draft" });
+    await user.type(within(form).getByLabelText("Changelog title"), "Reload-safe changelog");
+    await user.type(within(form).getByLabelText("Public wording"), "This release note survives reload.");
+    await user.selectOptions(within(form).getByLabelText("Changelog visibility"), "Public");
+    await user.click(screen.getByRole("button", { name: "Create changelog draft" }));
+
+    unmount();
+    render(<App />);
+
+    expect(screen.getByRole("combobox", { name: "Workspace" })).toHaveDisplayValue(
+      "Changelog Memory"
+    );
+    expect(
+      screen.getByRole("complementary", {
+        name: "Selected changelog draft Reload-safe changelog"
+      })
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Visibility for Reload-safe changelog")).toHaveValue("Public");
+    expect(
+      within(
+        screen.getByRole("region", { name: "Public preview for Reload-safe changelog" })
+      ).getByText("This release note survives reload.")
+    ).toBeInTheDocument();
+  });
+
   it("recovers from corrupt local data and can restore demo data", async () => {
     const user = userEvent.setup();
     localStorage.setItem("openroad:state:v1", "{not-json");
@@ -752,6 +898,12 @@ describe("OpenRoad workspace shell", () => {
     await user.type(screen.getByLabelText("Request title"), "Portable request");
     await user.click(screen.getByRole("button", { name: "Capture request" }));
     await createRoadmapItem(user, "Portable roadmap");
+    const changelog = screen.getByRole("region", { name: "Draft queue" });
+    await user.click(within(changelog).getAllByRole("button", { name: "New changelog draft" })[0]);
+    const form = screen.getByRole("form", { name: "Create changelog draft" });
+    await user.type(within(form).getByLabelText("Changelog title"), "Portable changelog");
+    await user.type(within(form).getByLabelText("Public wording"), "Portable public wording.");
+    await user.click(screen.getByRole("button", { name: "Create changelog draft" }));
     await user.click(screen.getByRole("button", { name: "Export workspace" }));
 
     const exported = (screen.getByLabelText("Workspace export JSON") as HTMLTextAreaElement)
@@ -765,5 +917,10 @@ describe("OpenRoad workspace shell", () => {
     expect(screen.getByRole("combobox", { name: "Workspace" })).toHaveDisplayValue("Export Desk");
     expect(screen.getByRole("heading", { name: "Portable request" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Portable roadmap" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("complementary", {
+        name: "Selected changelog draft Portable changelog"
+      })
+    ).toBeInTheDocument();
   });
 });

@@ -118,7 +118,7 @@ As a product owner self-hosting or evaluating OpenRoad, I can build the app, sta
 ## Evidence
 
 - Branch: `feat/production-foundation`
-- Commit SHA: Pending.
+- Commit SHA: `50f4603`.
 - Date: 2026-07-03.
 - Commands run:
   - `pnpm vitest run server/store.test.ts server/http.test.ts`: 13 tests passed.

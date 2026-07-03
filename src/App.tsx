@@ -30,7 +30,9 @@ import {
   clearOpenRoadState,
   changelogStates,
   changelogVisibilities,
+  createPublicPortalSnapshot,
   createEntityId,
+  defaultPortalSettings,
   createInitialOpenRoadState,
   exportWorkspace,
   importWorkspaceFromJson,
@@ -44,6 +46,7 @@ import {
   roadmapVisibilities,
   requestOwners,
   requestStatuses,
+  requestVisibilities,
   saveOpenRoadState,
   saveSelectedWorkspaceId,
   workStatuses,
@@ -60,6 +63,7 @@ import {
   type RequestItem,
   type RequestOwner,
   type RequestStatus,
+  type RequestVisibility,
   type WorkComment,
   type WorkItem,
   type Workspace,
@@ -89,6 +93,7 @@ type RequestDraft = {
   requester: string;
   source: string;
   tags: string;
+  visibility: RequestVisibility;
 };
 
 type WorkDraft = {
@@ -136,12 +141,18 @@ type ChangelogSourceChoice = {
   workItemIds: string[];
 };
 
+type PortalCommentDraft = {
+  author: string;
+  body: string;
+};
+
 const emptyRequestDraft: RequestDraft = {
   title: "",
   description: "",
   requester: "",
   source: "Manual",
-  tags: ""
+  tags: "",
+  visibility: "Private"
 };
 
 const emptyWorkDraft: WorkDraft = {
@@ -175,6 +186,11 @@ const emptyChangelogDraft: ChangelogDraft = {
   title: "",
   visibility: "Private",
   workItemIds: []
+};
+
+const emptyPortalCommentDraft: PortalCommentDraft = {
+  author: "",
+  body: ""
 };
 
 const baseNavItems: NavItem[] = [
@@ -286,6 +302,9 @@ export function App() {
   const [archiveFilter, setArchiveFilter] = useState<RequestArchiveFilter>("active");
   const [triageView, setTriageView] = useState<TriageView>("all");
   const [commentDraft, setCommentDraft] = useState("");
+  const [portalSearch, setPortalSearch] = useState("");
+  const [portalCommentDraft, setPortalCommentDraft] =
+    useState<PortalCommentDraft>(emptyPortalCommentDraft);
   const [workCommentDraft, setWorkCommentDraft] = useState("");
   const [duplicateMergeTargetId, setDuplicateMergeTargetId] = useState("");
   const [selectedRequestIdByWorkspace, setSelectedRequestIdByWorkspace] = useState<
@@ -297,6 +316,8 @@ export function App() {
   const [selectedRoadmapItemIdByWorkspace, setSelectedRoadmapItemIdByWorkspace] =
     useState<Record<string, string | undefined>>({});
   const [selectedChangelogItemIdByWorkspace, setSelectedChangelogItemIdByWorkspace] =
+    useState<Record<string, string | undefined>>({});
+  const [selectedPortalRequestIdByWorkspace, setSelectedPortalRequestIdByWorkspace] =
     useState<Record<string, string | undefined>>({});
   const workspace = useMemo(
     () => workspaceList.find((item) => item.id === workspaceId) ?? workspaceList[0],
@@ -528,6 +549,34 @@ export function App() {
         : [],
     [selectedChangelogItem, workspace.requests]
   );
+  const portalSnapshot = useMemo(
+    () => createPublicPortalSnapshot(workspace, portalSearch),
+    [portalSearch, workspace]
+  );
+  const selectedPortalRequest = useMemo(() => {
+    const selectedPortalRequestId = selectedPortalRequestIdByWorkspace[workspace.id];
+    return (
+      portalSnapshot.requests.find((request) => request.id === selectedPortalRequestId) ??
+      portalSnapshot.requests[0] ??
+      null
+    );
+  }, [portalSnapshot.requests, selectedPortalRequestIdByWorkspace, workspace.id]);
+  const selectedPortalSourceRequest = useMemo(
+    () =>
+      selectedPortalRequest
+        ? workspace.requests.find((request) => request.id === selectedPortalRequest.id) ?? null
+        : null,
+    [selectedPortalRequest, workspace.requests]
+  );
+  const selectedPortalModerationComments = useMemo(
+    () =>
+      selectedPortalSourceRequest
+        ? selectedPortalSourceRequest.comments.filter(
+            (comment) => comment.visibility === "Public" || comment.visibility === "Hidden"
+          )
+        : [],
+    [selectedPortalSourceRequest]
+  );
 
   function updateCurrentWorkspace(updater: (workspace: Workspace) => Workspace) {
     dispatchOpenRoad({
@@ -543,6 +592,14 @@ export function App() {
         request.id === requestId ? updater(request) : request
       )
     }));
+  }
+
+  function updatePortalSettings(updater: (portal: Workspace["portal"]) => Workspace["portal"]) {
+    dispatchOpenRoad({
+      portal: updater(workspace.portal),
+      type: "replace-portal-settings",
+      workspaceId: workspace.id
+    });
   }
 
   function updateWorkItem(workItemId: string, updater: (workItem: WorkItem) => WorkItem) {
@@ -592,6 +649,14 @@ export function App() {
     }));
   }
 
+  function selectPortalRequest(requestId: string | undefined) {
+    setSelectedPortalRequestIdByWorkspace((items) => ({
+      ...items,
+      [workspace.id]: requestId
+    }));
+    setPortalCommentDraft(emptyPortalCommentDraft);
+  }
+
   function getChangelogSourceChoice(sourceKey: string) {
     return (
       changelogSourceChoices.find((choice) => choice.sourceKey === sourceKey) ??
@@ -632,6 +697,11 @@ export function App() {
         Later: []
       },
       changelog: [],
+      portal: {
+        ...defaultPortalSettings,
+        headline: `${name} public board`,
+        intro: "Share visible requests, roadmap direction, and release updates from this workspace."
+      },
       integrations: integrationChips
     };
 
@@ -666,6 +736,7 @@ export function App() {
       hasCurrentUserVote: false,
       status: "New",
       owner: "Unassigned",
+      visibility: newRequestDraft.visibility,
       age: "just now",
       archived: false,
       comments: [],
@@ -803,7 +874,8 @@ export function App() {
       id: createEntityId("comment"),
       author: "Akhil",
       body,
-      age: "just now"
+      age: "just now",
+      visibility: "Internal"
     };
 
     updateRequest(selectedRequest.id, (request) => ({
@@ -811,6 +883,52 @@ export function App() {
       comments: [comment, ...request.comments]
     }));
     setCommentDraft("");
+  }
+
+  function togglePortalVote(requestId: string) {
+    if (!workspace.portal.allowVoting) return;
+    updateRequest(requestId, (request) => ({
+      ...request,
+      hasCurrentUserVote: !request.hasCurrentUserVote,
+      votes: request.hasCurrentUserVote
+        ? Math.max(0, request.votes - 1)
+        : request.votes + 1
+    }));
+  }
+
+  function addPortalComment(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!workspace.portal.allowComments || !selectedPortalRequest) return;
+    const body = portalCommentDraft.body.trim();
+    if (!body) return;
+
+    const comment: RequestComment = {
+      age: "just now",
+      author: portalCommentDraft.author.trim() || "Portal visitor",
+      body,
+      id: createEntityId("portal-comment"),
+      visibility: "Public"
+    };
+
+    updateRequest(selectedPortalRequest.id, (request) => ({
+      ...request,
+      comments: [comment, ...request.comments]
+    }));
+    setPortalCommentDraft(emptyPortalCommentDraft);
+    selectPortalRequest(selectedPortalRequest.id);
+  }
+
+  function setPortalCommentVisibility(
+    requestId: string,
+    commentId: string,
+    visibility: RequestComment["visibility"]
+  ) {
+    updateRequest(requestId, (request) => ({
+      ...request,
+      comments: request.comments.map((comment) =>
+        comment.id === commentId ? { ...comment, visibility } : comment
+      )
+    }));
   }
 
   function addWorkItem(event: FormEvent<HTMLFormElement>) {
@@ -1236,7 +1354,7 @@ export function App() {
           </form>
         ) : null}
 
-        <section className="brief-plate" id="portal" aria-label="Standalone workflow">
+        <section className="brief-plate" id="overview" aria-label="Standalone workflow">
           <div className="brief-copy">
             <span className="section-label">Standalone first</span>
             <h1>Turn requests into roadmap and changelog updates.</h1>
@@ -1327,6 +1445,25 @@ export function App() {
                 placeholder="Manual"
                 value={newRequestDraft.source}
               />
+            </label>
+            <label>
+              <span>Visibility</span>
+              <select
+                aria-label="Request visibility"
+                onChange={(event) =>
+                  setNewRequestDraft((draft) => ({
+                    ...draft,
+                    visibility: event.target.value as RequestVisibility
+                  }))
+                }
+                value={newRequestDraft.visibility}
+              >
+                {requestVisibilities.map((visibility) => (
+                  <option key={visibility} value={visibility}>
+                    {visibility}
+                  </option>
+                ))}
+              </select>
             </label>
             <label>
               <span>Tags</span>
@@ -1667,6 +1804,25 @@ export function App() {
                     </select>
                   </label>
                   <label>
+                    <span>Visibility</span>
+                    <select
+                      aria-label="Selected request visibility"
+                      onChange={(event) =>
+                        updateSelectedRequest((request) => ({
+                          ...request,
+                          visibility: event.target.value as RequestVisibility
+                        }))
+                      }
+                      value={selectedRequest.visibility}
+                    >
+                      {requestVisibilities.map((visibility) => (
+                        <option key={visibility} value={visibility}>
+                          {visibility}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
                     <span>Tags</span>
                     <input
                       aria-label="Selected request tags"
@@ -1706,6 +1862,10 @@ export function App() {
                   <div>
                     <dt>Owner</dt>
                     <dd>{selectedRequest.owner}</dd>
+                  </div>
+                  <div>
+                    <dt>Portal</dt>
+                    <dd>{selectedRequest.visibility}</dd>
                   </div>
                   <div>
                     <dt>Comments</dt>
@@ -1789,7 +1949,9 @@ export function App() {
                       <article className="comment-item" key={comment.id}>
                         <strong>{comment.author}</strong>
                         <p>{comment.body}</p>
-                        <small>{comment.age}</small>
+                        <small>
+                          {comment.age} / {comment.visibility}
+                        </small>
                       </article>
                     ))
                   ) : (
@@ -2914,6 +3076,391 @@ export function App() {
                 ) : null}
               </div>
             ) : null}
+          </section>
+
+          <section className="panel portal-panel" id="portal" aria-labelledby="portal-title">
+            <div className="panel-header">
+              <div>
+                <span className="section-label">Portal</span>
+                <h2 id="portal-title">Public portal preview</h2>
+              </div>
+              <div className="panel-actions">
+                <span className={`status-badge ${portalSnapshot.enabled ? "success" : "neutral"}`}>
+                  {portalSnapshot.enabled ? "Enabled" : "Paused"}
+                </span>
+                <span className="panel-count">
+                  {portalSnapshot.requestCount} public{" "}
+                  {portalSnapshot.requestCount === 1 ? "request" : "requests"}
+                </span>
+              </div>
+            </div>
+
+            <div className="portal-settings" aria-label="Portal settings">
+              <label className="toggle-line">
+                <input
+                  checked={workspace.portal.enabled}
+                  onChange={(event) =>
+                    updatePortalSettings((portal) => ({
+                      ...portal,
+                      enabled: event.target.checked
+                    }))
+                  }
+                  type="checkbox"
+                />
+                <span>Portal enabled</span>
+              </label>
+              <label className="toggle-line">
+                <input
+                  checked={workspace.portal.allowVoting}
+                  onChange={(event) =>
+                    updatePortalSettings((portal) => ({
+                      ...portal,
+                      allowVoting: event.target.checked
+                    }))
+                  }
+                  type="checkbox"
+                />
+                <span>Voting</span>
+              </label>
+              <label className="toggle-line">
+                <input
+                  checked={workspace.portal.allowComments}
+                  onChange={(event) =>
+                    updatePortalSettings((portal) => ({
+                      ...portal,
+                      allowComments: event.target.checked
+                    }))
+                  }
+                  type="checkbox"
+                />
+                <span>Comments</span>
+              </label>
+              <label>
+                <span>Headline</span>
+                <input
+                  aria-label="Portal headline"
+                  onChange={(event) =>
+                    updatePortalSettings((portal) => ({
+                      ...portal,
+                      headline: event.target.value
+                    }))
+                  }
+                  value={workspace.portal.headline}
+                />
+              </label>
+              <label className="wide-field">
+                <span>Intro</span>
+                <input
+                  aria-label="Portal intro"
+                  onChange={(event) =>
+                    updatePortalSettings((portal) => ({
+                      ...portal,
+                      intro: event.target.value
+                    }))
+                  }
+                  value={workspace.portal.intro}
+                />
+              </label>
+            </div>
+
+            <div className="portal-preview" aria-label="Public portal preview surface">
+              <header className="portal-hero">
+                <div>
+                  <span className="section-label">Public view</span>
+                  <h3>{portalSnapshot.headline || "Public roadmap"}</h3>
+                  <p>
+                    {portalSnapshot.intro ||
+                      "Follow requests, roadmap direction, and shipped updates."}
+                  </p>
+                </div>
+                <div className="portal-ledger" aria-label="Public portal counts">
+                  <span>
+                    <small>Requests</small>
+                    <strong>{portalSnapshot.requestCount}</strong>
+                  </span>
+                  <span>
+                    <small>Roadmap</small>
+                    <strong>{portalSnapshot.roadmapCount}</strong>
+                  </span>
+                  <span>
+                    <small>Changelog</small>
+                    <strong>{portalSnapshot.changelogCount}</strong>
+                  </span>
+                </div>
+              </header>
+
+              {!portalSnapshot.enabled ? (
+                <div className="empty-state compact-empty">
+                  <strong>Portal preview paused</strong>
+                  <p>Enable the portal when this workspace is ready to show a public view.</p>
+                </div>
+              ) : (
+                <>
+                  <div className="portal-board" aria-label="Public feedback board">
+                    <section className="portal-request-list" aria-labelledby="portal-board-title">
+                      <div className="portal-section-header">
+                        <div>
+                          <span className="section-label">Feedback board</span>
+                          <h3 id="portal-board-title">Public requests</h3>
+                        </div>
+                        <label className="portal-search">
+                          <Search aria-hidden="true" size={14} />
+                          <span>Search public requests</span>
+                          <input
+                            aria-label="Search public requests"
+                            onChange={(event) => setPortalSearch(event.target.value)}
+                            placeholder="Search public title, details, tags..."
+                            value={portalSearch}
+                          />
+                        </label>
+                      </div>
+
+                      {portalSnapshot.requests.length ? (
+                        <div className="portal-request-stack">
+                          {portalSnapshot.requests.map((request) => (
+                            <button
+                              aria-label={`${request.title}. ${request.status}. ${request.votes} votes. ${request.comments.length} public comments`}
+                              aria-pressed={selectedPortalRequest?.id === request.id}
+                              className={
+                                selectedPortalRequest?.id === request.id
+                                  ? "portal-request-row selected"
+                                  : "portal-request-row"
+                              }
+                              key={request.id}
+                              onClick={() => selectPortalRequest(request.id)}
+                              type="button"
+                            >
+                              <span className="portal-request-main">
+                                <strong>{request.title}</strong>
+                                <small>{request.description}</small>
+                              </span>
+                              <span className="portal-request-meta">
+                                <span className={`status-badge ${statusTone(request.status)}`}>
+                                  {request.status}
+                                </span>
+                                <small>{request.votes} votes</small>
+                              </span>
+                            </button>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="empty-state compact-empty">
+                          <strong>No public requests</strong>
+                          <p>
+                            {portalSearch.trim()
+                              ? "No public request matches this search."
+                              : "Mark a request Public to show it on the portal."}
+                          </p>
+                        </div>
+                      )}
+                    </section>
+
+                    <aside
+                      className="portal-request-detail"
+                      aria-label={
+                        selectedPortalRequest
+                          ? `Public request ${selectedPortalRequest.title}`
+                          : "No public request selected"
+                      }
+                    >
+                      {selectedPortalRequest ? (
+                        <>
+                          <div className="portal-detail-header">
+                            <div>
+                              <span className="section-label">Selected public request</span>
+                              <h3>{selectedPortalRequest.title}</h3>
+                            </div>
+                            <span className={`status-badge ${statusTone(selectedPortalRequest.status)}`}>
+                              {selectedPortalRequest.status}
+                            </span>
+                          </div>
+                          <p>{selectedPortalRequest.description}</p>
+                          <div className="tag-list" aria-label="Public request tags">
+                            <Tag aria-hidden="true" size={13} />
+                            {selectedPortalRequest.tags.length ? (
+                              selectedPortalRequest.tags.map((tag) => <span key={tag}>{tag}</span>)
+                            ) : (
+                              <small>No public tags</small>
+                            )}
+                          </div>
+                          <button
+                            className="secondary-action"
+                            disabled={!portalSnapshot.allowVoting}
+                            onClick={() => togglePortalVote(selectedPortalRequest.id)}
+                            type="button"
+                          >
+                            <ThumbsUp aria-hidden="true" size={14} />
+                            {selectedPortalRequest.hasCurrentUserVote
+                              ? "Remove portal vote"
+                              : "Vote on request"}
+                          </button>
+
+                          <div className="portal-comments" aria-label="Public comments">
+                            <div className="portal-section-header compact">
+                              <strong>Public comments</strong>
+                              <small>{selectedPortalRequest.comments.length} visible</small>
+                            </div>
+                            {selectedPortalRequest.comments.length ? (
+                              selectedPortalRequest.comments.map((comment) => (
+                                <article className="comment-item" key={comment.id}>
+                                  <strong>{comment.author}</strong>
+                                  <p>{comment.body}</p>
+                                  <small>{comment.age}</small>
+                                </article>
+                              ))
+                            ) : (
+                              <span className="muted-line">No public comments yet.</span>
+                            )}
+                          </div>
+
+                          {portalSnapshot.allowComments ? (
+                            <form
+                              className="portal-comment-form"
+                              aria-label="Add public portal comment"
+                              onSubmit={addPortalComment}
+                            >
+                              <label>
+                                <span>Name</span>
+                                <input
+                                  aria-label="Portal comment author"
+                                  onChange={(event) =>
+                                    setPortalCommentDraft((draft) => ({
+                                      ...draft,
+                                      author: event.target.value
+                                    }))
+                                  }
+                                  placeholder="Portal visitor"
+                                  value={portalCommentDraft.author}
+                                />
+                              </label>
+                              <label className="wide-field">
+                                <span>Public note</span>
+                                <textarea
+                                  aria-label="Portal public note"
+                                  onChange={(event) =>
+                                    setPortalCommentDraft((draft) => ({
+                                      ...draft,
+                                      body: event.target.value
+                                    }))
+                                  }
+                                  placeholder="Add a public note"
+                                  value={portalCommentDraft.body}
+                                />
+                              </label>
+                              <button className="secondary-action" type="submit">
+                                <MessageCircle aria-hidden="true" size={14} />
+                                Add public comment
+                              </button>
+                            </form>
+                          ) : (
+                            <div className="empty-state compact-empty">
+                              <strong>Public comments disabled</strong>
+                              <p>Existing public comments remain visible until moderated.</p>
+                            </div>
+                          )}
+
+                          <div
+                            className="portal-moderation"
+                            aria-label={`Moderation for ${selectedPortalRequest.title}`}
+                          >
+                            <strong>Moderation</strong>
+                            {selectedPortalModerationComments.length ? (
+                              selectedPortalModerationComments.map((comment) => (
+                                <div className="moderation-row" key={comment.id}>
+                                  <span>
+                                    {comment.author} / {comment.visibility}
+                                  </span>
+                                  <button
+                                    className="secondary-action compact"
+                                    onClick={() =>
+                                      setPortalCommentVisibility(
+                                        selectedPortalRequest.id,
+                                        comment.id,
+                                        comment.visibility === "Hidden" ? "Public" : "Hidden"
+                                      )
+                                    }
+                                    type="button"
+                                  >
+                                    {comment.visibility === "Hidden"
+                                      ? "Restore comment"
+                                      : "Hide comment"}
+                                  </button>
+                                </div>
+                              ))
+                            ) : (
+                              <span className="muted-line">No public comments to moderate.</span>
+                            )}
+                          </div>
+                        </>
+                      ) : (
+                        <div className="empty-state compact-empty">
+                          <strong>Select a public request</strong>
+                          <p>Voting, public comments, and moderation controls appear here.</p>
+                        </div>
+                      )}
+                    </aside>
+                  </div>
+
+                  <div className="portal-publish-grid">
+                    <section className="public-roadmap" aria-label="Public roadmap">
+                      <div className="portal-section-header">
+                        <div>
+                          <span className="section-label">Roadmap</span>
+                          <h3>Public direction</h3>
+                        </div>
+                      </div>
+                      <div className="public-roadmap-lanes">
+                        {roadmapLanes.map((lane) => (
+                          <div className="public-roadmap-lane" key={lane}>
+                            <strong>{lane}</strong>
+                            {portalSnapshot.roadmap[lane].length ? (
+                              portalSnapshot.roadmap[lane].map((item) => (
+                                <article key={item.id}>
+                                  <span className={`status-badge ${item.isStale ? "warning" : "info"}`}>
+                                    {item.confidence}
+                                  </span>
+                                  <h4>{item.title}</h4>
+                                  <p>{item.summary || "No public wording drafted yet."}</p>
+                                  <small>{item.linkedRequestCount} linked requests</small>
+                                </article>
+                              ))
+                            ) : (
+                              <small>No public items</small>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </section>
+
+                    <section className="public-changelog" aria-label="Public changelog">
+                      <div className="portal-section-header">
+                        <div>
+                          <span className="section-label">Changelog</span>
+                          <h3>Ready updates</h3>
+                        </div>
+                      </div>
+                      {portalSnapshot.changelog.length ? (
+                        <div className="public-changelog-list">
+                          {portalSnapshot.changelog.map((item) => (
+                            <article key={item.id}>
+                              <span className="status-badge success">Ready</span>
+                              <h4>{item.title}</h4>
+                              <p>{item.publicSummary || "No public wording drafted yet."}</p>
+                              <small>{item.linkedRequestCount} linked requests</small>
+                            </article>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="empty-state compact-empty">
+                          <strong>No public changelog yet</strong>
+                          <p>Only Ready and Public changelog entries appear here.</p>
+                        </div>
+                      )}
+                    </section>
+                  </div>
+                </>
+              )}
+            </div>
           </section>
 
           <section className="panel settings-panel" id="settings" aria-labelledby="settings-title">

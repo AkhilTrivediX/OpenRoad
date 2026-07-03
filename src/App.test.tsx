@@ -23,6 +23,16 @@ async function createRequest(
   await user.click(screen.getByRole("button", { name: "Capture request" }));
 }
 
+async function createPublicRequest(
+  user: ReturnType<typeof userEvent.setup>,
+  title = "Public portal request"
+) {
+  await user.click(screen.getAllByRole("button", { name: "Add request" })[0]);
+  await user.type(screen.getByLabelText("Request title"), title);
+  await user.selectOptions(screen.getByLabelText("Request visibility"), "Public");
+  await user.click(screen.getByRole("button", { name: "Capture request" }));
+}
+
 async function createRoadmapItem(
   user: ReturnType<typeof userEvent.setup>,
   title = "Customer-facing roadmap"
@@ -391,6 +401,93 @@ describe("OpenRoad workspace shell", () => {
     expect(screen.getByLabelText("Requests linked to Bulk export to CSV")).toHaveTextContent(
       "API rate limit visibility"
     );
+  });
+
+  it("renders a public portal without private workspace details", () => {
+    render(<App />);
+
+    const primaryNav = screen.getByLabelText("Primary navigation");
+    expect(within(primaryNav).getByRole("link", { name: /Portal/ })).toHaveAttribute(
+      "href",
+      "#portal"
+    );
+
+    const portal = screen.getByRole("region", { name: "Public portal preview" });
+    const board = within(portal).getByLabelText("Public feedback board");
+    const publicRoadmap = within(portal).getByLabelText("Public roadmap");
+    const publicChangelog = within(portal).getByLabelText("Public changelog");
+
+    expect(
+      within(board).getByRole("button", { name: /API rate limit visibility/ })
+    ).toBeInTheDocument();
+    expect(
+      within(board).getByRole("button", { name: /Dark mode for docs site/ })
+    ).toBeInTheDocument();
+    expect(within(board).queryByRole("button", { name: /Support bulk export to CSV/ })).not.toBeInTheDocument();
+    expect(within(board).queryByText("Three customers asked for a visible limit meter this week.")).not.toBeInTheDocument();
+    expect(within(board).queryByText("Success team")).not.toBeInTheDocument();
+    expect(within(board).queryByText("Unassigned")).not.toBeInTheDocument();
+
+    expect(within(publicRoadmap).getByText("API rate limit visibility")).toBeInTheDocument();
+    expect(within(publicRoadmap).getByText("Bulk export to CSV")).toBeInTheDocument();
+    expect(within(publicRoadmap).queryByText("Webhook retry controls")).not.toBeInTheDocument();
+    expect(within(publicChangelog).getByText("Inline markdown in comments")).toBeInTheDocument();
+    expect(within(publicChangelog).queryByText("Email digest improvements")).not.toBeInTheDocument();
+    expect(within(portal).queryByText("Needs customer-facing wording before it can be published.")).not.toBeInTheDocument();
+  });
+
+  it("searches, votes, comments, and moderates public portal requests", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    const portal = screen.getByRole("region", { name: "Public portal preview" });
+    const board = within(portal).getByLabelText("Public feedback board");
+
+    await user.type(within(portal).getByLabelText("Search public requests"), "docs");
+    expect(
+      within(board).getByRole("button", { name: /Dark mode for docs site/ })
+    ).toBeInTheDocument();
+    expect(within(board).queryByRole("button", { name: /API rate limit visibility/ })).not.toBeInTheDocument();
+
+    await user.clear(within(portal).getByLabelText("Search public requests"));
+    await user.click(
+      within(board).getByRole("button", { name: /API rate limit visibility/ })
+    );
+    await user.click(within(portal).getByRole("button", { name: "Vote on request" }));
+    expect(within(portal).getByRole("button", { name: "Remove portal vote" })).toBeInTheDocument();
+
+    await user.type(within(portal).getByLabelText("Portal comment author"), "Beta visitor");
+    await user.type(within(portal).getByLabelText("Portal public note"), "This would help our CLI users.");
+    await user.click(within(portal).getByRole("button", { name: "Add public comment" }));
+
+    expect(within(portal).getByText("This would help our CLI users.")).toBeInTheDocument();
+    expect(within(portal).queryByText("Three customers asked for a visible limit meter this week.")).not.toBeInTheDocument();
+
+    await user.click(within(portal).getByRole("button", { name: "Hide comment" }));
+    expect(within(portal).queryByText("This would help our CLI users.")).not.toBeInTheDocument();
+    await user.click(within(portal).getByRole("button", { name: "Restore comment" }));
+    expect(within(portal).getByText("This would help our CLI users.")).toBeInTheDocument();
+
+    await user.click(within(portal).getByRole("checkbox", { name: "Comments" }));
+    expect(within(portal).queryByRole("form", { name: "Add public portal comment" })).not.toBeInTheDocument();
+    expect(within(portal).getByText("Public comments disabled")).toBeInTheDocument();
+    expect(within(portal).getByText("This would help our CLI users.")).toBeInTheDocument();
+  });
+
+  it("runs the portal from standalone objects in a blank workspace", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole("button", { name: "New workspace" }));
+    await user.type(screen.getByLabelText("Workspace name"), "Portal Lab");
+    await user.click(screen.getByRole("button", { name: "Create workspace" }));
+    await createPublicRequest(user, "Publish public signup status");
+
+    const portal = screen.getByRole("region", { name: "Public portal preview" });
+    expect(
+      within(portal).getByRole("button", { name: /Publish public signup status/ })
+    ).toBeInTheDocument();
+    expect(within(portal).getByText("Portal Lab public board")).toBeInTheDocument();
   });
 
   it("captures a standalone request with details and tags", async () => {
@@ -833,7 +930,11 @@ describe("OpenRoad workspace shell", () => {
     expect(screen.getByRole("combobox", { name: "Workspace" })).toHaveDisplayValue(
       "Roadmap Memory"
     );
-    expect(screen.getByRole("heading", { name: "Reload-safe roadmap" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("complementary", {
+        name: "Selected roadmap item Reload-safe roadmap"
+      })
+    ).toBeInTheDocument();
     expect(screen.getByLabelText("Lane for Reload-safe roadmap")).toHaveValue("Later");
     expect(screen.getByLabelText("Visibility for Reload-safe roadmap")).toHaveValue("Public");
   });
@@ -897,6 +998,14 @@ describe("OpenRoad workspace shell", () => {
     await user.click(screen.getAllByRole("button", { name: "Add request" })[0]);
     await user.type(screen.getByLabelText("Request title"), "Portable request");
     await user.click(screen.getByRole("button", { name: "Capture request" }));
+    await user.selectOptions(screen.getByLabelText("Selected request visibility"), "Public");
+    const portal = screen.getByRole("region", { name: "Public portal preview" });
+    await user.clear(within(portal).getByLabelText("Portal headline"));
+    await user.type(within(portal).getByLabelText("Portal headline"), "Exported portal board");
+    await user.click(within(portal).getByRole("button", { name: /Portable request/ }));
+    await user.type(within(portal).getByLabelText("Portal public note"), "Portable public comment.");
+    await user.click(within(portal).getByRole("button", { name: "Add public comment" }));
+    await user.click(within(portal).getByRole("checkbox", { name: "Comments" }));
     await createRoadmapItem(user, "Portable roadmap");
     const changelog = screen.getByRole("region", { name: "Draft queue" });
     await user.click(within(changelog).getAllByRole("button", { name: "New changelog draft" })[0]);
@@ -915,12 +1024,19 @@ describe("OpenRoad workspace shell", () => {
     await user.click(screen.getByRole("button", { name: "Import workspace" }));
 
     expect(screen.getByRole("combobox", { name: "Workspace" })).toHaveDisplayValue("Export Desk");
-    expect(screen.getByRole("heading", { name: "Portable request" })).toBeInTheDocument();
+    expect(screen.getByRole("complementary", { name: "Portable request" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Portable roadmap" })).toBeInTheDocument();
     expect(
       screen.getByRole("complementary", {
         name: "Selected changelog draft Portable changelog"
       })
     ).toBeInTheDocument();
+    const importedPortal = screen.getByRole("region", { name: "Public portal preview" });
+    expect(within(importedPortal).getByText("Exported portal board")).toBeInTheDocument();
+    expect(
+      within(importedPortal).getByRole("button", { name: /Portable request/ })
+    ).toBeInTheDocument();
+    expect(within(importedPortal).getByText("Portable public comment.")).toBeInTheDocument();
+    expect(within(importedPortal).getByText("Public comments disabled")).toBeInTheDocument();
   });
 });

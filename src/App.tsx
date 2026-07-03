@@ -1,4 +1,5 @@
 import {
+  Archive,
   Bell,
   BookOpen,
   CheckCircle2,
@@ -8,27 +9,42 @@ import {
   Globe2,
   Inbox,
   LayoutDashboard,
+  MessageCircle,
   MessageSquareText,
   Plus,
   RadioTower,
+  RotateCcw,
   Search,
   Settings,
+  SlidersHorizontal,
+  Tag,
+  ThumbsUp,
   Waypoints
 } from "lucide-react";
 import { type FormEvent, useMemo, useState } from "react";
 
+const requestStatuses = ["New", "Needs decision", "Planned", "Shipping soon"] as const;
+const integrationChips: IntegrationChip[] = [
+  { label: "GitHub", state: "Optional" },
+  { label: "Jira", state: "Optional" },
+  { label: "Linear", state: "Optional" }
+];
+
 type NavItem = {
   label: "Inbox" | "Roadmap" | "Changelog" | "Portal" | "Settings";
-  count?: number;
+  count?: boolean;
   icon: typeof Inbox;
 };
+
+type RequestStatus = (typeof requestStatuses)[number];
+type RequestStatusFilter = "All" | RequestStatus;
+type RequestArchiveFilter = "active" | "archived";
 
 type Workspace = {
   id: string;
   name: string;
   plan: string;
   summary: string;
-  inboxCount: number;
   requests: RequestItem[];
   roadmap: Record<"Now" | "Next" | "Later", string[]>;
   changelog: ChangelogItem[];
@@ -38,10 +54,22 @@ type Workspace = {
 type RequestItem = {
   id: string;
   title: string;
+  description: string;
   requester: string;
   source: string;
+  tags: string[];
   votes: number;
-  status: "New" | "Needs decision" | "Planned" | "Shipping soon";
+  hasCurrentUserVote: boolean;
+  status: RequestStatus;
+  age: string;
+  archived: boolean;
+  comments: RequestComment[];
+};
+
+type RequestComment = {
+  id: string;
+  author: string;
+  body: string;
   age: string;
 };
 
@@ -56,8 +84,24 @@ type IntegrationChip = {
   state: "Optional" | "Linked";
 };
 
+type RequestDraft = {
+  title: string;
+  description: string;
+  requester: string;
+  source: string;
+  tags: string;
+};
+
+const emptyRequestDraft: RequestDraft = {
+  title: "",
+  description: "",
+  requester: "",
+  source: "Manual",
+  tags: ""
+};
+
 const navItems: NavItem[] = [
-  { label: "Inbox", count: 23, icon: Inbox },
+  { label: "Inbox", count: true, icon: Inbox },
   { label: "Roadmap", icon: Waypoints },
   { label: "Changelog", icon: BookOpen },
   { label: "Portal", icon: Globe2 },
@@ -70,43 +114,72 @@ const initialWorkspaces: Workspace[] = [
     name: "Acme OSS",
     plan: "Demo workspace",
     summary: "Standalone feedback loop with optional delivery links.",
-    inboxCount: 23,
     requests: [
       {
         id: "api-rate-limit-visibility",
         title: "API rate limit visibility",
+        description:
+          "Users cannot tell when they are close to hitting API limits. This blocks debugging and creates repeated support requests.",
         requester: "CLI user",
         source: "Portal",
+        tags: ["api", "usage"],
         votes: 142,
+        hasCurrentUserVote: false,
         status: "Needs decision",
-        age: "2h ago"
+        age: "2h ago",
+        archived: false,
+        comments: [
+          {
+            id: "api-comment-1",
+            author: "Success",
+            body: "Three customers asked for a visible limit meter this week.",
+            age: "1h ago"
+          }
+        ]
       },
       {
         id: "bulk-export-csv",
         title: "Support bulk export to CSV",
+        description:
+          "Support needs a quick way to export customer request lists for weekly account reviews.",
         requester: "Success team",
         source: "Email",
+        tags: ["export", "success"],
         votes: 97,
+        hasCurrentUserVote: false,
         status: "Planned",
-        age: "5h ago"
+        age: "5h ago",
+        archived: false,
+        comments: []
       },
       {
         id: "dark-mode-docs",
         title: "Dark mode for docs site",
+        description: "Docs readers want a dark theme that matches the CLI and product UI.",
         requester: "Docs feedback",
         source: "Portal",
+        tags: ["docs", "theme"],
         votes: 89,
+        hasCurrentUserVote: false,
         status: "New",
-        age: "1d ago"
+        age: "1d ago",
+        archived: false,
+        comments: []
       },
       {
         id: "webhook-retry-controls",
         title: "Webhook retry controls",
+        description:
+          "Maintainers need to retry failed webhooks without opening support tickets.",
         requester: "Maintainer note",
         source: "Manual",
+        tags: ["webhooks"],
         votes: 76,
+        hasCurrentUserVote: true,
         status: "Shipping soon",
-        age: "1d ago"
+        age: "1d ago",
+        archived: false,
+        comments: []
       }
     ],
     roadmap: {
@@ -126,45 +199,56 @@ const initialWorkspaces: Workspace[] = [
         detail: "Needs public wording"
       }
     ],
-    integrations: [
-      { label: "GitHub", state: "Optional" },
-      { label: "Jira", state: "Optional" },
-      { label: "Linear", state: "Optional" }
-    ]
+    integrations: integrationChips
   },
   {
     id: "maintainer",
     name: "Maintainer Lab",
     plan: "Community workspace",
     summary: "A smaller project using OpenRoad without external trackers.",
-    inboxCount: 8,
     requests: [
       {
         id: "contributor-guide-checklist",
         title: "Contributor guide checklist",
+        description:
+          "First-time contributors need a clear checklist before opening their first pull request.",
         requester: "First-time contributor",
         source: "Portal",
+        tags: ["community", "docs"],
         votes: 34,
+        hasCurrentUserVote: false,
         status: "New",
-        age: "3h ago"
+        age: "3h ago",
+        archived: false,
+        comments: []
       },
       {
         id: "release-notes-rss",
         title: "Release notes RSS",
+        description: "Maintainers want subscribers to follow release notes through RSS.",
         requester: "Maintainer",
         source: "Manual",
+        tags: ["release", "rss"],
         votes: 21,
+        hasCurrentUserVote: false,
         status: "Planned",
-        age: "1d ago"
+        age: "1d ago",
+        archived: false,
+        comments: []
       },
       {
         id: "issue-template-cleanup",
         title: "Issue template cleanup",
+        description: "Community moderators want simpler issue templates for bug reports.",
         requester: "Community moderator",
         source: "Manual",
+        tags: ["community"],
         votes: 19,
+        hasCurrentUserVote: false,
         status: "Needs decision",
-        age: "2d ago"
+        age: "2d ago",
+        archived: false,
+        comments: []
       }
     ],
     roadmap: {
@@ -179,19 +263,44 @@ const initialWorkspaces: Workspace[] = [
         detail: "Standalone work item"
       }
     ],
-    integrations: [
-      { label: "GitHub", state: "Optional" },
-      { label: "Jira", state: "Optional" },
-      { label: "Linear", state: "Optional" }
-    ]
+    integrations: integrationChips
   }
 ];
 
-function statusTone(status: RequestItem["status"] | ChangelogItem["state"]) {
+function statusTone(status: RequestStatus | ChangelogItem["state"]) {
   if (status === "Planned" || status === "Ready") return "success";
   if (status === "Shipping soon") return "info";
   if (status === "Needs decision" || status === "Draft") return "warning";
   return "neutral";
+}
+
+function parseTags(value: string) {
+  return Array.from(
+    new Set(
+      value
+        .split(",")
+        .map((tag) => tag.trim().toLowerCase())
+        .filter(Boolean)
+    )
+  );
+}
+
+function requestMatchesQuery(request: RequestItem, query: string) {
+  const normalizedQuery = query.trim().toLowerCase();
+  if (!normalizedQuery) return true;
+
+  return [
+    request.title,
+    request.description,
+    request.requester,
+    request.source,
+    request.status,
+    request.tags.join(" "),
+    request.comments.map((comment) => `${comment.author} ${comment.body}`).join(" ")
+  ]
+    .join(" ")
+    .toLowerCase()
+    .includes(normalizedQuery);
 }
 
 export function App() {
@@ -200,7 +309,11 @@ export function App() {
   const [isCreatingWorkspace, setIsCreatingWorkspace] = useState(false);
   const [newWorkspaceName, setNewWorkspaceName] = useState("");
   const [isAddingRequest, setIsAddingRequest] = useState(false);
-  const [newRequestTitle, setNewRequestTitle] = useState("");
+  const [newRequestDraft, setNewRequestDraft] = useState<RequestDraft>(emptyRequestDraft);
+  const [requestQuery, setRequestQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<RequestStatusFilter>("All");
+  const [archiveFilter, setArchiveFilter] = useState<RequestArchiveFilter>("active");
+  const [commentDraft, setCommentDraft] = useState("");
   const [selectedRequestIdByWorkspace, setSelectedRequestIdByWorkspace] = useState<
     Record<string, string | undefined>
   >({});
@@ -208,13 +321,70 @@ export function App() {
     () => workspaceList.find((item) => item.id === workspaceId) ?? workspaceList[0],
     [workspaceId, workspaceList]
   );
+  const activeRequestCount = useMemo(
+    () => workspace.requests.filter((request) => !request.archived).length,
+    [workspace.requests]
+  );
+  const requestScope = useMemo(
+    () =>
+      workspace.requests.filter((request) =>
+        archiveFilter === "archived" ? request.archived : !request.archived
+      ),
+    [archiveFilter, workspace.requests]
+  );
+  const filteredRequests = useMemo(
+    () =>
+      requestScope.filter(
+        (request) =>
+          (statusFilter === "All" || request.status === statusFilter) &&
+          requestMatchesQuery(request, requestQuery)
+      ),
+    [requestQuery, requestScope, statusFilter]
+  );
   const selectedRequest = useMemo(() => {
     const selectedRequestId = selectedRequestIdByWorkspace[workspace.id];
     return (
-      workspace.requests.find((request) => request.id === selectedRequestId) ??
-      workspace.requests[0]
+      requestScope.find((request) => request.id === selectedRequestId) ??
+      filteredRequests[0] ??
+      null
     );
-  }, [selectedRequestIdByWorkspace, workspace.id, workspace.requests]);
+  }, [filteredRequests, requestScope, selectedRequestIdByWorkspace, workspace.id]);
+  const hasSearchOrStatusFilter = requestQuery.trim() !== "" || statusFilter !== "All";
+  const hasRequestFilters = hasSearchOrStatusFilter || archiveFilter !== "active";
+  const emptyRequestTitle = hasSearchOrStatusFilter
+    ? "No matching requests"
+    : archiveFilter === "archived"
+      ? "No archived requests"
+      : "No requests yet";
+
+  function updateCurrentWorkspace(updater: (workspace: Workspace) => Workspace) {
+    setWorkspaceList((items) =>
+      items.map((item) => (item.id === workspace.id ? updater(item) : item))
+    );
+  }
+
+  function updateRequest(requestId: string, updater: (request: RequestItem) => RequestItem) {
+    updateCurrentWorkspace((item) => ({
+      ...item,
+      requests: item.requests.map((request) =>
+        request.id === requestId ? updater(request) : request
+      )
+    }));
+  }
+
+  function resetRequestFilters() {
+    setRequestQuery("");
+    setStatusFilter("All");
+    setArchiveFilter("active");
+  }
+
+  function selectRequest(requestId: string | undefined) {
+    setSelectedRequestIdByWorkspace((items) => ({
+      ...items,
+      [workspace.id]: requestId
+    }));
+    setCommentDraft("");
+  }
 
   function createWorkspace(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -226,7 +396,6 @@ export function App() {
       name,
       plan: "Standalone workspace",
       summary: "Ready for requests, roadmap, and changelog work.",
-      inboxCount: 0,
       requests: [],
       roadmap: {
         Now: [],
@@ -234,11 +403,7 @@ export function App() {
         Later: []
       },
       changelog: [],
-      integrations: [
-        { label: "GitHub", state: "Optional" },
-        { label: "Jira", state: "Optional" },
-        { label: "Linear", state: "Optional" }
-      ]
+      integrations: integrationChips
     };
 
     setWorkspaceList((items) => [...items, createdWorkspace]);
@@ -246,40 +411,96 @@ export function App() {
     setNewWorkspaceName("");
     setIsCreatingWorkspace(false);
     setIsAddingRequest(false);
+    resetRequestFilters();
   }
 
   function addRequest(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const title = newRequestTitle.trim();
+    const title = newRequestDraft.title.trim();
     if (!title) return;
 
     const createdRequest: RequestItem = {
       id: `manual-${Date.now()}`,
       title,
-      requester: "Manual capture",
-      source: "Manual",
+      description: newRequestDraft.description.trim(),
+      requester: newRequestDraft.requester.trim() || "Manual capture",
+      source: newRequestDraft.source.trim() || "Manual",
+      tags: parseTags(newRequestDraft.tags),
       votes: 0,
+      hasCurrentUserVote: false,
       status: "New",
+      age: "just now",
+      archived: false,
+      comments: []
+    };
+
+    updateCurrentWorkspace((item) => ({
+      ...item,
+      requests: [createdRequest, ...item.requests]
+    }));
+    selectRequest(createdRequest.id);
+    setNewRequestDraft(emptyRequestDraft);
+    setArchiveFilter("active");
+    setStatusFilter("All");
+    setRequestQuery("");
+    setIsAddingRequest(false);
+  }
+
+  function updateSelectedRequest(updater: (request: RequestItem) => RequestItem) {
+    if (!selectedRequest) return;
+    updateRequest(selectedRequest.id, updater);
+  }
+
+  function normalizeSelectedRequestTitle() {
+    updateSelectedRequest((request) => ({
+      ...request,
+      title: request.title.trim() || "Untitled request"
+    }));
+  }
+
+  function toggleVote() {
+    updateSelectedRequest((request) => ({
+      ...request,
+      hasCurrentUserVote: !request.hasCurrentUserVote,
+      votes: request.hasCurrentUserVote
+        ? Math.max(0, request.votes - 1)
+        : request.votes + 1
+    }));
+  }
+
+  function archiveSelectedRequest() {
+    if (!selectedRequest) return;
+    const isRestoring = selectedRequest.archived;
+    const nextActiveRequest = workspace.requests.find(
+      (request) => request.id !== selectedRequest.id && !request.archived
+    );
+
+    updateRequest(selectedRequest.id, (request) => ({
+      ...request,
+      archived: !request.archived
+    }));
+
+    setArchiveFilter("active");
+    selectRequest(isRestoring ? selectedRequest.id : nextActiveRequest?.id);
+  }
+
+  function addComment(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const body = commentDraft.trim();
+    if (!selectedRequest || !body) return;
+
+    const comment: RequestComment = {
+      id: `comment-${Date.now()}`,
+      author: "Akhil",
+      body,
       age: "just now"
     };
 
-    setWorkspaceList((items) =>
-      items.map((item) =>
-        item.id === workspace.id
-          ? {
-              ...item,
-              inboxCount: item.inboxCount + 1,
-              requests: [createdRequest, ...item.requests]
-            }
-          : item
-      )
-    );
-    setSelectedRequestIdByWorkspace((items) => ({
-      ...items,
-      [workspace.id]: createdRequest.id
+    updateRequest(selectedRequest.id, (request) => ({
+      ...request,
+      comments: [comment, ...request.comments]
     }));
-    setNewRequestTitle("");
-    setIsAddingRequest(false);
+    setCommentDraft("");
   }
 
   return (
@@ -307,7 +528,7 @@ export function App() {
               >
                 <Icon aria-hidden="true" size={17} strokeWidth={1.75} />
                 <span>{item.label}</span>
-                {item.count ? <strong>{workspace.inboxCount}</strong> : null}
+                {item.count ? <strong>{activeRequestCount}</strong> : null}
               </a>
             );
           })}
@@ -330,6 +551,7 @@ export function App() {
               onChange={(event) => {
                 setWorkspaceId(event.target.value);
                 setIsAddingRequest(false);
+                setCommentDraft("");
               }}
               value={workspaceId}
             >
@@ -345,9 +567,11 @@ export function App() {
           <div className="command-bar" role="search">
             <Search aria-hidden="true" size={16} />
             <input
-              aria-label="Search requests, roadmap items, and changelog entries"
-              placeholder="Search requests, roadmap, changelog..."
+              aria-label="Search requests"
+              onChange={(event) => setRequestQuery(event.target.value)}
+              placeholder="Search requests, requester, tags..."
               type="search"
+              value={requestQuery}
             />
             <kbd>
               <Command aria-hidden="true" size={12} />K
@@ -401,7 +625,7 @@ export function App() {
           <div className="brief-instruments" aria-label="Workspace instruments">
             <span>
               <small>Requests</small>
-              <strong>{workspace.inboxCount}</strong>
+              <strong>{activeRequestCount}</strong>
             </span>
             <span>
               <small>Mode</small>
@@ -433,12 +657,60 @@ export function App() {
               <span>Request title</span>
               <input
                 autoFocus
-                onChange={(event) => setNewRequestTitle(event.target.value)}
+                onChange={(event) =>
+                  setNewRequestDraft((draft) => ({ ...draft, title: event.target.value }))
+                }
                 placeholder="e.g. Export customer list"
-                value={newRequestTitle}
+                value={newRequestDraft.title}
               />
             </label>
-            <div className="composer-actions">
+            <label>
+              <span>Requester</span>
+              <input
+                onChange={(event) =>
+                  setNewRequestDraft((draft) => ({
+                    ...draft,
+                    requester: event.target.value
+                  }))
+                }
+                placeholder="e.g. Success team"
+                value={newRequestDraft.requester}
+              />
+            </label>
+            <label className="wide-field">
+              <span>Description</span>
+              <textarea
+                onChange={(event) =>
+                  setNewRequestDraft((draft) => ({
+                    ...draft,
+                    description: event.target.value
+                  }))
+                }
+                placeholder="What did the user ask for, and why does it matter?"
+                value={newRequestDraft.description}
+              />
+            </label>
+            <label>
+              <span>Source</span>
+              <input
+                onChange={(event) =>
+                  setNewRequestDraft((draft) => ({ ...draft, source: event.target.value }))
+                }
+                placeholder="Manual"
+                value={newRequestDraft.source}
+              />
+            </label>
+            <label>
+              <span>Tags</span>
+              <input
+                onChange={(event) =>
+                  setNewRequestDraft((draft) => ({ ...draft, tags: event.target.value }))
+                }
+                placeholder="export, enterprise"
+                value={newRequestDraft.tags}
+              />
+            </label>
+            <div className="composer-actions wide-field">
               <button className="primary-action" type="submit">
                 Capture request
               </button>
@@ -446,7 +718,7 @@ export function App() {
                 className="secondary-action"
                 onClick={() => {
                   setIsAddingRequest(false);
-                  setNewRequestTitle("");
+                  setNewRequestDraft(emptyRequestDraft);
                 }}
                 type="button"
               >
@@ -463,7 +735,7 @@ export function App() {
                 <span className="section-label">Inbox</span>
                 <h2 id="inbox-title">Requests needing attention</h2>
               </div>
-              <button className="secondary-action" type="button">
+              <button className="secondary-action" onClick={resetRequestFilters} type="button">
                 View all
               </button>
             </div>
@@ -471,8 +743,8 @@ export function App() {
             <div className="route-protocol" aria-label="Activation steps">
               {[
                 ["Capture request", "Add feedback from users"],
-                ["Move to roadmap", "Choose what to build next"],
-                ["Draft changelog", "Close the loop when shipped"]
+                ["Manage signal", "Vote, comment, tag, archive"],
+                ["Move to roadmap", "Choose what to build next"]
               ].map(([title, detail], index) => (
                 <span className="protocol-step" key={title}>
                   <small>{String(index + 1).padStart(2, "0")}</small>
@@ -482,9 +754,48 @@ export function App() {
               ))}
             </div>
 
-            {workspace.requests.length ? (
+            <div className="request-tools" aria-label="Request filters">
+              <SlidersHorizontal aria-hidden="true" size={14} />
+              <label>
+                <span>Status</span>
+                <select
+                  aria-label="Status filter"
+                  onChange={(event) =>
+                    setStatusFilter(event.target.value as RequestStatusFilter)
+                  }
+                  value={statusFilter}
+                >
+                  <option value="All">All statuses</option>
+                  {requestStatuses.map((status) => (
+                    <option key={status} value={status}>
+                      {status}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span>Queue</span>
+                <select
+                  aria-label="Archive filter"
+                  onChange={(event) =>
+                    setArchiveFilter(event.target.value as RequestArchiveFilter)
+                  }
+                  value={archiveFilter}
+                >
+                  <option value="active">Active requests</option>
+                  <option value="archived">Archived requests</option>
+                </select>
+              </label>
+              {hasRequestFilters && filteredRequests.length ? (
+                <button className="secondary-action compact" onClick={resetRequestFilters} type="button">
+                  Reset filters
+                </button>
+              ) : null}
+            </div>
+
+            {filteredRequests.length ? (
               <div className="request-list">
-                {workspace.requests.map((request, index) => (
+                {filteredRequests.map((request, index) => (
                   <button
                     aria-pressed={selectedRequest?.id === request.id}
                     className={
@@ -493,12 +804,7 @@ export function App() {
                         : "request-row"
                     }
                     key={request.id}
-                    onClick={() =>
-                      setSelectedRequestIdByWorkspace((items) => ({
-                        ...items,
-                        [workspace.id]: request.id
-                      }))
-                    }
+                    onClick={() => selectRequest(request.id)}
                     type="button"
                   >
                     <span className="route-node" aria-hidden="true">
@@ -519,16 +825,26 @@ export function App() {
               </div>
             ) : (
               <div className="empty-state">
-                <strong>No requests yet</strong>
-                <p>Capture the first user request here. You can connect sources later.</p>
-                <button
-                  aria-controls="request-composer"
-                  className="secondary-action"
-                  onClick={() => setIsAddingRequest(true)}
-                  type="button"
-                >
-                  Add request
-                </button>
+                <strong>{emptyRequestTitle}</strong>
+                <p>
+                  {hasRequestFilters
+                    ? "Adjust or clear filters to return to the active request queue."
+                    : "Capture the first user request here. You can connect sources later."}
+                </p>
+                {hasRequestFilters ? (
+                  <button className="secondary-action" onClick={resetRequestFilters} type="button">
+                    Reset filters
+                  </button>
+                ) : (
+                  <button
+                    aria-controls="request-composer"
+                    className="secondary-action"
+                    onClick={() => setIsAddingRequest(true)}
+                    type="button"
+                  >
+                    Add request
+                  </button>
+                )}
               </div>
             )}
           </section>
@@ -550,27 +866,175 @@ export function App() {
 
             {selectedRequest ? (
               <>
+                <div className="request-actions" aria-label="Request actions">
+                  <button className="secondary-action" onClick={toggleVote} type="button">
+                    <ThumbsUp aria-hidden="true" size={14} />
+                    {selectedRequest.hasCurrentUserVote ? "Remove vote" : "Add vote"}
+                  </button>
+                  <button className="secondary-action" onClick={archiveSelectedRequest} type="button">
+                    {selectedRequest.archived ? (
+                      <RotateCcw aria-hidden="true" size={14} />
+                    ) : (
+                      <Archive aria-hidden="true" size={14} />
+                    )}
+                    {selectedRequest.archived ? "Restore request" : "Archive request"}
+                  </button>
+                </div>
+
+                <form
+                  className="request-editor"
+                  aria-label="Edit selected request"
+                  onSubmit={(event) => event.preventDefault()}
+                >
+                  <label className="wide-field">
+                    <span>Title</span>
+                    <input
+                      aria-label="Selected request title"
+                      onChange={(event) =>
+                        updateSelectedRequest((request) => ({
+                          ...request,
+                          title: event.target.value
+                        }))
+                      }
+                      onBlur={normalizeSelectedRequestTitle}
+                      value={selectedRequest.title}
+                    />
+                  </label>
+                  <label className="wide-field">
+                    <span>Description</span>
+                    <textarea
+                      aria-label="Selected request description"
+                      onChange={(event) =>
+                        updateSelectedRequest((request) => ({
+                          ...request,
+                          description: event.target.value
+                        }))
+                      }
+                      value={selectedRequest.description}
+                    />
+                  </label>
+                  <label>
+                    <span>Requester</span>
+                    <input
+                      aria-label="Selected request requester"
+                      onChange={(event) =>
+                        updateSelectedRequest((request) => ({
+                          ...request,
+                          requester: event.target.value
+                        }))
+                      }
+                      value={selectedRequest.requester}
+                    />
+                  </label>
+                  <label>
+                    <span>Source</span>
+                    <input
+                      aria-label="Selected request source"
+                      onChange={(event) =>
+                        updateSelectedRequest((request) => ({
+                          ...request,
+                          source: event.target.value
+                        }))
+                      }
+                      value={selectedRequest.source}
+                    />
+                  </label>
+                  <label>
+                    <span>Status</span>
+                    <select
+                      aria-label="Selected request status"
+                      onChange={(event) =>
+                        updateSelectedRequest((request) => ({
+                          ...request,
+                          status: event.target.value as RequestStatus
+                        }))
+                      }
+                      value={selectedRequest.status}
+                    >
+                      {requestStatuses.map((status) => (
+                        <option key={status} value={status}>
+                          {status}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    <span>Tags</span>
+                    <input
+                      aria-label="Selected request tags"
+                      onChange={(event) =>
+                        updateSelectedRequest((request) => ({
+                          ...request,
+                          tags: parseTags(event.target.value)
+                        }))
+                      }
+                      value={selectedRequest.tags.join(", ")}
+                    />
+                  </label>
+                </form>
+
+                <div className="tag-list" aria-label="Selected tag list">
+                  <Tag aria-hidden="true" size={13} />
+                  {selectedRequest.tags.length ? (
+                    selectedRequest.tags.map((tag) => <span key={tag}>{tag}</span>)
+                  ) : (
+                    <small>No tags</small>
+                  )}
+                </div>
+
                 <dl className="detail-list">
                   <div>
                     <dt>Requested by</dt>
                     <dd>{selectedRequest.requester}</dd>
                   </div>
                   <div>
+                    <dt>Source</dt>
+                    <dd>{selectedRequest.source}</dd>
+                  </div>
+                  <div>
                     <dt>Votes</dt>
                     <dd>{selectedRequest.votes}</dd>
                   </div>
                   <div>
-                    <dt>Source</dt>
-                    <dd>{selectedRequest.source}</dd>
+                    <dt>Comments</dt>
+                    <dd>{selectedRequest.comments.length}</dd>
+                  </div>
+                  <div>
+                    <dt>Archive</dt>
+                    <dd>{selectedRequest.archived ? "Archived" : "Active"}</dd>
                   </div>
                 </dl>
 
-                <div className="inspector-block">
-                  <strong>Why it matters</strong>
-                  <p>
-                    Users cannot tell when they are close to hitting API limits. This
-                    blocks debugging and creates repeated support requests.
-                  </p>
+                <form className="comment-form" aria-label="Add comment" onSubmit={addComment}>
+                  <label>
+                    <span>Comment</span>
+                    <textarea
+                      onChange={(event) => setCommentDraft(event.target.value)}
+                      placeholder="Add evidence, context, or a customer quote"
+                      value={commentDraft}
+                    />
+                  </label>
+                  <button className="secondary-action" type="submit">
+                    <MessageCircle aria-hidden="true" size={14} />
+                    Add comment
+                  </button>
+                </form>
+
+                <div className="comment-list" aria-label="Request comments">
+                  {selectedRequest.comments.length ? (
+                    selectedRequest.comments.map((comment) => (
+                      <article className="comment-item" key={comment.id}>
+                        <strong>{comment.author}</strong>
+                        <p>{comment.body}</p>
+                        <small>{comment.age}</small>
+                      </article>
+                    ))
+                  ) : (
+                    <div className="empty-state compact-empty">
+                      <strong>No comments yet</strong>
+                      <p>Add the first note when a request has evidence worth preserving.</p>
+                    </div>
+                  )}
                 </div>
               </>
             ) : (
@@ -660,7 +1124,7 @@ export function App() {
         </span>
         <span>
           <MessageSquareText aria-hidden="true" size={14} />
-          {workspace.inboxCount} {workspace.inboxCount === 1 ? "request" : "requests"}
+          {activeRequestCount} {activeRequestCount === 1 ? "request" : "requests"}
         </span>
       </div>
     </main>

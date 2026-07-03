@@ -134,4 +134,200 @@ describe("OpenRoad workspace shell", () => {
     expect(screen.getByText("Draft queue")).toBeInTheDocument();
     expect(screen.getByText("Inline markdown in comments")).toBeInTheDocument();
   });
+
+  it("captures a standalone request with details and tags", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole("button", { name: "New workspace" }));
+    await user.type(screen.getByLabelText("Workspace name"), "Request Lab");
+    await user.click(screen.getByRole("button", { name: "Create workspace" }));
+    await user.click(screen.getAllByRole("button", { name: "Add request" })[0]);
+
+    const composer = screen.getByRole("form", { name: "Add request" });
+    await user.type(within(composer).getByLabelText("Request title"), "Usage billing export");
+    await user.type(
+      within(composer).getByLabelText("Description"),
+      "Finance needs a monthly usage export."
+    );
+    await user.type(within(composer).getByLabelText("Requester"), "Finance team");
+    await user.clear(within(composer).getByLabelText("Source"));
+    await user.type(within(composer).getByLabelText("Source"), "Slack");
+    await user.type(within(composer).getByLabelText("Tags"), "billing, export");
+    await user.click(screen.getByRole("button", { name: "Capture request" }));
+
+    expect(screen.getByRole("heading", { name: "Usage billing export" })).toBeInTheDocument();
+    expect(screen.getByText("Finance team")).toBeInTheDocument();
+    expect(screen.getByText("Slack")).toBeInTheDocument();
+    expect(screen.getByText("billing")).toBeInTheDocument();
+    expect(screen.getByText("export")).toBeInTheDocument();
+  });
+
+  it("edits selected request metadata and status", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(
+      within(screen.getByRole("region", { name: /Requests needing attention/ })).getByRole(
+        "button",
+        { name: /Support bulk export to CSV/ }
+      )
+    );
+    await user.clear(screen.getByLabelText("Selected request title"));
+    await user.type(screen.getByLabelText("Selected request title"), "CSV exports for accounts");
+    await user.clear(screen.getByLabelText("Selected request requester"));
+    await user.type(screen.getByLabelText("Selected request requester"), "Revenue team");
+    await user.clear(screen.getByLabelText("Selected request source"));
+    await user.type(screen.getByLabelText("Selected request source"), "Customer call");
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Selected request status" }),
+      "Shipping soon"
+    );
+
+    expect(screen.getByRole("heading", { name: "CSV exports for accounts" })).toBeInTheDocument();
+    expect(screen.getByText("Revenue team")).toBeInTheDocument();
+    expect(screen.getByText("Customer call")).toBeInTheDocument();
+    expect(screen.getAllByText("Shipping soon").length).toBeGreaterThan(0);
+  });
+
+  it("adds and removes the current user's vote", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(
+      within(screen.getByRole("region", { name: /Requests needing attention/ })).getByRole(
+        "button",
+        { name: /Dark mode for docs site/ }
+      )
+    );
+    await user.click(screen.getByRole("button", { name: "Add vote" }));
+
+    expect(screen.getByRole("button", { name: "Remove vote" })).toBeInTheDocument();
+    expect(screen.getAllByText("90").length).toBeGreaterThan(0);
+
+    await user.click(screen.getByRole("button", { name: "Remove vote" }));
+
+    expect(screen.getByRole("button", { name: "Add vote" })).toBeInTheDocument();
+    expect(screen.getAllByText("89").length).toBeGreaterThan(0);
+  });
+
+  it("adds a comment to the selected request", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(
+      within(screen.getByRole("region", { name: /Requests needing attention/ })).getByRole(
+        "button",
+        { name: /Dark mode for docs site/ }
+      )
+    );
+    await user.type(screen.getByLabelText("Comment"), "Include docs reader preferences.");
+    await user.click(screen.getByRole("button", { name: "Add comment" }));
+
+    expect(screen.getByText("Include docs reader preferences.")).toBeInTheDocument();
+    expect(screen.getByText("Akhil")).toBeInTheDocument();
+  });
+
+  it("searches requests and resets a no-results state", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    const inboxRegion = screen.getByRole("region", { name: /Requests needing attention/ });
+    const search = screen.getByRole("searchbox", {
+      name: "Search requests"
+    });
+
+    await user.type(search, "webhook");
+
+    expect(within(inboxRegion).getByRole("button", { name: /Webhook retry controls/ })).toBeInTheDocument();
+    expect(within(inboxRegion).queryByRole("button", { name: /API rate limit visibility/ })).not.toBeInTheDocument();
+
+    await user.clear(search);
+    await user.type(search, "not-a-real-request");
+
+    expect(screen.getByText("No matching requests")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Reset filters" }));
+
+    expect(within(inboxRegion).getByRole("button", { name: /API rate limit visibility/ })).toBeInTheDocument();
+  });
+
+  it("filters requests by status", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    const inboxRegion = screen.getByRole("region", { name: /Requests needing attention/ });
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Status filter" }),
+      "Needs decision"
+    );
+
+    expect(within(inboxRegion).getByRole("button", { name: /API rate limit visibility/ })).toBeInTheDocument();
+    expect(within(inboxRegion).queryByRole("button", { name: /Support bulk export to CSV/ })).not.toBeInTheDocument();
+
+    await user.selectOptions(screen.getByRole("combobox", { name: "Status filter" }), "Planned");
+
+    expect(within(inboxRegion).getByRole("button", { name: /Support bulk export to CSV/ })).toBeInTheDocument();
+    expect(within(inboxRegion).queryByRole("button", { name: /API rate limit visibility/ })).not.toBeInTheDocument();
+  });
+
+  it("archives requests and shows archived requests through the queue filter", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    const inboxRegion = screen.getByRole("region", { name: /Requests needing attention/ });
+    await user.click(within(inboxRegion).getByRole("button", { name: /Dark mode for docs site/ }));
+    await user.click(screen.getByRole("button", { name: "Archive request" }));
+
+    expect(within(inboxRegion).queryByRole("button", { name: /Dark mode for docs site/ })).not.toBeInTheDocument();
+
+    await user.selectOptions(screen.getByRole("combobox", { name: "Archive filter" }), "archived");
+
+    expect(within(inboxRegion).getByRole("button", { name: /Dark mode for docs site/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Restore request" })).toBeInTheDocument();
+  });
+
+  it("keeps the selected request open when edits stop matching active filters", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    const inboxRegion = screen.getByRole("region", { name: /Requests needing attention/ });
+    await user.selectOptions(screen.getByRole("combobox", { name: "Status filter" }), "New");
+    await user.click(within(inboxRegion).getByRole("button", { name: /Dark mode for docs site/ }));
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Selected request status" }),
+      "Planned"
+    );
+
+    expect(screen.getByRole("heading", { name: "Dark mode for docs site" })).toBeInTheDocument();
+    expect(screen.getByText("No matching requests")).toBeInTheDocument();
+  });
+
+  it("clears unsent comments when archive changes the selected request", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    const inboxRegion = screen.getByRole("region", { name: /Requests needing attention/ });
+    await user.click(within(inboxRegion).getByRole("button", { name: /Dark mode for docs site/ }));
+    await user.type(screen.getByLabelText("Comment"), "Carry this nowhere.");
+    await user.click(screen.getByRole("button", { name: "Archive request" }));
+
+    expect(screen.getByLabelText("Comment")).toHaveValue("");
+    expect(screen.queryByText("Carry this nowhere.")).not.toBeInTheDocument();
+  });
+
+  it("normalizes blank edited request titles on blur", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(
+      within(screen.getByRole("region", { name: /Requests needing attention/ })).getByRole(
+        "button",
+        { name: /Dark mode for docs site/ }
+      )
+    );
+    await user.clear(screen.getByLabelText("Selected request title"));
+    await user.tab();
+
+    expect(screen.getByRole("heading", { name: "Untitled request" })).toBeInTheDocument();
+  });
 });

@@ -50,13 +50,18 @@ body {
 
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
 }
 
 button,
 select {
   cursor: pointer;
+}
+
+textarea {
+  resize: vertical;
 }
 
 button {
@@ -69,7 +74,8 @@ button {
 button:focus-visible,
 a:focus-visible,
 input:focus-visible,
-select:focus-visible {
+select:focus-visible,
+textarea:focus-visible {
   outline: 2px solid var(--route);
   outline-offset: 2px;
 }
@@ -296,7 +302,9 @@ a:hover {
 
 .command-bar input::placeholder,
 .workspace-form input::placeholder,
-.request-composer input::placeholder {
+.request-composer input::placeholder,
+.request-composer textarea::placeholder,
+.comment-form textarea::placeholder {
   color: var(--muted);
   opacity: 1;
 }
@@ -475,33 +483,64 @@ h2 {
   border: 1px solid var(--line);
   display: grid;
   gap: 12px;
-  grid-template-columns: minmax(220px, 1fr) auto;
   margin-bottom: 10px;
   padding: 12px;
 }
 
+.workspace-form {
+  grid-template-columns: minmax(220px, 1fr) auto;
+}
+
+.request-composer {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .workspace-form label,
-.request-composer label {
+.request-composer label,
+.request-editor label,
+.comment-form label,
+.request-tools label {
   display: grid;
   gap: 6px;
   min-width: 0;
 }
 
 .workspace-form label span,
-.request-composer label span {
+.request-composer label span,
+.request-editor label span,
+.comment-form label span,
+.request-tools label span {
   color: var(--muted);
   font-family: var(--label-font);
   font-size: 12px;
 }
 
 .workspace-form input,
-.request-composer input {
+.request-composer input,
+.request-composer textarea,
+.request-editor input,
+.request-editor select,
+.request-editor textarea,
+.comment-form textarea,
+.request-tools select {
   background: var(--plate);
   border: 1px solid var(--line);
   color: var(--ink);
   min-height: 38px;
   padding: 0 11px;
   width: 100%;
+}
+
+.request-composer textarea,
+.request-editor textarea,
+.comment-form textarea {
+  line-height: 1.45;
+  min-height: 76px;
+  padding: 9px 11px;
+}
+
+.wide-field {
+  grid-column: 1 / -1;
 }
 
 .composer-actions {
@@ -573,6 +612,21 @@ h2 {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.request-tools {
+  align-items: end;
+  border: 1px solid var(--line);
+  display: grid;
+  gap: 10px;
+  grid-template-columns: auto minmax(130px, 1fr) minmax(150px, 1fr) auto;
+  margin-bottom: 12px;
+  padding: 10px;
+}
+
+.request-tools > svg {
+  align-self: center;
+  color: var(--route);
 }
 
 .request-list {
@@ -746,6 +800,51 @@ h2 {
   align-self: start;
 }
 
+.request-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.request-editor {
+  border: 1px solid var(--line);
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-bottom: 12px;
+  padding: 12px;
+}
+
+.tag-list {
+  align-items: center;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+  padding: 8px 10px;
+}
+
+.tag-list svg {
+  color: var(--route);
+}
+
+.tag-list span {
+  background: var(--plate);
+  border: 1px solid var(--line);
+  color: var(--ink);
+  font-family: var(--label-font);
+  font-size: 12px;
+  min-height: 24px;
+  padding: 3px 7px;
+}
+
+.tag-list small {
+  font-size: 12px;
+}
+
 .detail-list {
   border: 1px solid var(--line);
   display: grid;
@@ -789,6 +888,41 @@ dd {
   font-size: 13px;
   line-height: 1.55;
   margin-top: 8px;
+}
+
+.comment-form {
+  border: 1px solid var(--line);
+  display: grid;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding: 12px;
+}
+
+.comment-form .secondary-action {
+  justify-self: start;
+}
+
+.comment-list {
+  display: grid;
+  gap: 8px;
+}
+
+.comment-item {
+  background: var(--plate);
+  border: 1px solid var(--line);
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+}
+
+.comment-item strong {
+  font-family: var(--label-font);
+}
+
+.comment-item p,
+.comment-item small {
+  color: var(--muted);
+  font-size: 13px;
 }
 
 .integration-chips {
@@ -1027,6 +1161,8 @@ dd {
 
   .workspace-form,
   .request-composer,
+  .request-editor,
+  .request-tools,
   .route-protocol,
   .roadmap-lanes {
     grid-template-columns: 1fr;

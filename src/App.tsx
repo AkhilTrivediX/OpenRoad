@@ -25,7 +25,14 @@ import {
   Unlink,
   Waypoints
 } from "lucide-react";
-import { type FormEvent, useEffect, useMemo, useReducer, useState } from "react";
+import {
+  type FormEvent,
+  useEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState
+} from "react";
 import {
   clearOpenRoadState,
   changelogStates,
@@ -69,6 +76,11 @@ import {
   type Workspace,
   type WorkStatus
 } from "./domain/openroad";
+import {
+  isServerPersistenceEnabled,
+  loadServerOpenRoadState,
+  saveServerOpenRoadState
+} from "./persistence/openroadServer";
 
 const triageViews = [
   { value: "all", label: "All active" },
@@ -260,6 +272,10 @@ function requestMatchesTriageView(request: RequestItem, view: TriageView) {
 }
 
 export function App() {
+  const [serverPersistenceEnabled] = useState(() => isServerPersistenceEnabled());
+  const hasLoadedServerState = useRef(!serverPersistenceEnabled);
+  const hasServerSaveFailed = useRef(false);
+  const skipNextServerSave = useRef(false);
   const [loadResult] = useState(() => loadOpenRoadState());
   const [openRoadState, dispatchOpenRoad] = useReducer(
     openRoadReducer,
@@ -329,7 +345,67 @@ export function App() {
     } catch {
       setPersistenceMessage("OpenRoad could not save local workspace data.");
     }
-  }, [openRoadState]);
+
+    if (
+      !serverPersistenceEnabled ||
+      !hasLoadedServerState.current ||
+      hasServerSaveFailed.current
+    ) {
+      return;
+    }
+
+    if (skipNextServerSave.current) {
+      skipNextServerSave.current = false;
+      return;
+    }
+
+    let isCancelled = false;
+
+    saveServerOpenRoadState(openRoadState as OpenRoadState).catch(() => {
+      if (isCancelled) return;
+      hasServerSaveFailed.current = true;
+      setPersistenceMessage(
+        "OpenRoad could not save server workspace data. Local browser data is active."
+      );
+    });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [openRoadState, serverPersistenceEnabled]);
+  useEffect(() => {
+    if (!serverPersistenceEnabled) return;
+
+    let isCancelled = false;
+
+    loadServerOpenRoadState()
+      .then((result) => {
+        if (isCancelled) return;
+        hasLoadedServerState.current = true;
+        skipNextServerSave.current = true;
+        dispatchOpenRoad({ type: "replace-state", state: result.state });
+        setWorkspaceId((currentWorkspaceId) =>
+          result.state.workspaces.some((item) => item.id === currentWorkspaceId)
+            ? currentWorkspaceId
+            : result.state.workspaces[0]?.id ?? currentWorkspaceId
+        );
+        setPersistenceMessage(
+          result.status === "recovered"
+            ? result.error ?? "Server data was recovered. Seed data is active."
+            : "Server storage connected."
+        );
+      })
+      .catch(() => {
+        if (isCancelled) return;
+        hasLoadedServerState.current = true;
+        hasServerSaveFailed.current = true;
+        setPersistenceMessage("Server storage is unavailable. Local browser data is active.");
+      });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [serverPersistenceEnabled]);
   useEffect(() => {
     saveSelectedWorkspaceId(workspaceId);
   }, [workspaceId]);

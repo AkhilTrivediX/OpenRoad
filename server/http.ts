@@ -59,6 +59,18 @@ import {
   type LinearIssue
 } from "../src/integrations/linear.js";
 import {
+  createJiraInstallation,
+  createJiraIssueExternalRef,
+  createJiraIssueMapping,
+  createOpenRoadRequestFromJiraIssue,
+  getJiraInstallationCapabilities,
+  jiraRequiredInstallationPermissions,
+  parseJiraIssuePayload,
+  syncOpenRoadRequestFromJiraIssue,
+  type JiraInstallationInput,
+  type JiraIssue
+} from "../src/integrations/jira.js";
+import {
   OpenRoadStoreError,
   parseOpenRoadState,
   type OpenRoadStore
@@ -87,6 +99,11 @@ import {
   linearOAuthConfigFromEnv,
   type LinearOAuthConfig
 } from "./linear.js";
+import {
+  createSafeJiraOAuthSetup,
+  jiraOAuthConfigFromEnv,
+  type JiraOAuthConfig
+} from "./jira.js";
 import type { AuditEvent, TeamStore } from "./team.js";
 
 type CreateOpenRoadServerOptions = {
@@ -95,6 +112,7 @@ type CreateOpenRoadServerOptions = {
   githubAppClient?: GitHubAppClient;
   githubAppConfig?: GitHubAppConfig;
   integrationStore?: IntegrationStore;
+  jiraOAuthConfig?: JiraOAuthConfig;
   linearOAuthConfig?: LinearOAuthConfig;
   logger?: Pick<Console, "error" | "log">;
   portalRateLimiter?: PortalRateLimiter;
@@ -211,6 +229,7 @@ export function createOpenRoadServer({
   githubAppConfig = githubAppConfigFromEnv(),
   githubAppClient = new FetchGitHubAppClient(githubAppConfig),
   integrationStore,
+  jiraOAuthConfig = jiraOAuthConfigFromEnv(),
   linearOAuthConfig = linearOAuthConfigFromEnv(),
   logger = console,
   portalRateLimiter = createPortalRateLimiterFromEnv(),
@@ -237,6 +256,7 @@ export function createOpenRoadServer({
           githubAppClient,
           githubAppConfig,
           integrationStore,
+          jiraOAuthConfig,
           linearOAuthConfig,
           teamStore,
           portalRateLimiter,
@@ -269,6 +289,7 @@ async function handleApiRequest(
   githubAppClient: GitHubAppClient,
   githubAppConfig: GitHubAppConfig,
   integrationStore: IntegrationStore | undefined,
+  jiraOAuthConfig: JiraOAuthConfig,
   linearOAuthConfig: LinearOAuthConfig,
   teamStore: TeamStore | undefined,
   portalRateLimiter: PortalRateLimiter,
@@ -415,6 +436,23 @@ async function handleApiRequest(
     return;
   }
 
+  const jiraIssueImportMatch = requestUrl.pathname.match(
+    /^\/api\/openroad\/workspaces\/([^/]+)\/integrations\/jira\/issues\/import$/
+  );
+
+  if (jiraIssueImportMatch) {
+    await handleJiraIssueImportRequest(
+      request,
+      response,
+      store,
+      access,
+      teamStore,
+      integrationStore,
+      jiraIssueImportMatch[1]
+    );
+    return;
+  }
+
   const linearOAuthSetupMatch = requestUrl.pathname.match(
     /^\/api\/openroad\/workspaces\/([^/]+)\/integrations\/linear\/oauth\/setup$/
   );
@@ -427,6 +465,22 @@ async function handleApiRequest(
       access,
       linearOAuthConfig,
       linearOAuthSetupMatch[1]
+    );
+    return;
+  }
+
+  const jiraOAuthSetupMatch = requestUrl.pathname.match(
+    /^\/api\/openroad\/workspaces\/([^/]+)\/integrations\/jira\/oauth\/setup$/
+  );
+
+  if (jiraOAuthSetupMatch) {
+    await handleJiraOAuthSetupRequest(
+      request,
+      response,
+      store,
+      access,
+      jiraOAuthConfig,
+      jiraOAuthSetupMatch[1]
     );
     return;
   }
@@ -927,6 +981,21 @@ type LinearIssueImportStateResult = {
   request: RequestItem;
 };
 
+type JiraIssueImportPayload = {
+  installation: IntegrationInstallation;
+  issue: JiraIssue;
+  requestId?: string;
+  workspaceId: string;
+};
+
+type JiraIssueImportStateResult = {
+  created: boolean;
+  installation: IntegrationInstallation;
+  integrationState: IntegrationState;
+  mapping: ExternalObjectMapping;
+  request: RequestItem;
+};
+
 async function handleLinearIssueImportRequest(
   request: IncomingMessage,
   response: ServerResponse,
@@ -1009,6 +1078,88 @@ async function handleLinearIssueImportRequest(
   }
 }
 
+async function handleJiraIssueImportRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  store: OpenRoadStore,
+  access: AccessContext,
+  teamStore: TeamStore | undefined,
+  integrationStore: IntegrationStore | undefined,
+  encodedWorkspaceId: string
+) {
+  if (request.method !== "POST") {
+    writeApiError(response, 405, "invalid_method", "This endpoint only supports POST.", access);
+    return;
+  }
+
+  const workspaceId = decodeURIComponent(encodedWorkspaceId);
+
+  try {
+    requirePermission(access, "workspace:write", workspaceId);
+
+    if (!integrationStore) {
+      throw new ApiRequestError(
+        "not_configured",
+        503,
+        "OpenRoad integration metadata store is not configured."
+      );
+    }
+
+    const payload = await readJsonBody(request, 500_000);
+    const jiraPayload = parseJiraIssueImportPayload(payload, workspaceId);
+    requireIntegrationActorForInstallation(access, jiraPayload.installation);
+    const current = await store.load();
+    const workspace = current.state.workspaces.find((item) => item.id === workspaceId);
+
+    if (!workspace) {
+      throw new ApiRequestError("not_found", 404, "Workspace was not found.");
+    }
+
+    const integrationResult = await integrationStore.load();
+    const importResult = createJiraIssueImportState(
+      workspace,
+      integrationResult.state,
+      jiraPayload,
+      new Date().toISOString()
+    );
+    const nextState = parseOpenRoadState(
+      openRoadReducer(current.state, {
+        request: importResult.request,
+        type: importResult.created ? "create-request" : "replace-request",
+        workspaceId
+      })
+    );
+    const state = await store.replaceState(nextState);
+    const integrationState = await integrationStore.replaceState(importResult.integrationState);
+    const auditEvent = await recordAuditEvent(teamStore, state, access, {
+      summary: `${importResult.created ? "Imported" : "Updated"} Jira issue ${
+        jiraPayload.issue.key
+      }.`,
+      type: importResult.created ? "integration.jira.issue.import" : "integration.jira.issue.sync",
+      workspaceId
+    });
+
+    writeJson(
+      response,
+      importResult.created ? 201 : 200,
+      {
+        installation: sanitizeInstallation(importResult.installation),
+        mapping: importResult.mapping,
+        request: importResult.request,
+        revision: auditEvent?.id ?? `jira-import-${Date.now()}`,
+        status: importResult.created ? "created" : "updated",
+        totals: {
+          installations: integrationState.installations.length,
+          mappings: integrationState.mappings.length
+        }
+      },
+      access
+    );
+  } catch (error) {
+    writeKnownApiError(response, error, access);
+  }
+}
+
 function parseLinearIssueImportPayload(
   payload: unknown,
   workspaceId: string
@@ -1071,6 +1222,73 @@ function parseLinearInstallationPayload(
     createdAt: getBoundedText(value.createdAt, 80),
     id,
     permissions: parseLinearIntegrationPermissions(value.permissions),
+    status: parseIntegrationInstallationStatus(value.status),
+    workspaceId
+  };
+}
+
+function parseJiraIssueImportPayload(
+  payload: unknown,
+  workspaceId: string
+): JiraIssueImportPayload {
+  if (!isRecord(payload)) {
+    throw new ApiRequestError("invalid_request", 400, "Jira import payload must be an object.");
+  }
+
+  try {
+    const issue = parseJiraIssuePayload(payload.issue);
+    const installation = createJiraInstallation(
+      parseJiraInstallationPayload(payload.installation, workspaceId)
+    );
+    const requestId = getBoundedText(payload.requestId, 120);
+
+    return {
+      installation,
+      issue,
+      requestId,
+      workspaceId
+    };
+  } catch (error) {
+    throw new ApiRequestError(
+      "invalid_request",
+      400,
+      error instanceof Error ? error.message : "Jira import payload is invalid."
+    );
+  }
+}
+
+function parseJiraInstallationPayload(
+  value: unknown,
+  workspaceId: string
+): JiraInstallationInput {
+  if (!isRecord(value)) {
+    throw new Error("Jira installation payload must be an object.");
+  }
+
+  const accountId =
+    getBoundedText(value.accountId, 160) ??
+    getBoundedText(value.providerAccountId, 160) ??
+    getBoundedText(value.cloudId, 160) ??
+    getBoundedText(value.siteId, 160) ??
+    getBoundedText(value.accountName, 160);
+  const accountName =
+    getBoundedText(value.accountName, 160) ??
+    getBoundedText(value.providerAccountName, 160) ??
+    getBoundedText(value.siteName, 160) ??
+    getBoundedText(value.baseUrl, 160) ??
+    getBoundedText(value.accountId, 160);
+  const id = getBoundedText(value.id, 160);
+
+  if (!id) throw new Error("Jira installation id is required.");
+  if (!accountId) throw new Error("Jira account id is required.");
+  if (!accountName) throw new Error("Jira account name is required.");
+
+  return {
+    accountId,
+    accountName,
+    createdAt: getBoundedText(value.createdAt, 80),
+    id,
+    permissions: parseJiraIntegrationPermissions(value.permissions),
     status: parseIntegrationInstallationStatus(value.status),
     workspaceId
   };
@@ -1160,6 +1378,90 @@ function createLinearIssueImportState(
   };
 }
 
+function createJiraIssueImportState(
+  workspace: Workspace,
+  integrationState: IntegrationState,
+  payload: JiraIssueImportPayload,
+  now: string
+): JiraIssueImportStateResult {
+  if (payload.installation.status !== "active") {
+    throw new ApiRequestError(
+      "invalid_request",
+      400,
+      "Jira installation must be active before importing issues."
+    );
+  }
+
+  if (!getJiraInstallationCapabilities(payload.installation).canImportIssues) {
+    throw new ApiRequestError(
+      "invalid_request",
+      400,
+      "Jira installation does not have enough permissions to import issues."
+    );
+  }
+
+  const existingInstallation = integrationState.installations.find((installation) =>
+    isSameInstallationScope(installation, payload.installation)
+  );
+
+  if (existingInstallation && existingInstallation.status !== "active") {
+    throw new ApiRequestError(
+      "invalid_state",
+      422,
+      "Jira installation is disconnected or suspended."
+    );
+  }
+
+  const issueRef = createJiraIssueExternalRef(payload.issue);
+  const existingMapping = integrationState.mappings.find((mapping) =>
+    mapping.installationId === payload.installation.id &&
+    mapping.openRoad.workspaceId === payload.workspaceId &&
+    isSameExternalObject(mapping, issueRef)
+  );
+  const targetRequestId = payload.requestId ?? existingMapping?.openRoad.id;
+  const existingRequest = targetRequestId
+    ? workspace.requests.find((item) => item.id === targetRequestId)
+    : undefined;
+
+  if (payload.requestId && !existingRequest) {
+    throw new ApiRequestError("not_found", 404, "OpenRoad request was not found.");
+  }
+
+  if (existingMapping && !existingRequest && !payload.requestId) {
+    throw new ApiRequestError(
+      "invalid_state",
+      422,
+      "Jira issue mapping points to a missing OpenRoad request."
+    );
+  }
+
+  const request = existingRequest
+    ? syncOpenRoadRequestFromJiraIssue(existingRequest, payload.issue, now)
+    : createOpenRoadRequestFromJiraIssue(payload.issue, {
+        existingRequestIds: workspace.requests.map((item) => item.id),
+        now
+      });
+  const openRoad = {
+    id: request.id,
+    type: "request" as const,
+    workspaceId: payload.workspaceId
+  };
+  const mapping = createJiraIssueMapping(payload.installation, payload.issue, openRoad, now);
+  const nextIntegrationState = parseIntegrationState({
+    ...integrationState,
+    installations: upsertInstallationByScope(integrationState.installations, payload.installation),
+    mappings: upsertById(integrationState.mappings, mapping)
+  });
+
+  return {
+    created: !existingRequest,
+    installation: payload.installation,
+    integrationState: nextIntegrationState,
+    mapping,
+    request
+  };
+}
+
 async function handleLinearOAuthSetupRequest(
   request: IncomingMessage,
   response: ServerResponse,
@@ -1189,6 +1491,47 @@ async function handleLinearOAuthSetupRequest(
       200,
       {
         linearOAuth: createSafeLinearOAuthSetup(linearOAuthConfig, workspaceId),
+        workspace: {
+          id: workspace.id,
+          name: workspace.name
+        }
+      },
+      access
+    );
+  } catch (error) {
+    writeKnownApiError(response, error, access);
+  }
+}
+
+async function handleJiraOAuthSetupRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  store: OpenRoadStore,
+  access: AccessContext,
+  jiraOAuthConfig: JiraOAuthConfig,
+  encodedWorkspaceId: string
+) {
+  if (request.method !== "GET") {
+    writeApiError(response, 405, "invalid_method", "This endpoint only supports GET.", access);
+    return;
+  }
+
+  const workspaceId = decodeURIComponent(encodedWorkspaceId);
+
+  try {
+    requirePermission(access, "integration:manage", workspaceId);
+    const result = await store.load();
+    const workspace = result.state.workspaces.find((item) => item.id === workspaceId);
+
+    if (!workspace) {
+      throw new ApiRequestError("not_found", 404, "Workspace was not found.");
+    }
+
+    writeJson(
+      response,
+      200,
+      {
+        jiraOAuth: createSafeJiraOAuthSetup(jiraOAuthConfig, workspaceId),
         workspace: {
           id: workspace.id,
           name: workspace.name
@@ -1379,6 +1722,18 @@ function parseLinearIntegrationPermissions(value: unknown): IntegrationPermissio
     .map((permission) => getBoundedText(permission, 80))
     .filter((permission): permission is IntegrationPermission =>
       linearRequiredInstallationPermissions.includes(permission as IntegrationPermission) ||
+      permission === "write:external" ||
+      permission === "webhook:receive"
+    );
+}
+
+function parseJiraIntegrationPermissions(value: unknown): IntegrationPermission[] {
+  if (!Array.isArray(value)) return jiraRequiredInstallationPermissions;
+
+  return value
+    .map((permission) => getBoundedText(permission, 80))
+    .filter((permission): permission is IntegrationPermission =>
+      jiraRequiredInstallationPermissions.includes(permission as IntegrationPermission) ||
       permission === "write:external" ||
       permission === "webhook:receive"
     );

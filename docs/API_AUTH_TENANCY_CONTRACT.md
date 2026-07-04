@@ -94,6 +94,8 @@ Public portal responses use the OpenRoad public projection and must not include 
 - `POST /api/openroad/workspaces/:workspaceId/integrations/github/app/installations/:installationId/disconnect`
 - `POST /api/openroad/workspaces/:workspaceId/integrations/linear/issues/import`
 - `GET /api/openroad/workspaces/:workspaceId/integrations/linear/oauth/setup`
+- `POST /api/openroad/workspaces/:workspaceId/integrations/jira/issues/import`
+- `GET /api/openroad/workspaces/:workspaceId/integrations/jira/oauth/setup`
 - `GET /api/openroad/audit-events`
 - `GET /api/openroad/ops/status`
 
@@ -112,6 +114,10 @@ GitHub App disconnect also requires `integration:manage`. It marks installation 
 Linear issue import is workspace-scoped and requires workspace write permission. It accepts fixture/API payloads only in the current slice; it must not accept Linear OAuth tokens, refresh tokens, client secrets, webhook secrets, or raw OAuth codes.
 
 Linear OAuth setup requires `integration:manage`, which is reserved for local owners/admins and workspace owners. It returns a safe authorization URL and setup state, but does not exchange OAuth codes or persist tokens.
+
+Jira issue import is workspace-scoped and requires workspace write permission. It accepts fixture/API payloads only in the current slice; it must not accept Atlassian OAuth tokens, refresh tokens, client secrets, webhook secrets, or raw OAuth codes.
+
+Jira OAuth setup requires `integration:manage`, which is reserved for local owners/admins and workspace owners. It returns a safe Atlassian authorization URL and setup state, but does not exchange OAuth codes or persist tokens.
 
 ## Provider-Signature Routes
 
@@ -133,6 +139,10 @@ $env:OPENROAD_GITHUB_APP_WEBHOOK_SECRET="replace-with-long-random-secret"
 $env:OPENROAD_LINEAR_CLIENT_ID="lin_..."
 $env:OPENROAD_LINEAR_CLIENT_SECRET="replace-with-linear-client-secret"
 $env:OPENROAD_LINEAR_REDIRECT_URI="https://openroad.example.com/api/openroad/integrations/linear/oauth/callback"
+$env:OPENROAD_JIRA_AUTH_BASE_URL="https://auth.atlassian.com"
+$env:OPENROAD_JIRA_CLIENT_ID="jira-client-id"
+$env:OPENROAD_JIRA_CLIENT_SECRET="replace-with-jira-client-secret"
+$env:OPENROAD_JIRA_REDIRECT_URI="https://openroad.example.com/api/openroad/integrations/jira/oauth/callback"
 $env:OPENROAD_TRUST_PROXY_HEADERS="false"
 $env:OPENROAD_SINGLE_USER_MODE="false"
 ```

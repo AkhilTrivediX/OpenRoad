@@ -184,6 +184,18 @@ export const routeProtections: RouteProtection[] = [
   },
   {
     methods: ["POST"],
+    path: "/api/openroad/workspaces/:workspaceId/integrations/jira/issues/import",
+    permission: "workspace:write",
+    scope: "workspace"
+  },
+  {
+    methods: ["GET"],
+    path: "/api/openroad/workspaces/:workspaceId/integrations/jira/oauth/setup",
+    permission: "integration:manage",
+    scope: "workspace"
+  },
+  {
+    methods: ["POST"],
     path: "/api/openroad/integrations/github/webhook",
     permission: "integration:sync",
     scope: "provider-signature"

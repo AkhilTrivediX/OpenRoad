@@ -23,6 +23,7 @@ import { FileTeamStore } from "./team";
 import type { AuthOptions } from "./access";
 import type { GitHubAppClient, GitHubAppConfig } from "./github-app";
 import type { LinearOAuthConfig } from "./linear";
+import type { JiraOAuthConfig } from "./jira";
 
 const openServers: Server[] = [];
 
@@ -1230,6 +1231,314 @@ describe("OpenRoad production server", () => {
     expect(disconnected.body.error.code).toBe("invalid_state");
   });
 
+  it("imports Jira issues into requests and persists mappings outside core state", async () => {
+    const { dataFile, integrationFile, teamFile, url } = await startTestServer();
+
+    const response = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/jira/issues/import`, {
+      body: JSON.stringify(jiraImportPayload()),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const coreStateText = await readFile(dataFile, "utf8");
+    const integrationState = JSON.parse(await readFile(integrationFile, "utf8")) as {
+      installations: Array<{ provider: string; workspaceId: string }>;
+      mappings: Array<{ external: { provider: string; type: string }; openRoad: { id: string } }>;
+    };
+    const teamState = JSON.parse(await readFile(teamFile, "utf8")) as {
+      auditEvents: Array<{ type: string; workspaceId: string }>;
+    };
+
+    expect(response.status).toBe(201);
+    expect(response.body.status).toBe("created");
+    expect(response.body.request).toMatchObject({
+      owner: "Maintainer",
+      requester: "Customer Ops",
+      source: "Jira",
+      title: "Import Jira issues",
+      visibility: "Private"
+    });
+    expect(response.body.mapping).toMatchObject({
+      external: {
+        provider: "jira",
+        type: "issue"
+      }
+    });
+    expect(integrationState.installations).toEqual([
+      expect.objectContaining({ provider: "jira", workspaceId: "acme" })
+    ]);
+    expect(integrationState.mappings).toHaveLength(1);
+    expect(integrationState.mappings[0].openRoad.id).toBe(response.body.request.id);
+    expect(coreStateText).not.toContain("providerAccountId");
+    expect(teamState.auditEvents[0]).toMatchObject({
+      type: "integration.jira.issue.import",
+      workspaceId: "acme"
+    });
+  });
+
+  it("re-imports the same Jira issue by updating the mapped request", async () => {
+    const { store, url } = await startTestServer();
+
+    const created = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/jira/issues/import`, {
+      body: JSON.stringify(jiraImportPayload()),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const updated = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/jira/issues/import`, {
+      body: JSON.stringify(
+        jiraImportPayload({
+          issue: jiraIssuePayload({
+            fields: jiraFieldsPayload({
+              labels: ["planned"],
+              status: {
+                id: "4",
+                name: "In Progress",
+                statusCategory: { key: "indeterminate", name: "In Progress" }
+              },
+              summary: "Updated Jira issue"
+            })
+          })
+        })
+      ),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const persisted = await store.load();
+    const workspace = persisted.state.workspaces.find((item) => item.id === "acme");
+    const matchingRequests = workspace?.requests.filter(
+      (request) => request.id === created.body.request.id
+    );
+
+    expect(created.status).toBe(201);
+    expect(updated.status).toBe(200);
+    expect(updated.body.request.id).toBe(created.body.request.id);
+    expect(updated.body.request.title).toBe("Updated Jira issue");
+    expect(updated.body.request.status).toBe("Planned");
+    expect(matchingRequests).toHaveLength(1);
+  });
+
+  it("keeps Jira installation records scoped by workspace", async () => {
+    const { integrationStore, url } = await startTestServer();
+
+    const acmeImport = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/jira/issues/import`, {
+      body: JSON.stringify(jiraImportPayload()),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const maintainerImport = await fetchJson(
+      `${url}/api/openroad/workspaces/maintainer/integrations/jira/issues/import`,
+      {
+        body: JSON.stringify(
+          jiraImportPayload({
+            issue: jiraIssuePayload({
+              fields: jiraFieldsPayload({
+                summary: "Maintainer Jira issue"
+              }),
+              id: "10043",
+              key: "OPEN-43"
+            })
+          })
+        ),
+        headers: { "Content-Type": "application/json" },
+        method: "POST"
+      }
+    );
+    const integrations = await integrationStore.load();
+    const jiraInstallations = integrations.state.installations.filter(
+      (installation) => installation.provider === "jira"
+    );
+
+    expect(acmeImport.status).toBe(201);
+    expect(maintainerImport.status).toBe(201);
+    expect(jiraInstallations).toHaveLength(2);
+    expect(new Set(jiraInstallations.map((installation) => installation.workspaceId))).toEqual(
+      new Set(["acme", "maintainer"])
+    );
+  });
+
+  it("protects Jira import and OAuth setup by workspace role", async () => {
+    const { url } = await startTestServer({
+      auth: { adminToken: "secret", singleUserMode: false, trustProxyHeaders: true },
+      jiraOAuthConfig: testJiraOAuthConfig()
+    });
+
+    const publicSetup = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/jira/oauth/setup`
+    );
+    const contributorSetup = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/jira/oauth/setup`,
+      {
+        headers: workspaceActorHeaders("acme", "Contributor")
+      }
+    );
+    const ownerSetup = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/jira/oauth/setup`,
+      {
+        headers: workspaceActorHeaders("acme", "Owner")
+      }
+    );
+    const publicWrite = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/jira/issues/import`, {
+      body: JSON.stringify(jiraImportPayload()),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const viewerWrite = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/jira/issues/import`, {
+      body: JSON.stringify(jiraImportPayload()),
+      headers: {
+        ...workspaceActorHeaders("acme", "Viewer"),
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    const contributorWrite = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/jira/issues/import`,
+      {
+        body: JSON.stringify(
+          jiraImportPayload({
+            issue: jiraIssuePayload({ id: "10044", key: "OPEN-44" })
+          })
+        ),
+        headers: {
+          ...workspaceActorHeaders("acme", "Contributor"),
+          "Content-Type": "application/json"
+        },
+        method: "POST"
+      }
+    );
+    const integrationWrite = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/jira/issues/import`,
+      {
+        body: JSON.stringify(
+          jiraImportPayload({
+            issue: jiraIssuePayload({ id: "10045", key: "OPEN-45" })
+          })
+        ),
+        headers: {
+          ...integrationActorHeaders("acme", "jira:jira-install"),
+          "Content-Type": "application/json"
+        },
+        method: "POST"
+      }
+    );
+    const integrationCrossWorkspace = await fetchJson(
+      `${url}/api/openroad/workspaces/maintainer/integrations/jira/issues/import`,
+      {
+        body: JSON.stringify(
+          jiraImportPayload({
+            issue: jiraIssuePayload({ id: "10046", key: "OPEN-46" })
+          })
+        ),
+        headers: {
+          ...integrationActorHeaders("acme", "jira:jira-install"),
+          "Content-Type": "application/json"
+        },
+        method: "POST"
+      }
+    );
+    const wrongProviderIntegration = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/jira/issues/import`,
+      {
+        body: JSON.stringify(
+          jiraImportPayload({
+            issue: jiraIssuePayload({ id: "10047", key: "OPEN-47" })
+          })
+        ),
+        headers: {
+          ...integrationActorHeaders("acme", "linear:linear-install"),
+          "Content-Type": "application/json"
+        },
+        method: "POST"
+      }
+    );
+
+    expect(publicSetup.status).toBe(403);
+    expect(contributorSetup.status).toBe(403);
+    expect(ownerSetup.status).toBe(200);
+    expect(JSON.stringify(ownerSetup.body)).not.toContain("jira-secret");
+    expect(publicWrite.status).toBe(403);
+    expect(viewerWrite.status).toBe(403);
+    expect(contributorWrite.status).toBe(201);
+    expect(integrationWrite.status).toBe(201);
+    expect(integrationCrossWorkspace.status).toBe(403);
+    expect(wrongProviderIntegration.status).toBe(403);
+  });
+
+  it("reports safe Jira OAuth setup without blocking standalone mode", async () => {
+    const configured = await startTestServer({
+      jiraOAuthConfig: testJiraOAuthConfig()
+    });
+    const missing = await startTestServer();
+
+    const configuredSetup = await fetchJson(
+      `${configured.url}/api/openroad/workspaces/acme/integrations/jira/oauth/setup`
+    );
+    const missingSetup = await fetchJson(
+      `${missing.url}/api/openroad/workspaces/acme/integrations/jira/oauth/setup`
+    );
+
+    expect(configuredSetup.status).toBe(200);
+    expect(configuredSetup.body.jiraOAuth).toMatchObject({
+      configured: true,
+      missing: [],
+      requiredScopes: ["read:jira-work", "read:jira-user"]
+    });
+    expect(configuredSetup.body.jiraOAuth.authorizeUrl).toContain("https://auth.atlassian.test/authorize");
+    expect(JSON.stringify(configuredSetup.body)).not.toContain("jira-secret");
+    expect(missingSetup.status).toBe(200);
+    expect(missingSetup.body.jiraOAuth).toMatchObject({
+      configured: false,
+      missing: [
+        "OPENROAD_JIRA_CLIENT_ID",
+        "OPENROAD_JIRA_CLIENT_SECRET",
+        "OPENROAD_JIRA_REDIRECT_URI"
+      ]
+    });
+  });
+
+  it("rejects invalid or disconnected Jira imports without mutating core state", async () => {
+    const { dataFile, integrationFile, integrationStore, url } = await startTestServer();
+    await integrationStore.load();
+    const beforeState = await readFile(dataFile, "utf8");
+    const beforeIntegrations = await readFile(integrationFile, "utf8");
+
+    const invalid = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/jira/issues/import`, {
+      body: JSON.stringify(
+        jiraImportPayload({
+          issue: { ...jiraIssuePayload(), id: "", key: "" }
+        })
+      ),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+
+    expect(invalid.status).toBe(400);
+    expect(invalid.body.error.code).toBe("invalid_request");
+    expect(await readFile(dataFile, "utf8")).toBe(beforeState);
+    expect(await readFile(integrationFile, "utf8")).toBe(beforeIntegrations);
+
+    const created = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/jira/issues/import`, {
+      body: JSON.stringify(jiraImportPayload()),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const integrationState = await integrationStore.load();
+    await integrationStore.replaceState({
+      ...integrationState.state,
+      installations: integrationState.state.installations.map((installation) => ({
+        ...installation,
+        status: "disconnected" as const
+      }))
+    });
+    const disconnected = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/jira/issues/import`, {
+      body: JSON.stringify(jiraImportPayload()),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+
+    expect(created.status).toBe(201);
+    expect(disconnected.status).toBe(422);
+    expect(disconnected.body.error.code).toBe("invalid_state");
+  });
+
   it("rejects GitHub webhooks without configured secrets or valid signatures", async () => {
     const unconfigured = await startTestServer();
     const configured = await startTestServer({
@@ -1943,6 +2252,7 @@ async function startTestServer(
     auth?: AuthOptions;
     githubAppClient?: GitHubAppClient;
     githubAppConfig?: GitHubAppConfig;
+    jiraOAuthConfig?: JiraOAuthConfig;
     linearOAuthConfig?: LinearOAuthConfig;
     portalRateLimiter?: PortalRateLimiter;
   } = {}
@@ -1967,6 +2277,7 @@ async function startTestServer(
     githubAppClient: options.githubAppClient,
     githubAppConfig: options.githubAppConfig,
     integrationStore,
+    jiraOAuthConfig: options.jiraOAuthConfig,
     linearOAuthConfig: options.linearOAuthConfig,
     logger: { error: vi.fn(), log: vi.fn() },
     portalRateLimiter: options.portalRateLimiter,
@@ -2106,12 +2417,74 @@ function linearIssuePayload(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function jiraImportPayload(overrides: Record<string, unknown> = {}) {
+  return {
+    installation: {
+      accountId: "jira-cloud",
+      accountName: "OpenRoad Jira",
+      id: "jira-install",
+      permissions: ["read:external", "read:openroad", "write:openroad"]
+    },
+    issue: jiraIssuePayload(),
+    ...overrides
+  };
+}
+
+function jiraIssuePayload(overrides: Record<string, unknown> = {}) {
+  return {
+    fields: jiraFieldsPayload(),
+    id: "10042",
+    key: "OPEN-42",
+    self: "https://api.atlassian.com/ex/jira/cloud-123/rest/api/3/issue/10042",
+    url: "https://openroad.atlassian.net/browse/OPEN-42",
+    ...overrides
+  };
+}
+
+function jiraFieldsPayload(overrides: Record<string, unknown> = {}) {
+  return {
+    assignee: { accountId: "acct-akhil", displayName: "Akhil Trivedi" },
+    description: {
+      content: [
+        {
+          content: [{ text: "Users need Jira issue context.", type: "text" }],
+          type: "paragraph"
+        }
+      ],
+      type: "doc",
+      version: 1
+    },
+    issuetype: { id: "10001", name: "Story" },
+    labels: ["needs-decision", "ux"],
+    priority: { id: "2", name: "High" },
+    project: { id: "project-open", key: "OPEN", name: "OpenRoad" },
+    reporter: { accountId: "acct-ops", displayName: "Customer Ops" },
+    status: {
+      id: "3",
+      name: "Triage",
+      statusCategory: { key: "new", name: "To Do" }
+    },
+    summary: "Import Jira issues",
+    updated: "2026-07-04T00:00:00.000+0000",
+    ...overrides
+  };
+}
+
 function testLinearOAuthConfig(): LinearOAuthConfig {
   return {
     appBaseUrl: "https://linear.test",
     clientId: "lin_client",
     clientSecret: "linear-secret",
     redirectUri: "https://openroad.test/api/openroad/integrations/linear/oauth/callback"
+  };
+}
+
+function testJiraOAuthConfig(): JiraOAuthConfig {
+  return {
+    authBaseUrl: "https://auth.atlassian.test",
+    clientId: "jira-client",
+    clientSecret: "jira-secret",
+    redirectUri: "https://openroad.test/api/openroad/integrations/jira/oauth/callback"
   };
 }
 

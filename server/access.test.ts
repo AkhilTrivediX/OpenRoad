@@ -79,6 +79,20 @@ describe("OpenRoad API access contract", () => {
     );
     expect(openRoadApiContract.routeProtections).toContainEqual(
       expect.objectContaining({
+        path: "/api/openroad/workspaces/:workspaceId/integrations/jira/issues/import",
+        permission: "workspace:write",
+        scope: "workspace"
+      })
+    );
+    expect(openRoadApiContract.routeProtections).toContainEqual(
+      expect.objectContaining({
+        path: "/api/openroad/workspaces/:workspaceId/integrations/jira/oauth/setup",
+        permission: "integration:manage",
+        scope: "workspace"
+      })
+    );
+    expect(openRoadApiContract.routeProtections).toContainEqual(
+      expect.objectContaining({
         path: "/api/openroad/integrations/github/webhook",
         permission: "integration:sync",
         scope: "provider-signature"

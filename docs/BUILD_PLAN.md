@@ -10,7 +10,7 @@ Each feature must also satisfy `docs/PRODUCTION_READINESS.md` before merging to 
 
 Current stage: Stage 2 Team Beta foundation in progress.
 
-The standalone loop now covers workspaces, requests, triage, internal work, roadmap planning, changelog drafts, public portal preview, local durability, production APIs, basic tenancy boundaries, file-backed team metadata, audit events, self-host operations, a first app-module boundary, hardened public portal write APIs, the provider-neutral integration adapter contract, a payload-backed GitHub issue import/link API, server-only GitHub App installation verification, live GitHub issue fetch through verified installations, signed GitHub webhooks, safe disconnect handling, and the first Linear issue import/link slice. The next production work should extend the adapter boundary to Jira field mapping.
+The standalone loop now covers workspaces, requests, triage, internal work, roadmap planning, changelog drafts, public portal preview, local durability, production APIs, basic tenancy boundaries, file-backed team metadata, audit events, self-host operations, a first app-module boundary, hardened public portal write APIs, the provider-neutral integration adapter contract, a payload-backed GitHub issue import/link API, server-only GitHub App installation verification, live GitHub issue fetch through verified installations, signed GitHub webhooks, safe disconnect handling, Linear issue import/link, and Jira issue import/link with explicit field mapping. The next production work should move into requester notifications while provider token storage/live sync remain separate hardening slices.
 
 ## Feature 1: Workspace Shell
 
@@ -441,17 +441,21 @@ Acceptance:
 
 Branch: `feat/jira-issue-sync`
 
+Status: implemented and production-checked.
+
 Build:
 
-- Jira OAuth flow.
-- Import/link Jira issues.
-- Explicit field mapping.
-- Sync audit and conflict handling.
+- Safe Atlassian OAuth setup URL and state.
+- Payload-backed Jira issue import/link.
+- Explicit Jira field mapping for status category, ADF description text, project, type, priority, assignee, reporter, and labels.
+- Jira installation and issue mappings in integration metadata.
+- Sync audit trail for import/update actions.
 
 Acceptance:
 
 - Jira complexity stays in mapping and Settings.
 - Core UX remains the same as standalone mode.
+- Jira tokens and client secrets are not persisted or returned.
 
 ## Feature 12: Requester Notifications
 

@@ -96,7 +96,7 @@ As an OpenRoad maintainer, I can import or link a GitHub issue into an OpenRoad 
 ## Evidence
 
 - Branch: `feat/github-issue-sync`
-- Commit SHAs: pending commit.
+- Commit SHAs: `1d0ba82`.
 - Date: 2026-07-04.
 - Acceptance criteria status: Passed for payload-backed GitHub issue import/link scope.
 - Commands run:

@@ -92,6 +92,8 @@ Public portal responses use the OpenRoad public projection and must not include 
 - `GET /api/openroad/workspaces/:workspaceId/integrations/github/app/setup`
 - `POST /api/openroad/workspaces/:workspaceId/integrations/github/app/installations/verify`
 - `POST /api/openroad/workspaces/:workspaceId/integrations/github/app/installations/:installationId/disconnect`
+- `POST /api/openroad/workspaces/:workspaceId/integrations/linear/issues/import`
+- `GET /api/openroad/workspaces/:workspaceId/integrations/linear/oauth/setup`
 - `GET /api/openroad/audit-events`
 - `GET /api/openroad/ops/status`
 
@@ -106,6 +108,10 @@ GitHub live issue fetch requires workspace write permission or a scoped integrat
 GitHub App setup and installation verification require `integration:manage`, which is reserved for local owners/admins and workspace owners. Contributor, viewer, requester, public visitor, and integration actors cannot verify new GitHub App installations.
 
 GitHub App disconnect also requires `integration:manage`. It marks installation metadata and mappings disconnected without deleting OpenRoad objects.
+
+Linear issue import is workspace-scoped and requires workspace write permission. It accepts fixture/API payloads only in the current slice; it must not accept Linear OAuth tokens, refresh tokens, client secrets, webhook secrets, or raw OAuth codes.
+
+Linear OAuth setup requires `integration:manage`, which is reserved for local owners/admins and workspace owners. It returns a safe authorization URL and setup state, but does not exchange OAuth codes or persist tokens.
 
 ## Provider-Signature Routes
 
@@ -124,6 +130,9 @@ $env:OPENROAD_GITHUB_APP_SLUG="openroad"
 $env:OPENROAD_GITHUB_APP_ID="12345"
 $env:OPENROAD_GITHUB_APP_PRIVATE_KEY_FILE="C:\openroad\github-app.private-key.pem"
 $env:OPENROAD_GITHUB_APP_WEBHOOK_SECRET="replace-with-long-random-secret"
+$env:OPENROAD_LINEAR_CLIENT_ID="lin_..."
+$env:OPENROAD_LINEAR_CLIENT_SECRET="replace-with-linear-client-secret"
+$env:OPENROAD_LINEAR_REDIRECT_URI="https://openroad.example.com/api/openroad/integrations/linear/oauth/callback"
 $env:OPENROAD_TRUST_PROXY_HEADERS="false"
 $env:OPENROAD_SINGLE_USER_MODE="false"
 ```

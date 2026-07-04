@@ -22,6 +22,7 @@ import { FileOpenRoadStore } from "./store";
 import { FileTeamStore } from "./team";
 import type { AuthOptions } from "./access";
 import type { GitHubAppClient, GitHubAppConfig } from "./github-app";
+import type { LinearOAuthConfig } from "./linear";
 
 const openServers: Server[] = [];
 
@@ -477,7 +478,7 @@ describe("OpenRoad production server", () => {
           })
         ),
         headers: {
-          ...integrationActorHeaders("acme", "github-install"),
+          ...integrationActorHeaders("acme", "github:github-install"),
           "Content-Type": "application/json"
         },
         method: "POST"
@@ -492,7 +493,22 @@ describe("OpenRoad production server", () => {
           })
         ),
         headers: {
-          ...integrationActorHeaders("acme", "github-install"),
+          ...integrationActorHeaders("acme", "github:github-install"),
+          "Content-Type": "application/json"
+        },
+        method: "POST"
+      }
+    );
+    const wrongProviderIntegration = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/github/issues/import`,
+      {
+        body: JSON.stringify(
+          gitHubImportPayload({
+            issue: gitHubIssuePayload({ node_id: "I_kwDOGH127", number: 46 })
+          })
+        ),
+        headers: {
+          ...integrationActorHeaders("acme", "linear:linear-install"),
           "Content-Type": "application/json"
         },
         method: "POST"
@@ -504,6 +520,7 @@ describe("OpenRoad production server", () => {
     expect(contributorWrite.status).toBe(201);
     expect(integrationWrite.status).toBe(201);
     expect(integrationCrossWorkspace.status).toBe(403);
+    expect(wrongProviderIntegration.status).toBe(403);
   });
 
   it("rejects invalid GitHub imports without mutating state or integration metadata", async () => {
@@ -911,6 +928,306 @@ describe("OpenRoad production server", () => {
     expect(disconnectedInstallation.status).toBe(422);
     expect(disconnectedInstallation.body.error.code).toBe("invalid_state");
     expect(fetchCount).toBe(0);
+  });
+
+  it("imports Linear issues into requests and persists mappings outside core state", async () => {
+    const { dataFile, integrationFile, teamFile, url } = await startTestServer();
+
+    const response = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/linear/issues/import`, {
+      body: JSON.stringify(linearImportPayload()),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const coreStateText = await readFile(dataFile, "utf8");
+    const integrationState = JSON.parse(await readFile(integrationFile, "utf8")) as {
+      installations: Array<{ provider: string; workspaceId: string }>;
+      mappings: Array<{ external: { provider: string; type: string }; openRoad: { id: string } }>;
+    };
+    const teamState = JSON.parse(await readFile(teamFile, "utf8")) as {
+      auditEvents: Array<{ type: string; workspaceId: string }>;
+    };
+
+    expect(response.status).toBe(201);
+    expect(response.body.status).toBe("created");
+    expect(response.body.request).toMatchObject({
+      owner: "Maintainer",
+      requester: "Customer Ops",
+      source: "Linear",
+      title: "Import Linear issues",
+      visibility: "Private"
+    });
+    expect(response.body.mapping).toMatchObject({
+      external: {
+        provider: "linear",
+        type: "issue"
+      }
+    });
+    expect(integrationState.installations).toEqual([
+      expect.objectContaining({ provider: "linear", workspaceId: "acme" })
+    ]);
+    expect(integrationState.mappings).toHaveLength(1);
+    expect(integrationState.mappings[0].openRoad.id).toBe(response.body.request.id);
+    expect(coreStateText).not.toContain("providerAccountId");
+    expect(teamState.auditEvents[0]).toMatchObject({
+      type: "integration.linear.issue.import",
+      workspaceId: "acme"
+    });
+  });
+
+  it("re-imports the same Linear issue by updating the mapped request", async () => {
+    const { store, url } = await startTestServer();
+
+    const created = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/linear/issues/import`, {
+      body: JSON.stringify(linearImportPayload()),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const updated = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/linear/issues/import`, {
+      body: JSON.stringify(
+        linearImportPayload({
+          issue: linearIssuePayload({
+            labels: { nodes: [{ name: "planned" }] },
+            state: { id: "state-started", name: "Started", type: "started" },
+            title: "Updated Linear issue"
+          })
+        })
+      ),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const persisted = await store.load();
+    const workspace = persisted.state.workspaces.find((item) => item.id === "acme");
+    const matchingRequests = workspace?.requests.filter(
+      (request) => request.id === created.body.request.id
+    );
+
+    expect(created.status).toBe(201);
+    expect(updated.status).toBe(200);
+    expect(updated.body.request.id).toBe(created.body.request.id);
+    expect(updated.body.request.title).toBe("Updated Linear issue");
+    expect(updated.body.request.status).toBe("Planned");
+    expect(matchingRequests).toHaveLength(1);
+  });
+
+  it("keeps Linear installation records scoped by workspace", async () => {
+    const { integrationStore, url } = await startTestServer();
+
+    const acmeImport = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/linear/issues/import`, {
+      body: JSON.stringify(linearImportPayload()),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const maintainerImport = await fetchJson(
+      `${url}/api/openroad/workspaces/maintainer/integrations/linear/issues/import`,
+      {
+        body: JSON.stringify(
+          linearImportPayload({
+            issue: linearIssuePayload({
+              id: "lin-issue-maintainer",
+              identifier: "OPEN-43",
+              title: "Maintainer Linear issue"
+            })
+          })
+        ),
+        headers: { "Content-Type": "application/json" },
+        method: "POST"
+      }
+    );
+    const integrations = await integrationStore.load();
+    const linearInstallations = integrations.state.installations.filter(
+      (installation) => installation.provider === "linear"
+    );
+
+    expect(acmeImport.status).toBe(201);
+    expect(maintainerImport.status).toBe(201);
+    expect(linearInstallations).toHaveLength(2);
+    expect(new Set(linearInstallations.map((installation) => installation.workspaceId))).toEqual(
+      new Set(["acme", "maintainer"])
+    );
+  });
+
+  it("protects Linear import and OAuth setup by workspace role", async () => {
+    const { url } = await startTestServer({
+      auth: { adminToken: "secret", singleUserMode: false, trustProxyHeaders: true },
+      linearOAuthConfig: testLinearOAuthConfig()
+    });
+
+    const publicSetup = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/linear/oauth/setup`
+    );
+    const contributorSetup = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/linear/oauth/setup`,
+      {
+        headers: workspaceActorHeaders("acme", "Contributor")
+      }
+    );
+    const ownerSetup = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/linear/oauth/setup`,
+      {
+        headers: workspaceActorHeaders("acme", "Owner")
+      }
+    );
+    const publicWrite = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/linear/issues/import`, {
+      body: JSON.stringify(linearImportPayload()),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const viewerWrite = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/linear/issues/import`, {
+      body: JSON.stringify(linearImportPayload()),
+      headers: {
+        ...workspaceActorHeaders("acme", "Viewer"),
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    const contributorWrite = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/linear/issues/import`,
+      {
+        body: JSON.stringify(
+          linearImportPayload({
+            issue: linearIssuePayload({ id: "lin-issue-124", identifier: "OPEN-44" })
+          })
+        ),
+        headers: {
+          ...workspaceActorHeaders("acme", "Contributor"),
+          "Content-Type": "application/json"
+        },
+        method: "POST"
+      }
+    );
+    const integrationWrite = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/linear/issues/import`,
+      {
+        body: JSON.stringify(
+          linearImportPayload({
+            issue: linearIssuePayload({ id: "lin-issue-125", identifier: "OPEN-45" })
+          })
+        ),
+        headers: {
+          ...integrationActorHeaders("acme", "linear:linear-install"),
+          "Content-Type": "application/json"
+        },
+        method: "POST"
+      }
+    );
+    const integrationCrossWorkspace = await fetchJson(
+      `${url}/api/openroad/workspaces/maintainer/integrations/linear/issues/import`,
+      {
+        body: JSON.stringify(
+          linearImportPayload({
+            issue: linearIssuePayload({ id: "lin-issue-126", identifier: "OPEN-46" })
+          })
+        ),
+        headers: {
+          ...integrationActorHeaders("acme", "linear:linear-install"),
+          "Content-Type": "application/json"
+        },
+        method: "POST"
+      }
+    );
+    const wrongProviderIntegration = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/linear/issues/import`,
+      {
+        body: JSON.stringify(
+          linearImportPayload({
+            issue: linearIssuePayload({ id: "lin-issue-127", identifier: "OPEN-47" })
+          })
+        ),
+        headers: {
+          ...integrationActorHeaders("acme", "github:github-install"),
+          "Content-Type": "application/json"
+        },
+        method: "POST"
+      }
+    );
+
+    expect(publicSetup.status).toBe(403);
+    expect(contributorSetup.status).toBe(403);
+    expect(ownerSetup.status).toBe(200);
+    expect(JSON.stringify(ownerSetup.body)).not.toContain("linear-secret");
+    expect(publicWrite.status).toBe(403);
+    expect(viewerWrite.status).toBe(403);
+    expect(contributorWrite.status).toBe(201);
+    expect(integrationWrite.status).toBe(201);
+    expect(integrationCrossWorkspace.status).toBe(403);
+    expect(wrongProviderIntegration.status).toBe(403);
+  });
+
+  it("reports safe Linear OAuth setup without blocking standalone mode", async () => {
+    const configured = await startTestServer({
+      linearOAuthConfig: testLinearOAuthConfig()
+    });
+    const missing = await startTestServer();
+
+    const configuredSetup = await fetchJson(
+      `${configured.url}/api/openroad/workspaces/acme/integrations/linear/oauth/setup`
+    );
+    const missingSetup = await fetchJson(
+      `${missing.url}/api/openroad/workspaces/acme/integrations/linear/oauth/setup`
+    );
+
+    expect(configuredSetup.status).toBe(200);
+    expect(configuredSetup.body.linearOAuth).toMatchObject({
+      configured: true,
+      missing: [],
+      requiredScopes: ["read"]
+    });
+    expect(configuredSetup.body.linearOAuth.authorizeUrl).toContain("https://linear.test/oauth/authorize");
+    expect(JSON.stringify(configuredSetup.body)).not.toContain("linear-secret");
+    expect(missingSetup.status).toBe(200);
+    expect(missingSetup.body.linearOAuth).toMatchObject({
+      configured: false,
+      missing: [
+        "OPENROAD_LINEAR_CLIENT_ID",
+        "OPENROAD_LINEAR_CLIENT_SECRET",
+        "OPENROAD_LINEAR_REDIRECT_URI"
+      ]
+    });
+  });
+
+  it("rejects invalid or disconnected Linear imports without mutating core state", async () => {
+    const { dataFile, integrationFile, integrationStore, url } = await startTestServer();
+    await integrationStore.load();
+    const beforeState = await readFile(dataFile, "utf8");
+    const beforeIntegrations = await readFile(integrationFile, "utf8");
+
+    const invalid = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/linear/issues/import`, {
+      body: JSON.stringify(
+        linearImportPayload({
+          issue: { ...linearIssuePayload(), id: "", title: "" }
+        })
+      ),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+
+    expect(invalid.status).toBe(400);
+    expect(invalid.body.error.code).toBe("invalid_request");
+    expect(await readFile(dataFile, "utf8")).toBe(beforeState);
+    expect(await readFile(integrationFile, "utf8")).toBe(beforeIntegrations);
+
+    const created = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/linear/issues/import`, {
+      body: JSON.stringify(linearImportPayload()),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const integrationState = await integrationStore.load();
+    await integrationStore.replaceState({
+      ...integrationState.state,
+      installations: integrationState.state.installations.map((installation) => ({
+        ...installation,
+        status: "disconnected" as const
+      }))
+    });
+    const disconnected = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/linear/issues/import`, {
+      body: JSON.stringify(linearImportPayload()),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+
+    expect(created.status).toBe(201);
+    expect(disconnected.status).toBe(422);
+    expect(disconnected.body.error.code).toBe("invalid_state");
   });
 
   it("rejects GitHub webhooks without configured secrets or valid signatures", async () => {
@@ -1626,6 +1943,7 @@ async function startTestServer(
     auth?: AuthOptions;
     githubAppClient?: GitHubAppClient;
     githubAppConfig?: GitHubAppConfig;
+    linearOAuthConfig?: LinearOAuthConfig;
     portalRateLimiter?: PortalRateLimiter;
   } = {}
 ) {
@@ -1649,6 +1967,7 @@ async function startTestServer(
     githubAppClient: options.githubAppClient,
     githubAppConfig: options.githubAppConfig,
     integrationStore,
+    linearOAuthConfig: options.linearOAuthConfig,
     logger: { error: vi.fn(), log: vi.fn() },
     portalRateLimiter: options.portalRateLimiter,
     store,
@@ -1752,6 +2071,47 @@ function gitHubRepositoryPayload() {
     node_id: "R_kwDOR123",
     owner: { login: "AkhilTrivediX" },
     private: false
+  };
+}
+
+function linearImportPayload(overrides: Record<string, unknown> = {}) {
+  return {
+    installation: {
+      accountId: "linear-team",
+      accountName: "OpenRoad",
+      id: "linear-install",
+      permissions: ["read:external", "read:openroad", "write:openroad"]
+    },
+    issue: linearIssuePayload(),
+    ...overrides
+  };
+}
+
+function linearIssuePayload(overrides: Record<string, unknown> = {}) {
+  return {
+    assignee: { displayName: "Akhil Trivedi", id: "user-akhil" },
+    creator: { displayName: "Customer Ops", id: "user-ops" },
+    description: "Users want Linear issue context.",
+    id: "lin-issue-123",
+    identifier: "OPEN-42",
+    labels: { nodes: [{ name: "needs-decision" }, { name: "ux" }] },
+    priority: 2,
+    project: { id: "project-beta", name: "OpenRoad Beta" },
+    state: { id: "state-triage", name: "Triage", type: "triage" },
+    team: { id: "team-open", key: "OPEN", name: "OpenRoad" },
+    title: "Import Linear issues",
+    updatedAt: "2026-07-04T00:00:00Z",
+    url: "https://linear.app/openroad/issue/OPEN-42/import-linear-issues",
+    ...overrides
+  };
+}
+
+function testLinearOAuthConfig(): LinearOAuthConfig {
+  return {
+    appBaseUrl: "https://linear.test",
+    clientId: "lin_client",
+    clientSecret: "linear-secret",
+    redirectUri: "https://openroad.test/api/openroad/integrations/linear/oauth/callback"
   };
 }
 

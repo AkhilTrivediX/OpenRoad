@@ -47,6 +47,18 @@ import {
   type GitHubPullRequest
 } from "../src/integrations/github.js";
 import {
+  createLinearInstallation,
+  createLinearIssueExternalRef,
+  createLinearIssueMapping,
+  createOpenRoadRequestFromLinearIssue,
+  getLinearInstallationCapabilities,
+  linearRequiredInstallationPermissions,
+  parseLinearIssuePayload,
+  syncOpenRoadRequestFromLinearIssue,
+  type LinearInstallationInput,
+  type LinearIssue
+} from "../src/integrations/linear.js";
+import {
   OpenRoadStoreError,
   parseOpenRoadState,
   type OpenRoadStore
@@ -70,6 +82,11 @@ import {
   type GitHubAppClient,
   type GitHubAppConfig
 } from "./github-app.js";
+import {
+  createSafeLinearOAuthSetup,
+  linearOAuthConfigFromEnv,
+  type LinearOAuthConfig
+} from "./linear.js";
 import type { AuditEvent, TeamStore } from "./team.js";
 
 type CreateOpenRoadServerOptions = {
@@ -78,6 +95,7 @@ type CreateOpenRoadServerOptions = {
   githubAppClient?: GitHubAppClient;
   githubAppConfig?: GitHubAppConfig;
   integrationStore?: IntegrationStore;
+  linearOAuthConfig?: LinearOAuthConfig;
   logger?: Pick<Console, "error" | "log">;
   portalRateLimiter?: PortalRateLimiter;
   store: OpenRoadStore;
@@ -193,6 +211,7 @@ export function createOpenRoadServer({
   githubAppConfig = githubAppConfigFromEnv(),
   githubAppClient = new FetchGitHubAppClient(githubAppConfig),
   integrationStore,
+  linearOAuthConfig = linearOAuthConfigFromEnv(),
   logger = console,
   portalRateLimiter = createPortalRateLimiterFromEnv(),
   store,
@@ -218,6 +237,7 @@ export function createOpenRoadServer({
           githubAppClient,
           githubAppConfig,
           integrationStore,
+          linearOAuthConfig,
           teamStore,
           portalRateLimiter,
           activeGitHubWebhookDeliveries
@@ -249,6 +269,7 @@ async function handleApiRequest(
   githubAppClient: GitHubAppClient,
   githubAppConfig: GitHubAppConfig,
   integrationStore: IntegrationStore | undefined,
+  linearOAuthConfig: LinearOAuthConfig,
   teamStore: TeamStore | undefined,
   portalRateLimiter: PortalRateLimiter,
   activeGitHubWebhookDeliveries: Set<string>
@@ -373,6 +394,39 @@ async function handleApiRequest(
       teamStore,
       integrationStore,
       githubIssueImportMatch[1]
+    );
+    return;
+  }
+
+  const linearIssueImportMatch = requestUrl.pathname.match(
+    /^\/api\/openroad\/workspaces\/([^/]+)\/integrations\/linear\/issues\/import$/
+  );
+
+  if (linearIssueImportMatch) {
+    await handleLinearIssueImportRequest(
+      request,
+      response,
+      store,
+      access,
+      teamStore,
+      integrationStore,
+      linearIssueImportMatch[1]
+    );
+    return;
+  }
+
+  const linearOAuthSetupMatch = requestUrl.pathname.match(
+    /^\/api\/openroad\/workspaces\/([^/]+)\/integrations\/linear\/oauth\/setup$/
+  );
+
+  if (linearOAuthSetupMatch) {
+    await handleLinearOAuthSetupRequest(
+      request,
+      response,
+      store,
+      access,
+      linearOAuthConfig,
+      linearOAuthSetupMatch[1]
     );
     return;
   }
@@ -788,6 +842,7 @@ async function handleGitHubIssueImportRequest(
 
     const payload = await readJsonBody(request, 500_000);
     const gitHubPayload = parseGitHubIssueImportPayload(payload, workspaceId);
+    requireIntegrationActorForInstallation(access, gitHubPayload.installation);
     const current = await store.load();
     const workspace = current.state.workspaces.find((item) => item.id === workspaceId);
 
@@ -856,6 +911,295 @@ type GitHubIssueImportStateResult = {
   mappings: ExternalObjectMapping[];
   request: RequestItem;
 };
+
+type LinearIssueImportPayload = {
+  installation: IntegrationInstallation;
+  issue: LinearIssue;
+  requestId?: string;
+  workspaceId: string;
+};
+
+type LinearIssueImportStateResult = {
+  created: boolean;
+  installation: IntegrationInstallation;
+  integrationState: IntegrationState;
+  mapping: ExternalObjectMapping;
+  request: RequestItem;
+};
+
+async function handleLinearIssueImportRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  store: OpenRoadStore,
+  access: AccessContext,
+  teamStore: TeamStore | undefined,
+  integrationStore: IntegrationStore | undefined,
+  encodedWorkspaceId: string
+) {
+  if (request.method !== "POST") {
+    writeApiError(response, 405, "invalid_method", "This endpoint only supports POST.", access);
+    return;
+  }
+
+  const workspaceId = decodeURIComponent(encodedWorkspaceId);
+
+  try {
+    requirePermission(access, "workspace:write", workspaceId);
+
+    if (!integrationStore) {
+      throw new ApiRequestError(
+        "not_configured",
+        503,
+        "OpenRoad integration metadata store is not configured."
+      );
+    }
+
+    const payload = await readJsonBody(request, 500_000);
+    const linearPayload = parseLinearIssueImportPayload(payload, workspaceId);
+    requireIntegrationActorForInstallation(access, linearPayload.installation);
+    const current = await store.load();
+    const workspace = current.state.workspaces.find((item) => item.id === workspaceId);
+
+    if (!workspace) {
+      throw new ApiRequestError("not_found", 404, "Workspace was not found.");
+    }
+
+    const integrationResult = await integrationStore.load();
+    const importResult = createLinearIssueImportState(
+      workspace,
+      integrationResult.state,
+      linearPayload,
+      new Date().toISOString()
+    );
+    const nextState = parseOpenRoadState(
+      openRoadReducer(current.state, {
+        request: importResult.request,
+        type: importResult.created ? "create-request" : "replace-request",
+        workspaceId
+      })
+    );
+    const state = await store.replaceState(nextState);
+    const integrationState = await integrationStore.replaceState(importResult.integrationState);
+    const auditEvent = await recordAuditEvent(teamStore, state, access, {
+      summary: `${importResult.created ? "Imported" : "Updated"} Linear issue ${
+        linearPayload.issue.identifier
+      }.`,
+      type: importResult.created ? "integration.linear.issue.import" : "integration.linear.issue.sync",
+      workspaceId
+    });
+
+    writeJson(
+      response,
+      importResult.created ? 201 : 200,
+      {
+        installation: sanitizeInstallation(importResult.installation),
+        mapping: importResult.mapping,
+        request: importResult.request,
+        revision: auditEvent?.id ?? `linear-import-${Date.now()}`,
+        status: importResult.created ? "created" : "updated",
+        totals: {
+          installations: integrationState.installations.length,
+          mappings: integrationState.mappings.length
+        }
+      },
+      access
+    );
+  } catch (error) {
+    writeKnownApiError(response, error, access);
+  }
+}
+
+function parseLinearIssueImportPayload(
+  payload: unknown,
+  workspaceId: string
+): LinearIssueImportPayload {
+  if (!isRecord(payload)) {
+    throw new ApiRequestError("invalid_request", 400, "Linear import payload must be an object.");
+  }
+
+  try {
+    const issue = parseLinearIssuePayload(payload.issue);
+    const installation = createLinearInstallation(
+      parseLinearInstallationPayload(payload.installation, workspaceId)
+    );
+    const requestId = getBoundedText(payload.requestId, 120);
+
+    return {
+      installation,
+      issue,
+      requestId,
+      workspaceId
+    };
+  } catch (error) {
+    throw new ApiRequestError(
+      "invalid_request",
+      400,
+      error instanceof Error ? error.message : "Linear import payload is invalid."
+    );
+  }
+}
+
+function parseLinearInstallationPayload(
+  value: unknown,
+  workspaceId: string
+): LinearInstallationInput {
+  if (!isRecord(value)) {
+    throw new Error("Linear installation payload must be an object.");
+  }
+
+  const accountId =
+    getBoundedText(value.accountId, 160) ??
+    getBoundedText(value.providerAccountId, 160) ??
+    getBoundedText(value.organizationId, 160) ??
+    getBoundedText(value.teamId, 160) ??
+    getBoundedText(value.accountName, 160);
+  const accountName =
+    getBoundedText(value.accountName, 160) ??
+    getBoundedText(value.providerAccountName, 160) ??
+    getBoundedText(value.organizationName, 160) ??
+    getBoundedText(value.teamName, 160) ??
+    getBoundedText(value.accountId, 160);
+  const id = getBoundedText(value.id, 160);
+
+  if (!id) throw new Error("Linear installation id is required.");
+  if (!accountId) throw new Error("Linear account id is required.");
+  if (!accountName) throw new Error("Linear account name is required.");
+
+  return {
+    accountId,
+    accountName,
+    createdAt: getBoundedText(value.createdAt, 80),
+    id,
+    permissions: parseLinearIntegrationPermissions(value.permissions),
+    status: parseIntegrationInstallationStatus(value.status),
+    workspaceId
+  };
+}
+
+function createLinearIssueImportState(
+  workspace: Workspace,
+  integrationState: IntegrationState,
+  payload: LinearIssueImportPayload,
+  now: string
+): LinearIssueImportStateResult {
+  if (payload.installation.status !== "active") {
+    throw new ApiRequestError(
+      "invalid_request",
+      400,
+      "Linear installation must be active before importing issues."
+    );
+  }
+
+  if (!getLinearInstallationCapabilities(payload.installation).canImportIssues) {
+    throw new ApiRequestError(
+      "invalid_request",
+      400,
+      "Linear installation does not have enough permissions to import issues."
+    );
+  }
+
+  const existingInstallation = integrationState.installations.find((installation) =>
+    isSameInstallationScope(installation, payload.installation)
+  );
+
+  if (existingInstallation && existingInstallation.status !== "active") {
+    throw new ApiRequestError(
+      "invalid_state",
+      422,
+      "Linear installation is disconnected or suspended."
+    );
+  }
+
+  const issueRef = createLinearIssueExternalRef(payload.issue);
+  const existingMapping = integrationState.mappings.find((mapping) =>
+    mapping.installationId === payload.installation.id &&
+    mapping.openRoad.workspaceId === payload.workspaceId &&
+    isSameExternalObject(mapping, issueRef)
+  );
+  const targetRequestId = payload.requestId ?? existingMapping?.openRoad.id;
+  const existingRequest = targetRequestId
+    ? workspace.requests.find((item) => item.id === targetRequestId)
+    : undefined;
+
+  if (payload.requestId && !existingRequest) {
+    throw new ApiRequestError("not_found", 404, "OpenRoad request was not found.");
+  }
+
+  if (existingMapping && !existingRequest && !payload.requestId) {
+    throw new ApiRequestError(
+      "invalid_state",
+      422,
+      "Linear issue mapping points to a missing OpenRoad request."
+    );
+  }
+
+  const request = existingRequest
+    ? syncOpenRoadRequestFromLinearIssue(existingRequest, payload.issue, now)
+    : createOpenRoadRequestFromLinearIssue(payload.issue, {
+        existingRequestIds: workspace.requests.map((item) => item.id),
+        now
+      });
+  const openRoad = {
+    id: request.id,
+    type: "request" as const,
+    workspaceId: payload.workspaceId
+  };
+  const mapping = createLinearIssueMapping(payload.installation, payload.issue, openRoad, now);
+  const nextIntegrationState = parseIntegrationState({
+    ...integrationState,
+    installations: upsertInstallationByScope(integrationState.installations, payload.installation),
+    mappings: upsertById(integrationState.mappings, mapping)
+  });
+
+  return {
+    created: !existingRequest,
+    installation: payload.installation,
+    integrationState: nextIntegrationState,
+    mapping,
+    request
+  };
+}
+
+async function handleLinearOAuthSetupRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  store: OpenRoadStore,
+  access: AccessContext,
+  linearOAuthConfig: LinearOAuthConfig,
+  encodedWorkspaceId: string
+) {
+  if (request.method !== "GET") {
+    writeApiError(response, 405, "invalid_method", "This endpoint only supports GET.", access);
+    return;
+  }
+
+  const workspaceId = decodeURIComponent(encodedWorkspaceId);
+
+  try {
+    requirePermission(access, "integration:manage", workspaceId);
+    const result = await store.load();
+    const workspace = result.state.workspaces.find((item) => item.id === workspaceId);
+
+    if (!workspace) {
+      throw new ApiRequestError("not_found", 404, "Workspace was not found.");
+    }
+
+    writeJson(
+      response,
+      200,
+      {
+        linearOAuth: createSafeLinearOAuthSetup(linearOAuthConfig, workspaceId),
+        workspace: {
+          id: workspace.id,
+          name: workspace.name
+        }
+      },
+      access
+    );
+  } catch (error) {
+    writeKnownApiError(response, error, access);
+  }
+}
 
 function parseGitHubIssueImportPayload(
   payload: unknown,
@@ -1028,6 +1372,18 @@ function parseIntegrationPermissions(value: unknown): IntegrationPermission[] {
     );
 }
 
+function parseLinearIntegrationPermissions(value: unknown): IntegrationPermission[] {
+  if (!Array.isArray(value)) return linearRequiredInstallationPermissions;
+
+  return value
+    .map((permission) => getBoundedText(permission, 80))
+    .filter((permission): permission is IntegrationPermission =>
+      linearRequiredInstallationPermissions.includes(permission as IntegrationPermission) ||
+      permission === "write:external" ||
+      permission === "webhook:receive"
+    );
+}
+
 function parseIntegrationInstallationStatus(value: unknown) {
   if (value === "active" || value === "disconnected" || value === "suspended") {
     return value;
@@ -1038,7 +1394,7 @@ function parseIntegrationInstallationStatus(value: unknown) {
 
 function isSameExternalObject(
   mapping: ExternalObjectMapping,
-  ref: ReturnType<typeof createGitHubIssueExternalRef>
+  ref: ExternalObjectMapping["external"]
 ) {
   return (
     mapping.status !== "disconnected" &&
@@ -1290,6 +1646,36 @@ function requireWorkspaceWriteOrIntegrationSync(access: AccessContext, workspace
   } catch {
     requirePermission(access, "integration:sync", workspaceId);
   }
+}
+
+function requireIntegrationActorForInstallation(
+  access: AccessContext,
+  installation: IntegrationInstallation
+) {
+  if (access.actor.type !== "integration") return;
+
+  const normalizedActorId = normalizeProviderActorId(access.actor.id);
+  const normalizedInstallationId = normalizeProviderActorId(installation.id);
+  const expectedPrefix = `${installation.provider}:`;
+
+  if (
+    access.actor.workspaceId !== installation.workspaceId ||
+    normalizedActorId !== normalizedInstallationId ||
+    !normalizedActorId.startsWith(expectedPrefix)
+  ) {
+    throw new AccessDeniedError(
+      "Integration actor is not allowed to write for this provider installation."
+    );
+  }
+}
+
+function normalizeProviderActorId(value: string) {
+  const normalized = value.trim().toLowerCase();
+  if (normalized.includes(":")) return normalized;
+  if (normalized.startsWith("github-")) return `github:${normalized}`;
+  if (normalized.startsWith("linear-")) return `linear:${normalized}`;
+  if (normalized.startsWith("jira-")) return `jira:${normalized}`;
+  return normalized;
 }
 
 function getVerifiedGitHubInstallation(

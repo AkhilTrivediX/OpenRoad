@@ -35,6 +35,9 @@ $env:OPENROAD_GITHUB_APP_SLUG=""
 $env:OPENROAD_GITHUB_APP_ID=""
 $env:OPENROAD_GITHUB_APP_PRIVATE_KEY_FILE=""
 $env:OPENROAD_GITHUB_APP_WEBHOOK_SECRET=""
+$env:OPENROAD_LINEAR_CLIENT_ID=""
+$env:OPENROAD_LINEAR_CLIENT_SECRET=""
+$env:OPENROAD_LINEAR_REDIRECT_URI=""
 $env:OPENROAD_SINGLE_USER_MODE="false"
 $env:OPENROAD_TRUST_PROXY_HEADERS="false"
 $env:PORT="4173"
@@ -56,6 +59,9 @@ $env:OPENROAD_GITHUB_APP_SLUG=""
 $env:OPENROAD_GITHUB_APP_ID=""
 $env:OPENROAD_GITHUB_APP_PRIVATE_KEY_FILE=""
 $env:OPENROAD_GITHUB_APP_WEBHOOK_SECRET=""
+$env:OPENROAD_LINEAR_CLIENT_ID=""
+$env:OPENROAD_LINEAR_CLIENT_SECRET=""
+$env:OPENROAD_LINEAR_REDIRECT_URI=""
 $env:OPENROAD_SINGLE_USER_MODE="false"
 $env:OPENROAD_TRUST_PROXY_HEADERS="false"
 $env:PORT="4173"
@@ -63,7 +69,7 @@ $env:PORT="4173"
 
 Do not expose `OPENROAD_ADMIN_TOKEN` to browser JavaScript.
 
-Do not expose GitHub App private keys or webhook secrets to browser JavaScript. Prefer `OPENROAD_GITHUB_APP_PRIVATE_KEY_FILE` for self-host installs.
+Do not expose GitHub App private keys, GitHub webhook secrets, or Linear client secrets to browser JavaScript. Prefer `OPENROAD_GITHUB_APP_PRIVATE_KEY_FILE` for self-host installs.
 
 ## Docker Compose Self-Host
 
@@ -204,7 +210,7 @@ For local single-user mode without `OPENROAD_ADMIN_TOKEN`, omit `--admin-token`;
 - OAuth/session auth is not implemented.
 - Team metadata is file-backed, not managed SQL.
 - Trusted proxy headers are disabled by default.
-- Payload-backed GitHub issue import, GitHub App installation verification, live issue fetch, signed webhooks, and safe disconnect APIs exist; background jobs, persisted provider tokens, Linear, Jira, and billing are not implemented.
+- Payload-backed GitHub issue import, GitHub App installation verification, live issue fetch, signed webhooks, safe disconnect APIs, and payload-backed Linear issue import exist; background jobs, persisted provider tokens, Linear live sync/webhooks, Jira, and billing are not implemented.
 - Docker images are build-local only; publishing and signed release artifacts are future release work.
 - Named Docker volume backup requires an operator copy step or a future packaged volume helper.
 - Public portal rate limits are in-memory per Node process; distributed deployments need a shared limiter in a future slice.

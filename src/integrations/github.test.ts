@@ -57,6 +57,30 @@ describe("GitHub issue integration", () => {
     ).toThrow("GitHub issue title");
   });
 
+  it("drops sensitive URL query strings before creating OpenRoad records", () => {
+    const issue = parseGitHubIssuePayload(
+      gitHubIssuePayload({
+        html_url: "https://github.com/AkhilTrivediX/OpenRoad/issues/42?access_token=raw-secret#timeline",
+        repository: repository({
+          html_url: "https://github.com/AkhilTrivediX/OpenRoad?client_secret=raw-secret#readme"
+        })
+      })
+    );
+    const pullRequest = parseGitHubPullRequestPayload({
+      ...gitHubPullRequestPayload(),
+      html_url: "https://github.com/AkhilTrivediX/OpenRoad/pull/7?token=raw-secret#files"
+    });
+    const request = createOpenRoadRequestFromGitHubIssue(issue);
+    const issueMapping = createGitHubIssueExternalRef(issue);
+
+    expect(issue.url).toBe("https://github.com/AkhilTrivediX/OpenRoad/issues/42");
+    expect(issue.repository.url).toBe("https://github.com/AkhilTrivediX/OpenRoad");
+    expect(pullRequest.url).toBe("https://github.com/AkhilTrivediX/OpenRoad/pull/7");
+    expect(issueMapping.url).toBe(issue.url);
+    expect(JSON.stringify(request)).not.toContain("raw-secret");
+    expect(JSON.stringify(request)).not.toContain("access_token");
+  });
+
   it("maps GitHub issue state into OpenRoad request status conservatively", () => {
     expect(mapGitHubIssueToRequestStatus(parseGitHubIssuePayload(gitHubIssuePayload()))).toBe(
       "Needs decision"
@@ -230,14 +254,15 @@ function gitHubPullRequestPayload() {
   };
 }
 
-function repository() {
+function repository(overrides: Record<string, unknown> = {}) {
   return {
     full_name: "AkhilTrivediX/OpenRoad",
     html_url: "https://github.com/AkhilTrivediX/OpenRoad",
     name: "OpenRoad",
     node_id: "R_kwDOR123",
     owner: { login: "AkhilTrivediX" },
-    private: false
+    private: false,
+    ...overrides
   };
 }
 

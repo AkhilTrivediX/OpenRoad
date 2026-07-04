@@ -678,6 +678,26 @@ async function handleApiRequest(
     return;
   }
 
+  const integrationStatusMatch = requestUrl.pathname.match(
+    /^\/api\/openroad\/workspaces\/([^/]+)\/integrations\/status$/
+  );
+
+  if (integrationStatusMatch) {
+    await handleIntegrationStatusRequest(
+      request,
+      response,
+      store,
+      access,
+      integrationStore,
+      integrationSyncWorker,
+      githubAppConfig,
+      linearOAuthConfig,
+      jiraOAuthConfig,
+      integrationStatusMatch[1]
+    );
+    return;
+  }
+
   const integrationCredentialsMatch = requestUrl.pathname.match(
     /^\/api\/openroad\/workspaces\/([^/]+)\/integrations\/([^/]+)\/credentials$/
   );
@@ -2184,6 +2204,289 @@ async function handleIntegrationSyncJobEnqueueRequest(
   } catch (error) {
     writeKnownApiError(response, error, access);
   }
+}
+
+async function handleIntegrationStatusRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  store: OpenRoadStore,
+  access: AccessContext,
+  integrationStore: IntegrationStore | undefined,
+  integrationSyncWorker: IntegrationSyncWorker | undefined,
+  githubAppConfig: GitHubAppConfig,
+  linearOAuthConfig: LinearOAuthConfig,
+  jiraOAuthConfig: JiraOAuthConfig,
+  encodedWorkspaceId: string
+) {
+  if (request.method !== "GET") {
+    writeApiError(response, 405, "invalid_method", "This endpoint only supports GET.", access);
+    return;
+  }
+
+  const workspaceId = decodeURIComponent(encodedWorkspaceId);
+
+  try {
+    requirePermission(access, "workspace:read", workspaceId);
+
+    if (!integrationStore) {
+      throw new ApiRequestError(
+        "not_configured",
+        503,
+        "OpenRoad integration metadata store is not configured."
+      );
+    }
+
+    const [openRoadResult, integrationResult] = await Promise.all([
+      store.load(),
+      integrationStore.load()
+    ]);
+    const workspace = openRoadResult.state.workspaces.find((item) => item.id === workspaceId);
+
+    if (!workspace) {
+      throw new ApiRequestError("not_found", 404, "Workspace was not found.");
+    }
+
+    writeJson(
+      response,
+      200,
+      {
+        integrationMetadata: {
+          recovered: Boolean(integrationResult.backupPath),
+          schemaVersion: integrationResult.state.schemaVersion,
+          status: integrationResult.status
+        },
+        providers: integrationProviders.map((provider) =>
+          createIntegrationStatusProviderSummary({
+            githubAppConfig,
+            integrationState: integrationResult.state,
+            integrationSyncWorker,
+            jiraOAuthConfig,
+            linearOAuthConfig,
+            provider,
+            workspaceId
+          })
+        ),
+        status: "ready",
+        workspaceId
+      },
+      access
+    );
+  } catch (error) {
+    writeKnownApiError(response, error, access);
+  }
+}
+
+function createIntegrationStatusProviderSummary({
+  githubAppConfig,
+  integrationState,
+  integrationSyncWorker,
+  jiraOAuthConfig,
+  linearOAuthConfig,
+  provider,
+  workspaceId
+}: {
+  githubAppConfig: GitHubAppConfig;
+  integrationState: IntegrationState;
+  integrationSyncWorker: IntegrationSyncWorker | undefined;
+  jiraOAuthConfig: JiraOAuthConfig;
+  linearOAuthConfig: LinearOAuthConfig;
+  provider: IntegrationProvider;
+  workspaceId: string;
+}) {
+  const installations = integrationState.installations.filter(
+    (installation) => installation.workspaceId === workspaceId && installation.provider === provider
+  );
+  const activeInstallations = installations.filter((installation) => installation.status === "active");
+  const mappings = integrationState.mappings.filter(
+    (mapping) => mapping.openRoad.workspaceId === workspaceId && mapping.external.provider === provider
+  );
+  const activeMappings = mappings.filter((mapping) => mapping.status === "active");
+  const linkedIssueMappings = activeMappings.filter((mapping) => mapping.external.type === "issue");
+  const jobs = integrationState.syncJobs
+    .filter((job) => job.workspaceId === workspaceId && job.provider === provider)
+    .sort((left, right) => timestampMs(right.updatedAt) - timestampMs(left.updatedAt));
+  const setupConfigured = isIntegrationSetupConfigured({
+    githubAppConfig,
+    jiraOAuthConfig,
+    linearOAuthConfig,
+    provider,
+    workspaceId
+  });
+  const syncWorkerConfigured = provider === "github" && Boolean(integrationSyncWorker);
+  const canManualSync =
+    provider === "github" &&
+    syncWorkerConfigured &&
+    activeInstallations.length > 0 &&
+    linkedIssueMappings.length > 0;
+  const connection = getIntegrationConnectionState({
+    activeInstallations: activeInstallations.length,
+    setupConfigured,
+    totalInstallations: installations.length
+  });
+
+  return {
+    accounts: activeInstallations.slice(0, 5).map(sanitizeIntegrationStatusAccount),
+    activeInstallations: activeInstallations.length,
+    capabilities: {
+      disconnect: activeInstallations.length > 0,
+      import: activeInstallations.length > 0,
+      liveSync: provider === "github" && activeInstallations.length > 0 && setupConfigured,
+      manualSync: canManualSync,
+      setup: setupConfigured,
+      webhooks: provider === "github" && activeInstallations.length > 0
+    },
+    connection,
+    label: integrationProviderLabels[provider],
+    lastJobStatus: jobs[0]?.status,
+    lastJobUpdatedAt: jobs[0]?.updatedAt,
+    lastSyncedAt: newestTimestamp(activeMappings.map((mapping) => mapping.lastSyncedAt)),
+    linkedIssueMappings: linkedIssueMappings.length,
+    linkedMappings: activeMappings.length,
+    provider,
+    queuedSyncJobs: jobs.filter((job) => job.status === "queued").length,
+    recentJobs: jobs.slice(0, 5).map(sanitizeIntegrationStatusJob),
+    runningSyncJobs: jobs.filter((job) => job.status === "running").length,
+    setupConfigured,
+    statusText: getIntegrationStatusText({
+      activeInstallations: activeInstallations.length,
+      canManualSync,
+      connection,
+      linkedIssueMappings: linkedIssueMappings.length,
+      provider,
+      setupConfigured,
+      syncWorkerConfigured
+    }),
+    syncWorkerConfigured,
+    totalInstallations: installations.length
+  };
+}
+
+const integrationProviderLabels: Record<IntegrationProvider, string> = {
+  github: "GitHub",
+  jira: "Jira",
+  linear: "Linear"
+};
+
+function sanitizeIntegrationStatusAccount(installation: IntegrationInstallation) {
+  return {
+    createdAt: installation.createdAt,
+    id: installation.id,
+    providerAccountName: installation.providerAccountName,
+    status: installation.status
+  };
+}
+
+function sanitizeIntegrationStatusJob(job: IntegrationSyncJob) {
+  return {
+    attempt: job.attempt,
+    ...(job.completedAt ? { completedAt: job.completedAt } : {}),
+    createdAt: job.createdAt,
+    ...(job.error ? { error: redactSensitiveText(job.error) } : {}),
+    id: job.id,
+    installationId: job.installationId,
+    ...(job.lastRunAt ? { lastRunAt: job.lastRunAt } : {}),
+    ...(job.nextRunAt ? { nextRunAt: job.nextRunAt } : {}),
+    provider: job.provider,
+    reason: job.reason,
+    ...(job.resultSummary ? { resultSummary: redactSensitiveText(job.resultSummary) } : {}),
+    status: job.status,
+    updatedAt: job.updatedAt,
+    workspaceId: job.workspaceId
+  };
+}
+
+function isIntegrationSetupConfigured({
+  githubAppConfig,
+  jiraOAuthConfig,
+  linearOAuthConfig,
+  provider,
+  workspaceId
+}: {
+  githubAppConfig: GitHubAppConfig;
+  jiraOAuthConfig: JiraOAuthConfig;
+  linearOAuthConfig: LinearOAuthConfig;
+  provider: IntegrationProvider;
+  workspaceId: string;
+}) {
+  if (provider === "github") {
+    return createSafeGitHubAppSetup(githubAppConfig, workspaceId).configured;
+  }
+
+  if (provider === "linear") {
+    return createSafeLinearOAuthSetup(linearOAuthConfig, workspaceId).configured;
+  }
+
+  return createSafeJiraOAuthSetup(jiraOAuthConfig, workspaceId).configured;
+}
+
+function getIntegrationConnectionState({
+  activeInstallations,
+  setupConfigured,
+  totalInstallations
+}: {
+  activeInstallations: number;
+  setupConfigured: boolean;
+  totalInstallations: number;
+}) {
+  if (activeInstallations > 0) return "connected";
+  if (totalInstallations > 0) return "attention";
+  if (setupConfigured) return "ready";
+  return "optional";
+}
+
+function getIntegrationStatusText({
+  activeInstallations,
+  canManualSync,
+  connection,
+  linkedIssueMappings,
+  provider,
+  setupConfigured,
+  syncWorkerConfigured
+}: {
+  activeInstallations: number;
+  canManualSync: boolean;
+  connection: string;
+  linkedIssueMappings: number;
+  provider: IntegrationProvider;
+  setupConfigured: boolean;
+  syncWorkerConfigured: boolean;
+}) {
+  if (provider === "github" && canManualSync) {
+    return `Connected. ${linkedIssueMappings} linked issue mapping${linkedIssueMappings === 1 ? "" : "s"} ready for manual sync.`;
+  }
+
+  if (provider === "github" && activeInstallations > 0 && !syncWorkerConfigured) {
+    return "Connected. The GitHub sync worker is not configured for this deployment.";
+  }
+
+  if (provider === "github" && activeInstallations > 0) {
+    return "Connected. Link a GitHub issue before running manual sync.";
+  }
+
+  if ((provider === "linear" || provider === "jira") && activeInstallations > 0) {
+    return "Connected for import and linking. Live background sync is planned for a later slice.";
+  }
+
+  if (connection === "attention") {
+    return "Previous installation exists, but no active connection is available.";
+  }
+
+  if (setupConfigured) {
+    return "Server setup is configured. Verify an installation to connect.";
+  }
+
+  return "Optional. Server setup is not configured yet.";
+}
+
+function newestTimestamp(values: Array<string | undefined>) {
+  return values
+    .filter((value): value is string => Boolean(value))
+    .sort((left, right) => timestampMs(right) - timestampMs(left))[0];
+}
+
+function timestampMs(value: string | undefined) {
+  const parsed = Date.parse(value ?? "");
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 async function handleIntegrationSyncRunRequest(

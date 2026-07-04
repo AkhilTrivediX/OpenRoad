@@ -123,4 +123,4 @@ The endpoint queues provider-neutral sync jobs for active Jira installations. Th
 - Jira webhook endpoint and signature/idempotency handling.
 - Background sync jobs.
 - Conflict UI.
-- Browser Settings UI for integration management.
+- Full browser connect/import/disconnect flows and Jira sync logs.

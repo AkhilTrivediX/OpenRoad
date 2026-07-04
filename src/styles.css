@@ -1409,14 +1409,43 @@ dd {
 .settings-grid {
   display: grid;
   gap: 12px;
-  grid-template-columns: minmax(0, 1fr) minmax(220px, 0.4fr);
+  grid-template-columns: minmax(0, 1.28fr) minmax(280px, 0.72fr);
+}
+
+.integration-control,
+.data-tools {
+  display: grid;
+  gap: 10px;
+}
+
+.integration-control {
+  align-content: start;
 }
 
 .data-tools {
-  border: 1px solid var(--line);
+  align-content: start;
+  border-left: 1px solid var(--line);
+  padding-left: 12px;
+}
+
+.settings-section-header {
+  align-items: flex-start;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.settings-section-header > div {
   display: grid;
-  gap: 10px;
-  padding: 10px;
+  gap: 7px;
+  min-width: 0;
+}
+
+.settings-section-header p {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+  max-width: 62ch;
 }
 
 .persistence-message {
@@ -1425,7 +1454,143 @@ dd {
   line-height: 1.45;
 }
 
+.integration-action-message {
+  background: var(--plate);
+  border: 1px solid var(--line);
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.45;
+  padding: 8px 10px;
+}
+
+.provider-list {
+  border: 1px solid var(--line);
+  display: grid;
+  overflow: hidden;
+}
+
+.provider-row {
+  background: var(--plate);
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: 12px;
+}
+
+.provider-row + .provider-row {
+  border-top: 1px solid var(--line);
+}
+
+.provider-main {
+  align-items: flex-start;
+  display: flex;
+  gap: 10px;
+  min-width: 0;
+}
+
+.provider-main > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.provider-main h3 {
+  margin: 0;
+}
+
+.provider-main p,
+.provider-main small,
+.provider-details p,
+.provider-details small {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.provider-main small {
+  overflow-wrap: anywhere;
+}
+
+.provider-code {
+  background: var(--rail);
+  border: 1px solid var(--line-strong);
+  color: var(--route);
+  display: inline-grid;
+  flex: 0 0 auto;
+  font-family: var(--mono-font);
+  font-size: 11px;
+  height: 30px;
+  place-items: center;
+  width: 34px;
+}
+
+.provider-controls {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.provider-action {
+  min-height: 36px;
+}
+
+.provider-action-note {
+  align-items: center;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  display: inline-flex;
+  font-family: var(--label-font);
+  font-size: 12px;
+  min-height: 32px;
+  padding: 0 9px;
+  white-space: nowrap;
+}
+
+.provider-details {
+  border-top: 1px solid var(--line);
+  grid-column: 1 / -1;
+  padding-top: 8px;
+}
+
+.provider-details summary {
+  color: var(--ink);
+  cursor: pointer;
+  font-family: var(--label-font);
+  font-size: 12px;
+}
+
+.provider-details ol {
+  border: 1px solid var(--line);
+  display: grid;
+  gap: 0;
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+}
+
+.provider-details li {
+  align-items: center;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 84px minmax(0, 1fr) auto;
+  min-width: 0;
+  padding: 7px 9px;
+}
+
+.provider-details li + li {
+  border-top: 1px solid var(--line);
+}
+
+.provider-details li span,
+.provider-details li strong {
+  font-family: var(--label-font);
+  font-size: 12px;
+}
+
 .data-tool-actions {
+  align-items: center;
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
@@ -2348,7 +2513,8 @@ dd {
   .changelog-workspace,
   .portal-board,
   .portal-publish-grid,
-  .map-board {
+  .map-board,
+  .settings-grid {
     grid-template-columns: 1fr;
   }
 
@@ -2449,6 +2615,37 @@ dd {
   .public-roadmap-lanes,
   .settings-grid,
   .work-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-section-header,
+  .provider-row,
+  .provider-controls {
+    align-items: flex-start;
+    display: grid;
+    grid-template-columns: 1fr;
+    justify-content: stretch;
+  }
+
+  .provider-controls {
+    display: grid;
+  }
+
+  .provider-controls .provider-action,
+  .provider-action-note {
+    min-height: 44px;
+    width: 100%;
+  }
+
+  .data-tools {
+    border-left: 0;
+    border-top: 1px solid var(--line);
+    padding-left: 0;
+    padding-top: 12px;
+  }
+
+  .provider-details li {
+    align-items: start;
     grid-template-columns: 1fr;
   }
 

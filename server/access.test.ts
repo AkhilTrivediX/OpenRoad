@@ -72,6 +72,13 @@ describe("OpenRoad API access contract", () => {
     );
     expect(openRoadApiContract.routeProtections).toContainEqual(
       expect.objectContaining({
+        path: "/api/openroad/workspaces/:workspaceId/integrations/status",
+        permission: "workspace:read",
+        scope: "workspace"
+      })
+    );
+    expect(openRoadApiContract.routeProtections).toContainEqual(
+      expect.objectContaining({
         path: "/api/openroad/workspaces/:workspaceId/integrations/linear/issues/import",
         permission: "workspace:write",
         scope: "workspace"

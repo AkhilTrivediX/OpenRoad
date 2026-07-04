@@ -114,6 +114,13 @@ import {
   loadServerOpenRoadState,
   saveServerOpenRoadState
 } from "./persistence/openroadServer";
+import {
+  createStandaloneIntegrationStatus,
+  loadWorkspaceIntegrationStatus,
+  runGitHubManualSync,
+  type IntegrationProviderStatus,
+  type WorkspaceIntegrationStatus
+} from "./persistence/openroadIntegrations";
 
 type NavItem = {
   label: "Inbox" | "Work" | "Roadmap" | "Changelog" | "Portal" | "Settings";
@@ -150,6 +157,11 @@ export function App() {
       ? loadResult.error ?? "Saved OpenRoad data could not be loaded. Demo data is active."
       : ""
   );
+  const [integrationStatus, setIntegrationStatus] = useState<WorkspaceIntegrationStatus>(() =>
+    createStandaloneIntegrationStatus(resolveInitialWorkspaceId(loadResult.state, loadSelectedWorkspaceId()))
+  );
+  const [integrationActionMessage, setIntegrationActionMessage] = useState("");
+  const [syncingProvider, setSyncingProvider] = useState<"github" | undefined>();
   const [exportPreview, setExportPreview] = useState("");
   const [importDraft, setImportDraft] = useState("");
   const [isCreatingWorkspace, setIsCreatingWorkspace] = useState(false);
@@ -258,6 +270,25 @@ export function App() {
       isCancelled = true;
     };
   }, [serverPersistenceEnabled]);
+  useEffect(() => {
+    let isCancelled = false;
+
+    setIntegrationActionMessage("");
+
+    if (!serverPersistenceEnabled) {
+      setIntegrationStatus(createStandaloneIntegrationStatus(workspaceId));
+      return;
+    }
+
+    loadWorkspaceIntegrationStatus(workspaceId).then((status) => {
+      if (isCancelled) return;
+      setIntegrationStatus(status);
+    });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [serverPersistenceEnabled, workspaceId]);
   useEffect(() => {
     saveSelectedWorkspaceId(workspaceId);
   }, [workspaceId]);
@@ -508,6 +539,34 @@ export function App() {
       type: "replace-portal-settings",
       workspaceId: workspace.id
     });
+  }
+
+  async function syncGitHubLinkedIssues(provider: IntegrationProviderStatus) {
+    const installationId = provider.accounts[0]?.id;
+    if (!installationId || syncingProvider) return;
+
+    setSyncingProvider("github");
+    setIntegrationActionMessage("Queueing GitHub linked issue sync...");
+
+    try {
+      const result = await runGitHubManualSync(workspace.id, installationId);
+      setIntegrationActionMessage(result.message);
+
+      if (serverPersistenceEnabled) {
+        const [status, serverState] = await Promise.all([
+          loadWorkspaceIntegrationStatus(workspace.id),
+          loadServerOpenRoadState().catch(() => undefined)
+        ]);
+        setIntegrationStatus(status);
+
+        if (serverState) {
+          skipNextServerSave.current = true;
+          dispatchOpenRoad({ type: "replace-state", state: serverState.state });
+        }
+      }
+    } finally {
+      setSyncingProvider(undefined);
+    }
   }
 
   function updateSelectedRequestNotificationPreference(
@@ -3564,15 +3623,94 @@ export function App() {
             <div className="panel-header">
               <div>
                 <span className="section-label">Settings</span>
-                <h2 id="settings-title">Workspace data</h2>
+                <h2 id="settings-title">Controls and integrations</h2>
               </div>
             </div>
 
             <div className="settings-grid">
+              <section className="integration-control" aria-label="Optional integrations">
+                <div className="settings-section-header">
+                  <div>
+                    <div className="source-history-header">
+                      <RadioTower aria-hidden="true" size={14} />
+                      <strong>Integrations</strong>
+                    </div>
+                    <p>{integrationStatus.message ?? "Provider status is scoped to this workspace."}</p>
+                  </div>
+                  <span className={`status-badge ${getIntegrationStatusTone(integrationStatus)}`}>
+                    {getIntegrationStatusLabel(integrationStatus)}
+                  </span>
+                </div>
+
+                {integrationActionMessage ? (
+                  <p className="integration-action-message" role="status">
+                    {integrationActionMessage}
+                  </p>
+                ) : null}
+
+                <div className="provider-list" aria-label="Provider readiness">
+                  {integrationStatus.providers.map((provider) => (
+                    <article className="provider-row" key={provider.provider}>
+                      <div className="provider-main">
+                        <span className="provider-code" aria-hidden="true">
+                          {getProviderCode(provider)}
+                        </span>
+                        <div>
+                          <h3>{provider.label}</h3>
+                          <p>{provider.statusText}</p>
+                          <small>{getProviderMetric(provider)}</small>
+                        </div>
+                      </div>
+
+                      <div className="provider-controls">
+                        <span className={`status-badge ${getProviderTone(provider)}`}>
+                          {getProviderConnectionLabel(provider)}
+                        </span>
+                        {provider.provider === "github" ? (
+                          <button
+                            className="secondary-action compact provider-action"
+                            disabled={!provider.capabilities.manualSync || syncingProvider === "github"}
+                            onClick={() => void syncGitHubLinkedIssues(provider)}
+                            type="button"
+                          >
+                            <RotateCcw aria-hidden="true" size={14} />
+                            {syncingProvider === "github" ? "Syncing..." : "Sync linked issues"}
+                          </button>
+                        ) : (
+                          <span className="provider-action-note">Live sync later</span>
+                        )}
+                      </div>
+
+                      <details className="provider-details">
+                        <summary>Recent activity</summary>
+                        {provider.recentJobs.length ? (
+                          <ol>
+                            {provider.recentJobs.map((job) => (
+                              <li key={job.id}>
+                                <span>{job.status}</span>
+                                <strong>{job.reason}</strong>
+                                <small>{formatIntegrationTime(job.completedAt ?? job.updatedAt)}</small>
+                              </li>
+                            ))}
+                          </ol>
+                        ) : (
+                          <p>No sync activity for this provider yet.</p>
+                        )}
+                      </details>
+                    </article>
+                  ))}
+                </div>
+              </section>
+
               <section className="data-tools" aria-label="Workspace data tools">
-                <div className="source-history-header">
-                  <Settings aria-hidden="true" size={14} />
-                  <strong>Local data</strong>
+                <div className="settings-section-header">
+                  <div>
+                    <div className="source-history-header">
+                      <Settings aria-hidden="true" size={14} />
+                      <strong>Workspace data</strong>
+                    </div>
+                    <p>Export, import, or reset this workspace without touching provider credentials.</p>
+                  </div>
                 </div>
                 {persistenceMessage ? (
                   <p className="persistence-message" role="status">
@@ -3619,16 +3757,6 @@ export function App() {
                   </button>
                 </form>
               </section>
-
-              <div className="integration-chips" aria-label="Optional integrations">
-                {workspace.integrations.map((integration) => (
-                  <span className="integration-chip" key={integration.label}>
-                    <RadioTower aria-hidden="true" size={13} />
-                    {integration.label}
-                    <small>{integration.state}</small>
-                  </span>
-                ))}
-              </div>
             </div>
           </section>
         </section>
@@ -3650,6 +3778,68 @@ export function App() {
       </div>
     </main>
   );
+}
+
+function getProviderCode(provider: IntegrationProviderStatus) {
+  if (provider.provider === "github") return "GH";
+  if (provider.provider === "jira") return "JR";
+  return "LN";
+}
+
+function getIntegrationStatusTone(status: WorkspaceIntegrationStatus) {
+  if (status.status === "ready") return "success";
+  if (status.status === "forbidden") return "warning";
+  return "neutral";
+}
+
+function getIntegrationStatusLabel(status: WorkspaceIntegrationStatus) {
+  if (status.status === "ready") return "Server metadata";
+  if (status.status === "forbidden") return "Needs access";
+  return "Standalone";
+}
+
+function getProviderTone(provider: IntegrationProviderStatus) {
+  if (provider.connection === "connected") return "success";
+  if (provider.connection === "attention") return "warning";
+  if (provider.connection === "ready") return "info";
+  return "neutral";
+}
+
+function getProviderConnectionLabel(provider: IntegrationProviderStatus) {
+  if (provider.connection === "connected") return "Connected";
+  if (provider.connection === "attention") return "Needs review";
+  if (provider.connection === "ready") return "Ready";
+  return "Optional";
+}
+
+function getProviderMetric(provider: IntegrationProviderStatus) {
+  const linked =
+    provider.linkedIssueMappings > 0
+      ? `${provider.linkedIssueMappings} linked issue${provider.linkedIssueMappings === 1 ? "" : "s"}`
+      : "No linked issues";
+  const queue =
+    provider.queuedSyncJobs + provider.runningSyncJobs > 0
+      ? `${provider.queuedSyncJobs + provider.runningSyncJobs} active sync job${
+          provider.queuedSyncJobs + provider.runningSyncJobs === 1 ? "" : "s"
+        }`
+      : "No active sync jobs";
+  const account =
+    provider.accounts[0]?.providerAccountName ??
+    (provider.setupConfigured ? "Setup configured" : "Setup not configured");
+
+  return `${account} / ${linked} / ${queue}`;
+}
+
+function formatIntegrationTime(value: string | undefined) {
+  if (!value) return "not recorded";
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) return value;
+  return new Intl.DateTimeFormat(undefined, {
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    month: "short"
+  }).format(new Date(parsed));
 }
 
 function RouteGlyph() {

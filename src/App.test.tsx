@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createInitialOpenRoadState } from "./domain/openroad";
 import { App } from "./App";
 
 async function createWorkItem(
@@ -49,6 +50,12 @@ describe("OpenRoad workspace shell", () => {
     localStorage.clear();
   });
 
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
   it("renders the shell title and default workspace", () => {
     render(<App />);
 
@@ -92,6 +99,43 @@ describe("OpenRoad workspace shell", () => {
     ).toBeInTheDocument();
     expect(screen.getByLabelText("Optional integrations")).toBeInTheDocument();
     expect(screen.getAllByText("Optional")).toHaveLength(3);
+  });
+
+  it("renders server integration status in Settings without exposing logs by default", async () => {
+    vi.stubEnv("VITE_OPENROAD_SERVER_SYNC", "on");
+    const fetchMock = createSettingsIntegrationFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+
+    expect(await screen.findByText("Server metadata")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "GitHub" })).toBeInTheDocument();
+    expect(screen.getByText(/1 linked issue mapping ready for manual sync/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Sync linked issues" })).toBeEnabled();
+    expect(screen.queryByText("sync-job-1")).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toContain("installation-token");
+  });
+
+  it("runs GitHub manual sync from Settings when the server reports support", async () => {
+    vi.stubEnv("VITE_OPENROAD_SERVER_SYNC", "on");
+    const fetchMock = createSettingsIntegrationFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "Sync linked issues" }));
+
+    expect(await screen.findByText("GitHub linked issue sync completed.")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/openroad/workspaces/acme/integrations/github/sync/jobs",
+      expect.objectContaining({ method: "POST" })
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/openroad/integrations/sync/run",
+      expect.objectContaining({ method: "POST" })
+    );
+    expect(document.body.textContent).not.toContain("installation-token");
   });
 
   it("switches workspaces", async () => {
@@ -1128,3 +1172,148 @@ describe("OpenRoad workspace shell", () => {
     expect(within(importedPortal).getByText("Public comments disabled")).toBeInTheDocument();
   }, 10_000);
 });
+
+function createSettingsIntegrationFetchMock() {
+  const state = createInitialOpenRoadState();
+
+  return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input.toString();
+    const method = init?.method ?? "GET";
+
+    if (url === "/api/openroad/state") {
+      return jsonResponse({
+        state,
+        status: method === "PUT" ? "saved" : "ready"
+      });
+    }
+
+    if (url === "/api/openroad/workspaces/acme/integrations/status") {
+      return jsonResponse({
+        integrationMetadata: {
+          recovered: false,
+          schemaVersion: 3,
+          status: "ready"
+        },
+        providers: [
+          {
+            accounts: [
+              {
+                createdAt: "2026-07-04T00:00:00Z",
+                id: "github-install",
+                providerAccountName: "AkhilTrivediX",
+                status: "active"
+              }
+            ],
+            activeInstallations: 1,
+            capabilities: {
+              disconnect: true,
+              import: true,
+              liveSync: true,
+              manualSync: true,
+              setup: true,
+              webhooks: true
+            },
+            connection: "connected",
+            label: "GitHub",
+            lastSyncedAt: "2026-07-04T00:30:00Z",
+            linkedIssueMappings: 1,
+            linkedMappings: 1,
+            provider: "github",
+            queuedSyncJobs: 0,
+            recentJobs: [
+              {
+                attempt: 1,
+                completedAt: "2026-07-04T00:30:00Z",
+                createdAt: "2026-07-04T00:00:00Z",
+                id: "sync-job-1",
+                installationId: "github-install",
+                provider: "github",
+                reason: "manual",
+                resultSummary: "Synced one mapping.",
+                status: "succeeded",
+                updatedAt: "2026-07-04T00:30:00Z",
+                workspaceId: "acme"
+              }
+            ],
+            runningSyncJobs: 0,
+            setupConfigured: true,
+            statusText: "Connected. 1 linked issue mapping ready for manual sync.",
+            syncWorkerConfigured: true,
+            totalInstallations: 1
+          },
+          {
+            accounts: [],
+            activeInstallations: 0,
+            capabilities: {
+              disconnect: false,
+              import: false,
+              liveSync: false,
+              manualSync: false,
+              setup: false,
+              webhooks: false
+            },
+            connection: "optional",
+            label: "Jira",
+            linkedIssueMappings: 0,
+            linkedMappings: 0,
+            provider: "jira",
+            queuedSyncJobs: 0,
+            recentJobs: [],
+            runningSyncJobs: 0,
+            setupConfigured: false,
+            statusText: "Optional. Server setup is not configured yet.",
+            syncWorkerConfigured: false,
+            totalInstallations: 0
+          },
+          {
+            accounts: [],
+            activeInstallations: 0,
+            capabilities: {
+              disconnect: false,
+              import: false,
+              liveSync: false,
+              manualSync: false,
+              setup: false,
+              webhooks: false
+            },
+            connection: "optional",
+            label: "Linear",
+            linkedIssueMappings: 0,
+            linkedMappings: 0,
+            provider: "linear",
+            queuedSyncJobs: 0,
+            recentJobs: [],
+            runningSyncJobs: 0,
+            setupConfigured: false,
+            statusText: "Optional. Server setup is not configured yet.",
+            syncWorkerConfigured: false,
+            totalInstallations: 0
+          }
+        ],
+        status: "ready",
+        workspaceId: "acme"
+      });
+    }
+
+    if (url === "/api/openroad/workspaces/acme/integrations/github/sync/jobs") {
+      return jsonResponse({ job: { id: "sync-job-1", status: "queued" }, status: "queued" }, 201);
+    }
+
+    if (url === "/api/openroad/integrations/sync/run") {
+      return jsonResponse({
+        claimed: 1,
+        processed: [{ id: "sync-job-1", kind: "success", status: "succeeded" }],
+        status: "processed"
+      });
+    }
+
+    return jsonResponse({ error: { message: "Unhandled test request." } }, 404);
+  });
+}
+
+function jsonResponse(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), {
+    headers: { "Content-Type": "application/json" },
+    status
+  });
+}

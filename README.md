@@ -25,7 +25,7 @@ External providers attach through external links and sync state. Provider-specif
 
 OpenRoad now has a working standalone product loop, production server foundation, and first self-host operations path:
 
-- React app shell for requests, work, roadmap, changelog, portal, and settings.
+- React app shell for requests, work, roadmap, changelog, portal, and settings, including progressive integration status and GitHub manual sync controls.
 - Versioned OpenRoad domain state with local persistence, import/export, and recovery.
 - Public/private visibility for requests, comments, roadmap items, and changelog entries.
 - Production Node server that serves the built app and same-origin OpenRoad APIs.
@@ -45,7 +45,7 @@ OpenRoad now has a working standalone product loop, production server foundation
 - Release candidate manifest tooling for version, checksum, support-window, and dry-run publishing verification.
 - Docker Compose, backup/restore, and smoke-check commands for self-host operators.
 
-Current production limits are explicit: OAuth/session auth, invitation flows, managed database migrations, hosted release promotion, deeper observability, browser Settings UI for integrations, OAuth callback exchange, Linear/Jira live fetch/webhooks, provider write-back, direct email/provider notification delivery, real model-backed AI adapters with consent/prompt redaction/audit logs, and conflict UI are planned next-stage work.
+Current production limits are explicit: OAuth/session auth, invitation flows, managed database migrations, hosted release promotion, deeper observability, full integration connect/disconnect Settings flows, OAuth callback exchange, Linear/Jira live fetch/webhooks, provider write-back, direct email/provider notification delivery, real model-backed AI adapters with consent/prompt redaction/audit logs, and conflict UI are planned next-stage work.
 
 Current docs:
 

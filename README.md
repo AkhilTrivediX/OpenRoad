@@ -39,6 +39,7 @@ OpenRoad now has a working standalone product loop, production server foundation
 - Safe Jira OAuth setup plus payload-backed Jira issue import/link with explicit field mapping.
 - Requester notification preferences plus an internal outbox for status and changelog updates.
 - Deterministic local assistant triage for request summaries, duplicate hints, and private changelog draft suggestions.
+- Release candidate manifest tooling for version, checksum, support-window, and dry-run publishing verification.
 - Docker Compose, backup/restore, and smoke-check commands for self-host operators.
 
 Current production limits are explicit: OAuth/session auth, invitation flows, managed database migrations, hosted release promotion, deeper observability, browser Settings UI for integrations, Linear/Jira token exchange/live fetch/webhooks, background sync jobs, notification delivery adapters, real model-backed AI adapters with consent/prompt redaction/audit logs, and conflict UI are planned next-stage work.
@@ -57,6 +58,7 @@ Current docs:
 - [Jira issue sync](docs/JIRA_ISSUE_SYNC.md)
 - [Requester notifications](docs/REQUESTER_NOTIFICATIONS.md)
 - [AI-assisted triage](docs/AI_ASSISTED_TRIAGE.md)
+- [Release operations](docs/RELEASE_OPERATIONS.md)
 - [UI concepts](docs/UI_CONCEPTS.md)
 
 ## Working Rule
@@ -88,6 +90,16 @@ $env:OPENROAD_TEAM_FILE="C:\openroad\openroad-team.json"
 $env:PORT="4173"
 pnpm start
 ```
+
+## Release Verification
+
+```powershell
+pnpm check
+pnpm release:verify
+pnpm release:plan -- --version 0.1.0-rc.1 --channel rc --output .openroad\releases\openroad-0.1.0-rc.1.json
+```
+
+Release manifests record build artifact checksums, support window, required gates, and whether Docker publishing or artifact signing is only a dry-run for the current stage.
 
 ## Self-Host Operations
 

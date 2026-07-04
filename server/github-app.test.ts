@@ -1,6 +1,6 @@
 // @vitest-environment node
 
-import { createVerify, generateKeyPairSync } from "node:crypto";
+import { createHmac, createVerify, generateKeyPairSync } from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -13,7 +13,8 @@ import {
   decodeGitHubAppJwtPayload,
   githubAppConfigFromEnv,
   normalizeGitHubAppInstallation,
-  readGitHubAppPrivateKey
+  readGitHubAppPrivateKey,
+  verifyGitHubWebhookSignature
 } from "./github-app";
 
 describe("GitHub App installation helpers", () => {
@@ -31,6 +32,7 @@ describe("GitHub App installation helpers", () => {
     );
 
     expect(config.privateKey).toContain("\nsecret\n");
+    expect(config.webhookSecret).toBe("webhook-secret");
     expect(setup).toMatchObject({
       configured: true,
       missing: [],
@@ -43,6 +45,40 @@ describe("GitHub App installation helpers", () => {
     expect(setup.installUrl).toContain("https://github.com/apps/openroad-test/installations/new");
     expect(JSON.stringify(setup)).not.toContain("secret");
     expect(JSON.stringify(setup)).not.toContain("PRIVATE KEY");
+  });
+
+  it("verifies GitHub webhook signatures with SHA-256 HMAC only", () => {
+    const payload = Buffer.from(JSON.stringify({ action: "opened", issue: { id: 1 } }));
+    const signature = `sha256=${createHmac("sha256", "webhook-secret").update(payload).digest("hex")}`;
+
+    expect(
+      verifyGitHubWebhookSignature({
+        payload,
+        secret: "webhook-secret",
+        signatureHeader: signature
+      })
+    ).toBe(true);
+    expect(
+      verifyGitHubWebhookSignature({
+        payload,
+        secret: "webhook-secret",
+        signatureHeader: `sha1=${createHmac("sha1", "webhook-secret").update(payload).digest("hex")}`
+      })
+    ).toBe(false);
+    expect(
+      verifyGitHubWebhookSignature({
+        payload,
+        secret: "wrong-secret",
+        signatureHeader: signature
+      })
+    ).toBe(false);
+    expect(
+      verifyGitHubWebhookSignature({
+        payload,
+        secret: "webhook-secret",
+        signatureHeader: undefined
+      })
+    ).toBe(false);
   });
 
   it("reports missing setup keys without failing local standalone mode", () => {

@@ -1,4 +1,4 @@
-import { createSign } from "node:crypto";
+import { createHmac, createSign, timingSafeEqual } from "node:crypto";
 import { readFile } from "node:fs/promises";
 
 import {
@@ -17,6 +17,7 @@ export type GitHubAppConfig = {
   privateKey?: string;
   privateKeyFile?: string;
   slug?: string;
+  webhookSecret?: string;
   webhookSecretConfigured: boolean;
 };
 
@@ -211,6 +212,7 @@ export function githubAppConfigFromEnv(env = process.env): GitHubAppConfig {
     privateKey: normalizePrivateKey(env.OPENROAD_GITHUB_APP_PRIVATE_KEY),
     privateKeyFile: normalizeEnvValue(env.OPENROAD_GITHUB_APP_PRIVATE_KEY_FILE),
     slug: normalizeSlug(env.OPENROAD_GITHUB_APP_SLUG),
+    webhookSecret: normalizeEnvValue(env.OPENROAD_GITHUB_APP_WEBHOOK_SECRET),
     webhookSecretConfigured: Boolean(normalizeEnvValue(env.OPENROAD_GITHUB_APP_WEBHOOK_SECRET))
   };
 }
@@ -281,6 +283,24 @@ export function decodeGitHubAppJwtPayload(jwt: string) {
   const [, payload] = jwt.split(".");
   if (!payload) throw new Error("GitHub App JWT is invalid.");
   return JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as Record<string, unknown>;
+}
+
+export function verifyGitHubWebhookSignature({
+  payload,
+  secret,
+  signatureHeader
+}: {
+  payload: Buffer;
+  secret: string;
+  signatureHeader: string | undefined;
+}) {
+  if (!signatureHeader?.startsWith("sha256=")) return false;
+
+  const expected = `sha256=${createHmac("sha256", secret).update(payload).digest("hex")}`;
+  const received = Buffer.from(signatureHeader, "utf8");
+  const expectedBuffer = Buffer.from(expected, "utf8");
+
+  return received.length === expectedBuffer.length && timingSafeEqual(received, expectedBuffer);
 }
 
 export function normalizeGitHubAppInstallation(

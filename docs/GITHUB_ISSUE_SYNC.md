@@ -10,6 +10,9 @@ OpenRoad now has the first provider-specific integration slice: a server-side Gi
 - Link GitHub pull request payloads to the same OpenRoad request through external mappings.
 - Store GitHub installation metadata and mappings in `OPENROAD_INTEGRATION_FILE`, outside OpenRoad core workspace state.
 - Record audit events for GitHub imports and syncs.
+- Fetch live GitHub issues through verified GitHub App installations without persisting installation tokens.
+- Receive signed GitHub App `issues` webhooks and update already-linked OpenRoad requests idempotently.
+- Disconnect installations and mappings without deleting OpenRoad requests.
 
 ## Endpoint
 
@@ -55,11 +58,23 @@ Imported GitHub issues become private OpenRoad requests by default. GitHub issue
 
 The endpoint does not accept or store GitHub tokens, App private keys, webhook secrets, OAuth codes, or raw credential fields.
 
-## Deferred Live GitHub App Work
+If an existing installation is disconnected or suspended in integration metadata, manual import rejects that installation instead of reactivating it from client-supplied payloads.
+
+## Webhook And Disconnect
+
+Signed webhook endpoint:
+
+`POST /api/openroad/integrations/github/webhook`
+
+Manual disconnect endpoint:
+
+`POST /api/openroad/workspaces/:workspaceId/integrations/github/app/installations/:installationId/disconnect`
+
+The webhook endpoint verifies `X-Hub-Signature-256` against the raw payload with `OPENROAD_GITHUB_APP_WEBHOOK_SECRET`. Duplicate GitHub delivery IDs are no-ops. Unmapped issues are logged without creating requests.
+
+## Deferred GitHub Work
 
 The next GitHub slices should add:
 
-- Webhook signature verification.
-- Idempotent webhook processing.
 - Background sync and conflict handling.
 - UI for connect, import, disconnect, and sync logs.

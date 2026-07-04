@@ -1,6 +1,7 @@
 // @vitest-environment node
 
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { createHmac } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -912,6 +913,351 @@ describe("OpenRoad production server", () => {
     expect(fetchCount).toBe(0);
   });
 
+  it("rejects GitHub webhooks without configured secrets or valid signatures", async () => {
+    const unconfigured = await startTestServer();
+    const configured = await startTestServer({
+      githubAppConfig: testGitHubWebhookConfig()
+    });
+    await configured.integrationStore.load();
+    const beforeState = await readFile(configured.dataFile, "utf8");
+    const beforeIntegrations = await readFile(configured.integrationFile, "utf8");
+
+    const missingSecret = await fetchJson(`${unconfigured.url}/api/openroad/integrations/github/webhook`, {
+      body: JSON.stringify(gitHubWebhookPayload()),
+      headers: {
+        "Content-Type": "application/json",
+        "x-github-delivery": "delivery-missing-secret",
+        "x-github-event": "issues"
+      },
+      method: "POST"
+    });
+    const unsignedInvalidJson = await fetchJson(`${configured.url}/api/openroad/integrations/github/webhook`, {
+      body: "{",
+      headers: {
+        "Content-Type": "application/json",
+        "x-github-delivery": "delivery-unsigned",
+        "x-github-event": "issues"
+      },
+      method: "POST"
+    });
+    const invalidSignature = await fetchJson(
+      `${configured.url}/api/openroad/integrations/github/webhook`,
+      signedGitHubWebhookRequest(gitHubWebhookPayload(), {
+        deliveryId: "delivery-invalid-signature",
+        signature: "sha256=bad"
+      })
+    );
+
+    expect(missingSecret.status).toBe(503);
+    expect(missingSecret.body.error.code).toBe("not_configured");
+    expect(unsignedInvalidJson.status).toBe(403);
+    expect(unsignedInvalidJson.body.error.code).toBe("forbidden");
+    expect(invalidSignature.status).toBe(403);
+    expect(invalidSignature.body.error.code).toBe("forbidden");
+    expect(await readFile(configured.dataFile, "utf8")).toBe(beforeState);
+    expect(await readFile(configured.integrationFile, "utf8")).toBe(beforeIntegrations);
+  });
+
+  it("processes linked GitHub issue webhooks idempotently without exposing secrets", async () => {
+    const { integrationStore, store, teamFile, url } = await startTestServer({
+      githubAppConfig: testGitHubWebhookConfig()
+    });
+    const created = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/github/issues/import`, {
+      body: JSON.stringify(gitHubImportPayload()),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const first = await fetchJson(
+      `${url}/api/openroad/integrations/github/webhook`,
+      signedGitHubWebhookRequest(
+        gitHubWebhookPayload({
+          action: "edited",
+          issue: gitHubIssuePayload({
+            closed_at: "2026-07-04T02:00:00Z",
+            labels: [{ name: "planned" }],
+            state: "closed",
+            title: "Webhook updated GitHub issue"
+          })
+        }),
+        { deliveryId: "delivery-issue-sync" }
+      )
+    );
+    const duplicate = await fetchJson(
+      `${url}/api/openroad/integrations/github/webhook`,
+      signedGitHubWebhookRequest(
+        gitHubWebhookPayload({
+          action: "edited",
+          issue: gitHubIssuePayload({
+            title: "Duplicate should not win"
+          })
+        }),
+        { deliveryId: "delivery-issue-sync" }
+      )
+    );
+    const persisted = await store.load();
+    const integrations = await integrationStore.load();
+    const teamState = JSON.parse(await readFile(teamFile, "utf8")) as {
+      auditEvents: Array<{ actorType: string; summary: string; type: string; workspaceId: string }>;
+    };
+    const request = persisted.state.workspaces[0].requests.find(
+      (item) => item.id === created.body.request.id
+    );
+
+    expect(first.status).toBe(202);
+    expect(first.body).toMatchObject({
+      event: {
+        deliveryId: "delivery-issue-sync",
+        event: "issues",
+        result: "synced",
+        workspaceId: "acme"
+      },
+      status: "synced"
+    });
+    expect(duplicate.status).toBe(200);
+    expect(duplicate.body.status).toBe("duplicate");
+    expect(request).toMatchObject({
+      status: "Shipping soon",
+      title: "Webhook updated GitHub issue"
+    });
+    expect(JSON.stringify(request)).not.toContain("Duplicate should not win");
+    expect(integrations.state.syncEvents).toHaveLength(1);
+    expect(integrations.state.mappings.find((mapping) => mapping.external.type === "issue")?.lastSyncedAt).toBeTruthy();
+    expect(teamState.auditEvents[0]).toMatchObject({
+      actorType: "integration",
+      type: "integration.github.webhook.issue",
+      workspaceId: "acme"
+    });
+    expect(JSON.stringify(first.body)).not.toContain("webhook-secret");
+  });
+
+  it("accepts unmapped GitHub issue webhooks as logged no-ops", async () => {
+    const { integrationStore, store, url } = await startTestServer({
+      githubAppConfig: testGitHubWebhookConfig()
+    });
+    const before = await store.load();
+
+    const response = await fetchJson(
+      `${url}/api/openroad/integrations/github/webhook`,
+      signedGitHubWebhookRequest(
+        gitHubWebhookPayload({
+          issue: gitHubIssuePayload({
+            node_id: "I_unmapped",
+            number: 100,
+            title: "Unmapped provider issue"
+          })
+        }),
+        { deliveryId: "delivery-unmapped-issue" }
+      )
+    );
+    const after = await store.load();
+    const integrations = await integrationStore.load();
+
+    expect(response.status).toBe(202);
+    expect(response.body.status).toBe("ignored");
+    expect(after.state.workspaces[0].requests).toHaveLength(before.state.workspaces[0].requests.length);
+    expect(integrations.state.syncEvents[0]).toMatchObject({
+      deliveryId: "delivery-unmapped-issue",
+      result: "ignored"
+    });
+  });
+
+  it("disconnects GitHub installations from signed installation webhooks without deleting requests", async () => {
+    const { integrationStore, store, url } = await startTestServer({
+      githubAppConfig: testGitHubWebhookConfig()
+    });
+    const created = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/github/issues/import`, {
+      body: JSON.stringify(gitHubImportPayload()),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const beforeWebhook = await integrationStore.load();
+    await integrationStore.replaceState({
+      ...beforeWebhook.state,
+      installations: [
+        ...beforeWebhook.state.installations,
+        {
+          createdAt: "2026-07-04T00:00:00.000Z",
+          id: "github-install",
+          permissions: ["read:external", "read:openroad", "write:openroad"],
+          provider: "linear",
+          providerAccountId: "linear-team",
+          providerAccountName: "Linear Team",
+          status: "active",
+          workspaceId: "acme"
+        }
+      ],
+      mappings: [
+        ...beforeWebhook.state.mappings,
+        {
+          connectedAt: "2026-07-04T00:00:00.000Z",
+          external: {
+            id: "LIN_issue_1",
+            key: "LIN-1",
+            provider: "linear",
+            type: "issue",
+            url: "https://linear.app/openroad/issue/LIN-1"
+          },
+          id: "linear-colliding-installation-id",
+          installationId: "github-install",
+          openRoad: {
+            id: created.body.request.id,
+            type: "request",
+            workspaceId: "acme"
+          },
+          status: "active"
+        }
+      ]
+    });
+
+    const response = await fetchJson(
+      `${url}/api/openroad/integrations/github/webhook`,
+      signedGitHubWebhookRequest(
+        gitHubInstallationWebhookPayload({
+          action: "deleted",
+          installationId: "github-install"
+        }),
+        {
+          deliveryId: "delivery-installation-deleted",
+          eventName: "installation"
+        }
+      )
+    );
+    const integrations = await integrationStore.load();
+    const state = await store.load();
+    const request = state.state.workspaces[0].requests.find(
+      (item) => item.id === created.body.request.id
+    );
+    const rejectedImport = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/github/issues/import`, {
+      body: JSON.stringify(gitHubImportPayload()),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const unsuspend = await fetchJson(
+      `${url}/api/openroad/integrations/github/webhook`,
+      signedGitHubWebhookRequest(
+        gitHubInstallationWebhookPayload({
+          action: "unsuspend",
+          installationId: "github-install"
+        }),
+        {
+          deliveryId: "delivery-installation-unsuspend-after-disconnect",
+          eventName: "installation"
+        }
+      )
+    );
+    const afterUnsuspend = await integrationStore.load();
+    const githubInstallation = afterUnsuspend.state.installations.find(
+      (installation) => installation.provider === "github"
+    );
+    const linearInstallation = afterUnsuspend.state.installations.find(
+      (installation) => installation.provider === "linear"
+    );
+    const linearMapping = afterUnsuspend.state.mappings.find(
+      (mapping) => mapping.external.provider === "linear"
+    );
+
+    expect(response.status).toBe(202);
+    expect(response.body.status).toBe("synced");
+    expect(integrations.state.installations.find((installation) => installation.provider === "github")).toMatchObject({
+      id: "github-install",
+      status: "disconnected"
+    });
+    expect(
+      integrations.state.mappings
+        .filter((mapping) => mapping.external.provider === "github")
+        .every((mapping) => mapping.status === "disconnected")
+    ).toBe(true);
+    expect(linearInstallation).toMatchObject({ provider: "linear", status: "active" });
+    expect(linearMapping).toMatchObject({ status: "active" });
+    expect(unsuspend.status).toBe(202);
+    expect(unsuspend.body.status).toBe("ignored");
+    expect(githubInstallation).toMatchObject({ status: "disconnected" });
+    expect(request).toBeTruthy();
+    expect(rejectedImport.status).toBe(422);
+    expect(rejectedImport.body.error.code).toBe("invalid_state");
+  });
+
+  it("supports manual GitHub disconnect with owner-only integration management", async () => {
+    const { integrationStore, store, url } = await startTestServer({
+      auth: { adminToken: "secret", singleUserMode: false, trustProxyHeaders: true }
+    });
+    const created = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/github/issues/import`, {
+      body: JSON.stringify(gitHubImportPayload()),
+      headers: {
+        Authorization: "Bearer secret",
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    const maintainerCreated = await fetchJson(
+      `${url}/api/openroad/workspaces/maintainer/integrations/github/issues/import`,
+      {
+        body: JSON.stringify(
+          gitHubImportPayload({
+            issue: gitHubIssuePayload({
+              node_id: "I_maintainer",
+              number: 101,
+              title: "Maintainer workspace issue"
+            })
+          })
+        ),
+        headers: {
+          Authorization: "Bearer secret",
+          "Content-Type": "application/json"
+        },
+        method: "POST"
+      }
+    );
+    const viewer = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/github/app/installations/github-install/disconnect`,
+      {
+        headers: workspaceActorHeaders("acme", "Viewer"),
+        method: "POST"
+      }
+    );
+    const owner = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/github/app/installations/github-install/disconnect`,
+      {
+        headers: workspaceActorHeaders("acme", "Owner"),
+        method: "POST"
+      }
+    );
+    const integrations = await integrationStore.load();
+    const state = await store.load();
+
+    expect(created.status).toBe(201);
+    expect(maintainerCreated.status).toBe(201);
+    expect(viewer.status).toBe(403);
+    expect(owner.status).toBe(200);
+    expect(owner.body).toMatchObject({
+      disconnectedMappings: 2,
+      installation: {
+        id: "github-install",
+        status: "disconnected"
+      },
+      status: "disconnected"
+    });
+    expect(integrations.state.installations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "github-install", status: "disconnected", workspaceId: "acme" }),
+        expect.objectContaining({ id: "github-install", status: "active", workspaceId: "maintainer" })
+      ])
+    );
+    expect(
+      integrations.state.mappings
+        .filter((mapping) => mapping.openRoad.workspaceId === "acme")
+        .every((mapping) => mapping.status === "disconnected")
+    ).toBe(true);
+    expect(
+      integrations.state.mappings
+        .filter((mapping) => mapping.openRoad.workspaceId === "maintainer")
+        .every((mapping) => mapping.status === "active")
+    ).toBe(true);
+    expect(
+      state.state.workspaces[0].requests.some((request) => request.id === created.body.request.id)
+    ).toBe(true);
+  });
+
   it("returns public portal data without private workspace details", async () => {
     const { store, url } = await startTestServer();
     const state = createStateWithPrivatePortalData();
@@ -1406,6 +1752,71 @@ function gitHubRepositoryPayload() {
     node_id: "R_kwDOR123",
     owner: { login: "AkhilTrivediX" },
     private: false
+  };
+}
+
+function testGitHubWebhookConfig(): GitHubAppConfig {
+  return {
+    apiBaseUrl: "https://api.github.test",
+    appBaseUrl: "https://github.test",
+    webhookSecret: "webhook-secret",
+    webhookSecretConfigured: true
+  };
+}
+
+function signedGitHubWebhookRequest(
+  payload: Record<string, unknown>,
+  {
+    deliveryId = "delivery-1",
+    eventName = "issues",
+    secret = "webhook-secret",
+    signature
+  }: {
+    deliveryId?: string;
+    eventName?: string;
+    secret?: string;
+    signature?: string;
+  } = {}
+): RequestInit {
+  const body = JSON.stringify(payload);
+  const resolvedSignature =
+    signature ?? `sha256=${createHmac("sha256", secret).update(body).digest("hex")}`;
+
+  return {
+    body,
+    headers: {
+      "Content-Type": "application/json",
+      "x-github-delivery": deliveryId,
+      "x-github-event": eventName,
+      "x-hub-signature-256": resolvedSignature
+    },
+    method: "POST"
+  };
+}
+
+function gitHubWebhookPayload(overrides: Record<string, unknown> = {}) {
+  return {
+    action: "edited",
+    installation: { id: "github-install" },
+    issue: gitHubIssuePayload(),
+    repository: gitHubRepositoryPayload(),
+    sender: { login: "akhil" },
+    ...overrides
+  };
+}
+
+function gitHubInstallationWebhookPayload({
+  action,
+  installationId
+}: {
+  action: string;
+  installationId: string;
+}) {
+  return {
+    action,
+    installation: { id: installationId },
+    repositories: [gitHubRepositoryPayload()],
+    sender: { login: "akhil" }
   };
 }
 

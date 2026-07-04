@@ -168,7 +168,7 @@ OpenRoad releases must eventually include:
 
 ## Current Readiness Debt
 
-These are known production gaps after the GitHub Live Issue Fetch foundation.
+These are known production gaps after the GitHub Webhook And Disconnect Hardening foundation.
 
 - App-level error boundary is still pending.
 - Some UI orchestration still lives inside `App.tsx`; the first helper/module extraction is complete, but component-level splitting remains future work.
@@ -178,20 +178,19 @@ These are known production gaps after the GitHub Live Issue Fetch foundation.
 - Backup/restore and local self-host smoke commands exist, but published Docker images and hosted release promotion are not implemented.
 - Observability is limited to process logs; structured operational events and dashboards are pending.
 - Public portal write controls and process-local rate limits exist, but persistent requester identity, notification preferences, and distributed abuse controls are pending.
-- Payload-backed GitHub issue import/link, GitHub App installation verification, and live issue fetch exist, but webhook handling, background sync, conflict UI, and disconnect UI are not implemented yet.
+- Payload-backed GitHub issue import/link, GitHub App installation verification, live issue fetch, signed webhook handling, and safe disconnect APIs exist, but background sync jobs, conflict UI, and browser Settings UI are not implemented yet.
 - Linear and Jira adapters are not implemented yet.
 - Browser QA is manual rather than automated end-to-end CI.
 
 ## Next Production Move
 
-Next branch: `feat/github-webhook-disconnect`
+Next branch: `feat/linear-issue-sync`
 
 Purpose:
 
-- Add signed GitHub webhook handling.
-- Add idempotent issue event processing.
-- Add disconnect behavior that marks mappings/installations disconnected without deleting OpenRoad data.
-- Preserve payload-backed import and live fetch routes for tests and self-host operators.
-- Keep standalone OpenRoad workflows working with zero integrations.
+- Add the first Linear adapter slice using the provider-neutral contract.
+- Import/link Linear issues without leaking Linear-specific complexity into core screens.
+- Reuse installation, mapping, disconnect, and sync-event patterns proven by GitHub.
+- Preserve standalone OpenRoad workflows with zero integrations.
 
-Linear, Jira, notifications, and AI work should follow the same adapter boundary after the live GitHub slice proves it.
+Jira, notifications, and AI work should follow the same adapter boundary after the Linear slice proves it can generalize beyond GitHub.

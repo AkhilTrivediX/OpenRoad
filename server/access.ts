@@ -78,7 +78,7 @@ export type RouteProtection = {
   methods: string[];
   path: string;
   permission: Permission;
-  scope: "global" | "public" | "workspace";
+  scope: "global" | "provider-signature" | "public" | "workspace";
 };
 
 export class AccessDeniedError extends Error {
@@ -168,6 +168,18 @@ export const routeProtections: RouteProtection[] = [
     methods: ["GET"],
     path: "/api/openroad/workspaces/:workspaceId/integrations/github/issues/live",
     permission: "workspace:write",
+    scope: "workspace"
+  },
+  {
+    methods: ["POST"],
+    path: "/api/openroad/integrations/github/webhook",
+    permission: "integration:sync",
+    scope: "provider-signature"
+  },
+  {
+    methods: ["POST"],
+    path: "/api/openroad/workspaces/:workspaceId/integrations/github/app/installations/:installationId/disconnect",
+    permission: "integration:manage",
     scope: "workspace"
   }
 ];

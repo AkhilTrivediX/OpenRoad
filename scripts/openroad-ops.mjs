@@ -334,7 +334,8 @@ function validateIntegrationState(value) {
     !isRecord(value) ||
     typeof value.schemaVersion !== "number" ||
     !Array.isArray(value.installations) ||
-    !Array.isArray(value.mappings)
+    !Array.isArray(value.mappings) ||
+    (value.syncEvents !== undefined && !Array.isArray(value.syncEvents))
   ) {
     throw new OpsError(
       "invalid_integration_state",
@@ -347,7 +348,8 @@ function createEmptyIntegrationState() {
   return {
     installations: [],
     mappings: [],
-    schemaVersion: 1
+    schemaVersion: 1,
+    syncEvents: []
   };
 }
 

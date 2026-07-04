@@ -109,7 +109,7 @@ Disconnect must not:
 1. Implement adapter fixture tests with the shared contract.
 2. Add installation and permission flow.
 3. Add external object import/link.
-4. Add sync job runner and retry handling.
-5. Add webhook signature verification.
-6. Add conflict UI in Settings/ops surfaces.
-7. Add disconnect flow and export behavior.
+4. Add webhook signature verification.
+5. Add disconnect flow and export behavior.
+6. Add sync job runner and retry handling.
+7. Add conflict UI in Settings/ops surfaces.

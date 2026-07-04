@@ -204,7 +204,7 @@ For local single-user mode without `OPENROAD_ADMIN_TOKEN`, omit `--admin-token`;
 - OAuth/session auth is not implemented.
 - Team metadata is file-backed, not managed SQL.
 - Trusted proxy headers are disabled by default.
-- Payload-backed GitHub issue import and GitHub App installation verification exist; live issue fetch, background jobs, webhooks, persisted provider tokens, Linear, Jira, and billing are not implemented.
+- Payload-backed GitHub issue import, GitHub App installation verification, live issue fetch, signed webhooks, and safe disconnect APIs exist; background jobs, persisted provider tokens, Linear, Jira, and billing are not implemented.
 - Docker images are build-local only; publishing and signed release artifacts are future release work.
 - Named Docker volume backup requires an operator copy step or a future packaged volume helper.
 - Public portal rate limits are in-memory per Node process; distributed deployments need a shared limiter in a future slice.

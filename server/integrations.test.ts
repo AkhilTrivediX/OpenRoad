@@ -29,7 +29,8 @@ describe("OpenRoad integration metadata store", () => {
     expect(JSON.parse(await readFile(integrationFile, "utf8"))).toMatchObject({
       installations: [],
       mappings: [],
-      schemaVersion: openRoadIntegrationSchemaVersion
+      schemaVersion: openRoadIntegrationSchemaVersion,
+      syncEvents: []
     });
   });
 
@@ -94,7 +95,23 @@ describe("OpenRoad integration metadata store", () => {
         }
       ],
       mappings: [],
-      schemaVersion: openRoadIntegrationSchemaVersion
+      schemaVersion: openRoadIntegrationSchemaVersion,
+      syncEvents: [
+        {
+          createdAt: "2026-07-04T00:00:00.000Z",
+          deliveryId: "delivery-1",
+          event: "issues",
+          headers: { authorization: "secret" },
+          id: "github-webhook-delivery-1",
+          installationId: "github-install",
+          payload: { token: "secret" },
+          provider: "github",
+          result: "synced",
+          secret: "secret",
+          summary: "Synced one issue.",
+          workspaceId: "acme"
+        }
+      ]
     });
 
     expect(JSON.stringify(state)).not.toContain("secret");
@@ -108,6 +125,27 @@ describe("OpenRoad integration metadata store", () => {
       "status",
       "workspaceId"
     ]);
+    expect(Object.keys(state.syncEvents[0])).toEqual([
+      "createdAt",
+      "deliveryId",
+      "event",
+      "id",
+      "installationId",
+      "provider",
+      "result",
+      "summary",
+      "workspaceId"
+    ]);
+  });
+
+  it("loads version one integration metadata that has no sync event log yet", () => {
+    const state = parseIntegrationState({
+      installations: [],
+      mappings: [],
+      schemaVersion: openRoadIntegrationSchemaVersion
+    });
+
+    expect(state.syncEvents).toEqual([]);
   });
 
   it("recovers corrupt metadata and rejects future schemas", async () => {
@@ -124,7 +162,8 @@ describe("OpenRoad integration metadata store", () => {
       parseIntegrationState({
         installations: [],
         mappings: [],
-        schemaVersion: openRoadIntegrationSchemaVersion + 1
+        schemaVersion: openRoadIntegrationSchemaVersion + 1,
+        syncEvents: []
       })
     ).toThrow(IntegrationStoreError);
   });

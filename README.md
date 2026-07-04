@@ -34,9 +34,10 @@ OpenRoad now has a working standalone product loop, production server foundation
 - Provider-neutral integration mappings plus a payload-backed GitHub issue import/link API.
 - Server-only GitHub App setup and installation verification foundation.
 - Live GitHub issue fetch through verified installations without persisted tokens.
+- Signed GitHub App webhook ingestion, idempotent linked issue sync, and safe disconnect handling.
 - Docker Compose, backup/restore, and smoke-check commands for self-host operators.
 
-Current production limits are explicit: OAuth/session auth, invitation flows, managed database migrations, hosted release promotion, deeper observability, live GitHub App OAuth/webhooks, and Linear/Jira adapters are planned next-stage work.
+Current production limits are explicit: OAuth/session auth, invitation flows, managed database migrations, hosted release promotion, deeper observability, browser Settings UI for GitHub connect/disconnect, background sync jobs, and Linear/Jira adapters are planned next-stage work.
 
 Current docs:
 
@@ -107,6 +108,8 @@ The server exposes:
 - `GET /api/openroad/workspaces/:workspaceId/integrations/github/issues/live`
 - `GET /api/openroad/workspaces/:workspaceId/integrations/github/app/setup`
 - `POST /api/openroad/workspaces/:workspaceId/integrations/github/app/installations/verify`
+- `POST /api/openroad/workspaces/:workspaceId/integrations/github/app/installations/:installationId/disconnect`
+- `POST /api/openroad/integrations/github/webhook`
 - `GET /api/openroad/audit-events`
 - `GET /api/openroad/ops/status`
 - `GET /api/openroad/workspaces/:workspaceId/portal`

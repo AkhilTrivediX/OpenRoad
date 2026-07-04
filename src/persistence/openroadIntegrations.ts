@@ -159,7 +159,7 @@ function createUnavailableIntegrationStatus(
 }
 
 export async function runProviderManualSync(
-  provider: Extract<IntegrationProvider, "github" | "linear">,
+  provider: Extract<IntegrationProvider, "github" | "jira" | "linear">,
   workspaceId: string,
   installationId: string,
   fetchImpl: typeof fetch = fetch

@@ -57,6 +57,21 @@ describe("Jira issue integration", () => {
     ).toThrow("Jira project id");
   });
 
+  it("drops sensitive URL query strings before creating OpenRoad records", () => {
+    const issue = parseJiraIssuePayload(
+      jiraIssuePayload({
+        url: "https://openroad.atlassian.net/browse/OPEN-42?access_token=raw-secret#activity"
+      })
+    );
+    const request = createOpenRoadRequestFromJiraIssue(issue, {
+      now: "2026-07-04T00:00:00.000Z"
+    });
+
+    expect(issue.url).toBe("https://openroad.atlassian.net/browse/OPEN-42");
+    expect(JSON.stringify(request)).not.toContain("raw-secret");
+    expect(JSON.stringify(request)).not.toContain("access_token");
+  });
+
   it("maps Jira status category and labels into OpenRoad status conservatively", () => {
     expect(mapJiraIssueToRequestStatus(parseJiraIssuePayload(jiraIssuePayload()))).toBe(
       "Needs decision"

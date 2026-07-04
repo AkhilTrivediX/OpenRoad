@@ -26,6 +26,7 @@ import { FileOpenRoadStore } from "./store";
 import { FileTeamStore } from "./team";
 import type { AuthOptions } from "./access";
 import { GitHubAppClientError, type GitHubAppClient, type GitHubAppConfig } from "./github-app";
+import type { JiraApiClient } from "./jira-api";
 import type { LinearApiClient } from "./linear-api";
 import type { LinearOAuthConfig } from "./linear";
 import type { JiraOAuthConfig } from "./jira";
@@ -1836,6 +1837,127 @@ describe("OpenRoad production server", () => {
     expect(issueMapping?.lastSyncedAt).toBeTruthy();
     expect(syncJob).toMatchObject({ status: "succeeded" });
     expect(responseText).not.toContain("linear-access-secret");
+    expect(responseText).not.toContain("ciphertext");
+  });
+
+  it("auto-configures the Jira sync worker when the token vault and credentials are ready", async () => {
+    const jiraIssueFetches: Array<{ cloudId: string; issueIdOrKey: string; token: string }> = [];
+    const tokenVault = testTokenVault();
+    const { integrationStore, store, url } = await startTestServer({
+      auth: { adminToken: "secret", singleUserMode: false, trustProxyHeaders: true },
+      jiraApiClient: {
+        async getIssue(options) {
+          jiraIssueFetches.push({
+            cloudId: options.cloudId,
+            issueIdOrKey: options.issueIdOrKey,
+            token: options.credential.accessToken
+          });
+          return {
+            assignee: "Akhil Trivedi",
+            body: "Updated by live Jira sync.",
+            cloudId: "jira-cloud",
+            id: "10042",
+            issueType: "Story",
+            key: "OPEN-42",
+            labels: ["planned"],
+            priority: "High",
+            project: { id: "project-open", key: "OPEN", name: "OpenRoad" },
+            reporter: "Customer Ops",
+            self: "https://api.atlassian.com/ex/jira/jira-cloud/rest/api/2/issue/10042",
+            status: { category: { key: "indeterminate", name: "In Progress" }, id: "4", name: "In Progress" },
+            title: "Updated from live Jira",
+            updatedAt: "2026-07-04T01:00:00.000+0000",
+            url: "https://openroad.atlassian.net/browse/OPEN-42"
+          };
+        }
+      },
+      tokenVault
+    });
+
+    const imported = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/jira/issues/import`, {
+      body: JSON.stringify(
+        jiraImportPayload({
+          issue: jiraIssuePayload({
+            fields: jiraFieldsPayload({ summary: "Original Jira title" }),
+            self: "https://api.atlassian.com/ex/jira/jira-cloud/rest/api/3/issue/10042"
+          })
+        })
+      ),
+      headers: {
+        Authorization: "Bearer secret",
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/jira/credentials`, {
+      body: JSON.stringify(jiraCredentialPayload()),
+      headers: {
+        Authorization: "Bearer secret",
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    const statusBefore = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/status`, {
+      headers: workspaceActorHeaders("acme", "Viewer")
+    });
+    const queued = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/jira/sync/jobs`, {
+      body: JSON.stringify({ installationId: "jira-install-jira-cloud", reason: "manual" }),
+      headers: {
+        Authorization: "Bearer secret",
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    const run = await fetchJson(`${url}/api/openroad/integrations/sync/run`, {
+      body: JSON.stringify({ limit: 5, provider: "jira", workspaceId: "acme" }),
+      headers: {
+        Authorization: "Bearer secret",
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    const statusAfter = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/status`, {
+      headers: workspaceActorHeaders("acme", "Viewer")
+    });
+    const [openRoad, integrations] = await Promise.all([store.load(), integrationStore.load()]);
+    const request = openRoad.state.workspaces[0].requests.find(
+      (item) => item.id === imported.body.request.id
+    );
+    const issueMapping = integrations.state.mappings.find((mapping) => mapping.external.provider === "jira");
+    const syncJob = integrations.state.syncJobs.find((job) => job.id === queued.body.job.id);
+    const jiraBefore = statusBefore.body.providers.find(
+      (provider: { provider: string }) => provider.provider === "jira"
+    );
+    const jiraAfter = statusAfter.body.providers.find(
+      (provider: { provider: string }) => provider.provider === "jira"
+    );
+    const responseText = JSON.stringify([run.body, statusAfter.body]);
+
+    expect(run.status).toBe(200);
+    expect(run.body).toMatchObject({
+      claimed: 1,
+      processed: [{ id: queued.body.job.id, kind: "success", status: "succeeded" }],
+      status: "processed"
+    });
+    expect(jiraBefore).toMatchObject({
+      activeCredentials: 1,
+      capabilities: {
+        manualSync: true
+      },
+      syncWorkerConfigured: true
+    });
+    expect(jiraAfter).toMatchObject({
+      lastJobStatus: "succeeded",
+      linkedIssueMappings: 1,
+      syncWorkerConfigured: true
+    });
+    expect(jiraIssueFetches).toEqual([
+      { cloudId: "jira-cloud", issueIdOrKey: "10042", token: "jira-access-secret" }
+    ]);
+    expect(request?.title).toBe("Updated from live Jira");
+    expect(issueMapping?.lastSyncedAt).toBeTruthy();
+    expect(syncJob).toMatchObject({ status: "succeeded" });
+    expect(responseText).not.toContain("jira-access-secret");
     expect(responseText).not.toContain("ciphertext");
   });
 
@@ -3678,6 +3800,7 @@ async function startTestServer(
     githubAppClient?: GitHubAppClient;
     githubAppConfig?: GitHubAppConfig;
     integrationSyncWorker?: IntegrationSyncWorker;
+    jiraApiClient?: JiraApiClient;
     jiraOAuthConfig?: JiraOAuthConfig;
     linearApiClient?: LinearApiClient;
     linearOAuthConfig?: LinearOAuthConfig;
@@ -3707,6 +3830,7 @@ async function startTestServer(
     githubAppConfig: options.githubAppConfig,
     integrationStore,
     integrationSyncWorker: options.integrationSyncWorker,
+    jiraApiClient: options.jiraApiClient,
     jiraOAuthConfig: options.jiraOAuthConfig,
     linearApiClient: options.linearApiClient,
     linearOAuthConfig: options.linearOAuthConfig,
@@ -3807,6 +3931,19 @@ function linearCredentialPayload(overrides: Record<string, unknown> = {}) {
     label: "Linear sync",
     permissions: ["read:external"],
     providerScopes: ["issues:read"],
+    tokenType: "bearer",
+    ...overrides
+  };
+}
+
+function jiraCredentialPayload(overrides: Record<string, unknown> = {}) {
+  return {
+    accessToken: "jira-access-secret",
+    expiresAt: "2999-07-05T00:00:00.000Z",
+    installationId: "jira-install-jira-cloud",
+    label: "Jira sync",
+    permissions: ["read:external"],
+    providerScopes: ["read:jira-work"],
     tokenType: "bearer",
     ...overrides
   };

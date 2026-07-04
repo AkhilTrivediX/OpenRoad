@@ -52,14 +52,26 @@ import {
 import {
   IntegrationStoreError,
   parseIntegrationState,
+  sanitizeIntegrationInstallation,
   type IntegrationState,
   type IntegrationStore
 } from "./integrations.js";
+import {
+  FetchGitHubAppClient,
+  GitHubAppClientError,
+  createSafeGitHubAppSetup,
+  githubAppConfigFromEnv,
+  normalizeGitHubAppInstallation,
+  type GitHubAppClient,
+  type GitHubAppConfig
+} from "./github-app.js";
 import type { AuditEvent, TeamStore } from "./team.js";
 
 type CreateOpenRoadServerOptions = {
   auth?: AuthOptions;
   distDir?: string;
+  githubAppClient?: GitHubAppClient;
+  githubAppConfig?: GitHubAppConfig;
   integrationStore?: IntegrationStore;
   logger?: Pick<Console, "error" | "log">;
   portalRateLimiter?: PortalRateLimiter;
@@ -79,7 +91,8 @@ type ApiErrorCode =
   | "not_found"
   | "payload_too_large"
   | "rate_limited"
-  | "server_error";
+  | "server_error"
+  | "upstream_error";
 
 export type PortalRateLimitOptions = {
   maxRequests: number;
@@ -172,6 +185,8 @@ export function createPortalRateLimiterFromEnv(env = process.env): PortalRateLim
 export function createOpenRoadServer({
   auth,
   distDir = resolve("dist"),
+  githubAppConfig = githubAppConfigFromEnv(),
+  githubAppClient = new FetchGitHubAppClient(githubAppConfig),
   integrationStore,
   logger = console,
   portalRateLimiter = createPortalRateLimiterFromEnv(),
@@ -194,6 +209,8 @@ export function createOpenRoadServer({
           store,
           access,
           auth,
+          githubAppClient,
+          githubAppConfig,
           integrationStore,
           teamStore,
           portalRateLimiter
@@ -222,6 +239,8 @@ async function handleApiRequest(
   store: OpenRoadStore,
   access: AccessContext,
   auth: AuthOptions | undefined,
+  githubAppClient: GitHubAppClient,
+  githubAppConfig: GitHubAppConfig,
   integrationStore: IntegrationStore | undefined,
   teamStore: TeamStore | undefined,
   portalRateLimiter: PortalRateLimiter
@@ -346,6 +365,40 @@ async function handleApiRequest(
       teamStore,
       integrationStore,
       githubIssueImportMatch[1]
+    );
+    return;
+  }
+
+  const githubAppSetupMatch = requestUrl.pathname.match(
+    /^\/api\/openroad\/workspaces\/([^/]+)\/integrations\/github\/app\/setup$/
+  );
+
+  if (githubAppSetupMatch) {
+    await handleGitHubAppSetupRequest(
+      request,
+      response,
+      store,
+      access,
+      githubAppConfig,
+      githubAppSetupMatch[1]
+    );
+    return;
+  }
+
+  const githubAppVerifyMatch = requestUrl.pathname.match(
+    /^\/api\/openroad\/workspaces\/([^/]+)\/integrations\/github\/app\/installations\/verify$/
+  );
+
+  if (githubAppVerifyMatch) {
+    await handleGitHubAppInstallationVerifyRequest(
+      request,
+      response,
+      store,
+      access,
+      teamStore,
+      integrationStore,
+      githubAppClient,
+      githubAppVerifyMatch[1]
     );
     return;
   }
@@ -921,7 +974,7 @@ function isSameExternalObject(
 }
 
 function sanitizeInstallation(installation: IntegrationInstallation) {
-  return { ...installation };
+  return sanitizeIntegrationInstallation(installation);
 }
 
 function upsertManyById<T extends { id: string }>(items: T[], nextItems: T[]) {
@@ -930,6 +983,134 @@ function upsertManyById<T extends { id: string }>(items: T[], nextItems: T[]) {
 
 function upsertById<T extends { id: string }>(items: T[], nextItem: T) {
   return [nextItem, ...items.filter((item) => item.id !== nextItem.id)];
+}
+
+async function handleGitHubAppSetupRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  store: OpenRoadStore,
+  access: AccessContext,
+  githubAppConfig: GitHubAppConfig,
+  encodedWorkspaceId: string
+) {
+  if (request.method !== "GET") {
+    writeApiError(response, 405, "invalid_method", "This endpoint only supports GET.", access);
+    return;
+  }
+
+  const workspaceId = decodeURIComponent(encodedWorkspaceId);
+
+  try {
+    requirePermission(access, "integration:manage", workspaceId);
+    const result = await store.load();
+    const workspace = result.state.workspaces.find((item) => item.id === workspaceId);
+
+    if (!workspace) {
+      throw new ApiRequestError("not_found", 404, "Workspace was not found.");
+    }
+
+    writeJson(
+      response,
+      200,
+      {
+        githubApp: createSafeGitHubAppSetup(githubAppConfig, workspaceId),
+        workspace: {
+          id: workspace.id,
+          name: workspace.name
+        }
+      },
+      access
+    );
+  } catch (error) {
+    writeKnownApiError(response, error, access);
+  }
+}
+
+async function handleGitHubAppInstallationVerifyRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  store: OpenRoadStore,
+  access: AccessContext,
+  teamStore: TeamStore | undefined,
+  integrationStore: IntegrationStore | undefined,
+  githubAppClient: GitHubAppClient,
+  encodedWorkspaceId: string
+) {
+  if (request.method !== "POST") {
+    writeApiError(response, 405, "invalid_method", "This endpoint only supports POST.", access);
+    return;
+  }
+
+  const workspaceId = decodeURIComponent(encodedWorkspaceId);
+
+  try {
+    requirePermission(access, "integration:manage", workspaceId);
+
+    if (!integrationStore) {
+      throw new ApiRequestError(
+        "not_configured",
+        503,
+        "OpenRoad integration metadata store is not configured."
+      );
+    }
+
+    const payload = await readJsonBody(request, 50_000);
+    const installationId = getGitHubInstallationIdPayload(payload);
+    const current = await store.load();
+    const workspace = current.state.workspaces.find((item) => item.id === workspaceId);
+
+    if (!workspace) {
+      throw new ApiRequestError("not_found", 404, "Workspace was not found.");
+    }
+
+    const githubInstallation = await githubAppClient.getInstallation(installationId);
+    let installation;
+
+    try {
+      installation = normalizeGitHubAppInstallation(githubInstallation, workspaceId);
+    } catch (error) {
+      throw new ApiRequestError(
+        "upstream_error",
+        502,
+        error instanceof Error ? error.message : "GitHub installation response was invalid."
+      );
+    }
+
+    await integrationStore.upsertInstallation(installation);
+    const auditEvent = await recordAuditEvent(teamStore, current.state, access, {
+      summary: `Verified GitHub App installation ${installation.providerAccountName}.`,
+      type: "integration.github.app.verify",
+      workspaceId
+    });
+
+    writeJson(
+      response,
+      200,
+      {
+        installation: sanitizeInstallation(installation),
+        revision: auditEvent?.id ?? `github-app-installation-${Date.now()}`,
+        status: "verified"
+      },
+      access
+    );
+  } catch (error) {
+    writeKnownApiError(response, error, access);
+  }
+}
+
+function getGitHubInstallationIdPayload(payload: unknown) {
+  if (!isRecord(payload)) {
+    throw new ApiRequestError("invalid_request", 400, "GitHub installation payload must be an object.");
+  }
+
+  const installationId =
+    getBoundedText(payload.installationId, 80) ?? getBoundedText(payload.installation_id, 80);
+
+  if (!installationId) {
+    throw new ApiRequestError("invalid_request", 400, "GitHub installation id is required.");
+  }
+
+  return installationId;
 }
 
 async function handleOpsStatusRequest(
@@ -1421,6 +1602,18 @@ function writeKnownApiError(
 
   if (error instanceof ApiRequestError) {
     writeApiError(response, error.status, error.code, error.message, access);
+    return;
+  }
+
+  if (error instanceof GitHubAppClientError) {
+    const status = error.code === "missing_config" ? 503 : (error.status ?? 502);
+    writeApiError(
+      response,
+      status,
+      error.code === "missing_config" ? "not_configured" : "upstream_error",
+      error.message,
+      access
+    );
     return;
   }
 

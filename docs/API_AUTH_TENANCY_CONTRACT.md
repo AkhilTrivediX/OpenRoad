@@ -88,6 +88,8 @@ Public portal responses use the OpenRoad public projection and must not include 
 - `GET /api/openroad/workspaces/:workspaceId`
 - `POST /api/openroad/workspaces/:workspaceId/actions`
 - `POST /api/openroad/workspaces/:workspaceId/integrations/github/issues/import`
+- `GET /api/openroad/workspaces/:workspaceId/integrations/github/app/setup`
+- `POST /api/openroad/workspaces/:workspaceId/integrations/github/app/installations/verify`
 - `GET /api/openroad/audit-events`
 - `GET /api/openroad/ops/status`
 
@@ -97,11 +99,16 @@ Workspace-scoped action responses return the updated workspace and a revision ma
 
 GitHub issue import is workspace-scoped and requires workspace write permission. It accepts fixture/API payloads only in the current slice; it must not accept GitHub OAuth tokens, App private keys, webhook secrets, or raw credential fields.
 
+GitHub App setup and installation verification require `integration:manage`, which is reserved for local owners/admins and workspace owners. Contributor, viewer, requester, public visitor, and integration actors cannot verify new GitHub App installations.
+
 ## Environment
 
 ```powershell
 $env:OPENROAD_ADMIN_TOKEN="replace-with-long-random-token"
 $env:OPENROAD_INTEGRATION_FILE=".openroad/openroad-integrations.json"
+$env:OPENROAD_GITHUB_APP_SLUG="openroad"
+$env:OPENROAD_GITHUB_APP_ID="12345"
+$env:OPENROAD_GITHUB_APP_PRIVATE_KEY_FILE="C:\openroad\github-app.private-key.pem"
 $env:OPENROAD_TRUST_PROXY_HEADERS="false"
 $env:OPENROAD_SINGLE_USER_MODE="false"
 ```

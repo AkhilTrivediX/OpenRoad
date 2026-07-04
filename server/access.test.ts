@@ -42,6 +42,20 @@ describe("OpenRoad API access contract", () => {
         scope: "workspace"
       })
     );
+    expect(openRoadApiContract.routeProtections).toContainEqual(
+      expect.objectContaining({
+        path: "/api/openroad/workspaces/:workspaceId/integrations/github/app/setup",
+        permission: "integration:manage",
+        scope: "workspace"
+      })
+    );
+    expect(openRoadApiContract.routeProtections).toContainEqual(
+      expect.objectContaining({
+        path: "/api/openroad/workspaces/:workspaceId/integrations/github/app/installations/verify",
+        permission: "integration:manage",
+        scope: "workspace"
+      })
+    );
   });
 
   it("defaults to single-user owner mode when no admin token is configured", () => {
@@ -133,5 +147,47 @@ describe("OpenRoad API access contract", () => {
 
     expect(hasPermission(context.actor, "workspace:read", "acme")).toBe(true);
     expect(hasPermission(context.actor, "workspace:write", "acme")).toBe(false);
+  });
+
+  it("limits integration management to owners and local admins", () => {
+    const owner = createAccessContext(
+      {
+        headers: {
+          "x-openroad-actor-type": "workspace-member",
+          "x-openroad-workspace-id": "acme",
+          "x-openroad-workspace-role": "Owner"
+        }
+      },
+      { singleUserMode: false, trustProxyHeaders: true }
+    );
+    const contributor = createAccessContext(
+      {
+        headers: {
+          "x-openroad-actor-type": "workspace-member",
+          "x-openroad-workspace-id": "acme",
+          "x-openroad-workspace-role": "Contributor"
+        }
+      },
+      { singleUserMode: false, trustProxyHeaders: true }
+    );
+    const integration = createAccessContext(
+      {
+        headers: {
+          "x-openroad-actor-type": "integration",
+          "x-openroad-integration-id": "github-install",
+          "x-openroad-workspace-id": "acme"
+        }
+      },
+      { singleUserMode: false, trustProxyHeaders: true }
+    );
+    const admin = createAccessContext(
+      { headers: { authorization: "Bearer secret" } },
+      { adminToken: "secret", singleUserMode: false }
+    );
+
+    expect(hasPermission(owner.actor, "integration:manage", "acme")).toBe(true);
+    expect(hasPermission(admin.actor, "integration:manage", "acme")).toBe(true);
+    expect(hasPermission(contributor.actor, "integration:manage", "acme")).toBe(false);
+    expect(hasPermission(integration.actor, "integration:manage", "acme")).toBe(false);
   });
 });

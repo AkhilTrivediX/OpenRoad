@@ -10,7 +10,7 @@ Each feature must also satisfy `docs/PRODUCTION_READINESS.md` before merging to 
 
 Current stage: Stage 2 Team Beta foundation in progress.
 
-The standalone loop now covers workspaces, requests, triage, internal work, roadmap planning, changelog drafts, public portal preview, local durability, production APIs, basic tenancy boundaries, file-backed team metadata, audit events, self-host operations, a first app-module boundary, hardened public portal write APIs, the provider-neutral integration adapter contract, and a payload-backed GitHub issue import/link API. The next production work should add live GitHub App installation on top of that boundary.
+The standalone loop now covers workspaces, requests, triage, internal work, roadmap planning, changelog drafts, public portal preview, local durability, production APIs, basic tenancy boundaries, file-backed team metadata, audit events, self-host operations, a first app-module boundary, hardened public portal write APIs, the provider-neutral integration adapter contract, a payload-backed GitHub issue import/link API, and server-only GitHub App installation verification. The next production work should fetch live GitHub issues through verified installations.
 
 ## Feature 1: Workspace Shell
 
@@ -363,21 +363,41 @@ Acceptance:
 
 Branch: `feat/github-app-installation`
 
+Status: implemented and production-checked.
+
+Build:
+
+- GitHub App setup URL/status API.
+- Server-only GitHub App credential handling.
+- Installation permission verification.
+- Owner/admin-only integration management permission.
+- Workspace-scoped installation metadata persistence.
+- Explicit secret redaction at API and store boundaries.
+
+Acceptance:
+
+- Workspace owners can verify a GitHub App installation before live issue fetch.
+- Tokens and private keys never enter browser bundles or audit logs.
+- Existing payload-backed import remains usable for tests and self-host operators.
+
+## Feature 9B: GitHub Live Issue Fetch
+
+Branch: `feat/github-live-issue-fetch`
+
 Status: next.
 
 Build:
 
-- GitHub App installation flow.
-- Server-only GitHub App credential handling.
-- Installation callback and permission verification.
-- Live issue fetch using stored installation metadata.
+- Installation access token generation without persistence.
+- Live issue fetch for verified installations.
+- Import selected live GitHub issues through the existing payload-backed mapper.
 - Disconnect flow that preserves OpenRoad data.
 
 Acceptance:
 
-- Users can connect GitHub without pasting issue payloads.
-- Tokens and private keys never enter browser bundles or audit logs.
-- Existing payload-backed import remains usable for tests and self-host operators.
+- Users can import GitHub issues without pasting payloads.
+- Installation tokens are short-lived and never persisted.
+- Existing standalone and payload-backed paths remain usable.
 
 ## Feature 10: Linear Issue Sync
 

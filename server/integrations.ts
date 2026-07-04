@@ -83,24 +83,26 @@ export class FileIntegrationStore implements IntegrationStore {
 
   async upsertInstallation(installation: IntegrationInstallation) {
     const result = await this.load();
+    const nextInstallation = sanitizeIntegrationInstallation(installation);
     const state = parseIntegrationState({
       ...result.state,
-      installations: upsertById(result.state.installations, installation)
+      installations: upsertInstallationByKey(result.state.installations, nextInstallation)
     });
 
     await this.writeState(state);
-    return cloneValue(installation);
+    return cloneValue(nextInstallation);
   }
 
   async upsertMapping(mapping: ExternalObjectMapping) {
     const result = await this.load();
+    const nextMapping = sanitizeExternalObjectMapping(mapping);
     const state = parseIntegrationState({
       ...result.state,
-      mappings: upsertById(result.state.mappings, mapping)
+      mappings: upsertById(result.state.mappings, nextMapping)
     });
 
     await this.writeState(state);
-    return cloneValue(mapping);
+    return cloneValue(nextMapping);
   }
 
   private async backupCorruptState() {
@@ -156,14 +158,67 @@ export function parseIntegrationState(value: unknown): IntegrationState {
   }
 
   return cloneValue({
-    installations: value.installations,
-    mappings: value.mappings,
+    installations: value.installations.map(sanitizeIntegrationInstallation),
+    mappings: value.mappings.map(sanitizeExternalObjectMapping),
     schemaVersion: openRoadIntegrationSchemaVersion
   });
 }
 
 export function resolveOpenRoadIntegrationFile(env = process.env) {
   return resolve(env.OPENROAD_INTEGRATION_FILE ?? ".openroad/openroad-integrations.json");
+}
+
+export function sanitizeIntegrationInstallation(
+  installation: IntegrationInstallation
+): IntegrationInstallation {
+  return {
+    createdAt: installation.createdAt,
+    id: installation.id,
+    permissions: installation.permissions.filter(isIntegrationPermission),
+    provider: installation.provider,
+    providerAccountId: installation.providerAccountId,
+    providerAccountName: installation.providerAccountName,
+    status: installation.status,
+    workspaceId: installation.workspaceId
+  };
+}
+
+export function sanitizeExternalObjectMapping(
+  mapping: ExternalObjectMapping
+): ExternalObjectMapping {
+  return {
+    connectedAt: mapping.connectedAt,
+    ...(mapping.disconnectedAt ? { disconnectedAt: mapping.disconnectedAt } : {}),
+    external: {
+      id: mapping.external.id,
+      ...(mapping.external.key ? { key: mapping.external.key } : {}),
+      provider: mapping.external.provider,
+      type: mapping.external.type,
+      ...(mapping.external.url ? { url: mapping.external.url } : {})
+    },
+    id: mapping.id,
+    installationId: mapping.installationId,
+    ...(mapping.lastSyncedAt ? { lastSyncedAt: mapping.lastSyncedAt } : {}),
+    openRoad: {
+      id: mapping.openRoad.id,
+      type: mapping.openRoad.type,
+      workspaceId: mapping.openRoad.workspaceId
+    },
+    status: mapping.status
+  };
+}
+
+function upsertInstallationByKey(
+  items: IntegrationInstallation[],
+  nextItem: IntegrationInstallation
+) {
+  const nextKey = createInstallationKey(nextItem);
+  const nextItems = items.filter((item) => createInstallationKey(item) !== nextKey);
+  return [cloneValue(nextItem), ...nextItems];
+}
+
+function createInstallationKey(installation: IntegrationInstallation) {
+  return [installation.provider, installation.workspaceId, installation.id].join(":");
 }
 
 function upsertById<T extends { id: string }>(items: T[], nextItem: T) {

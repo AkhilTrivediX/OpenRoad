@@ -136,6 +136,8 @@ Acceptance:
 
 Branch: `feat/api-auth-tenancy-contract`
 
+Status: active.
+
 Build:
 
 - API shape and error contract.

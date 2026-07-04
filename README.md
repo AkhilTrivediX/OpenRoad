@@ -73,9 +73,11 @@ pnpm start
 The server exposes:
 
 - `GET /api/health`
+- `GET /api/openroad/contract`
 - `GET /api/openroad/state`
 - `PUT /api/openroad/state`
 - `POST /api/openroad/actions`
+- `GET /api/openroad/workspaces/:workspaceId`
 - `GET /api/openroad/workspaces/:workspaceId/portal`
 
-The full state API is a private/admin surface until auth and tenancy are implemented. The portal API returns only the public projection.
+When `OPENROAD_ADMIN_TOKEN` is configured, private state APIs require `Authorization: Bearer <token>`. The portal API remains public and returns only the public projection. See [API auth and tenancy contract](docs/API_AUTH_TENANCY_CONTRACT.md).

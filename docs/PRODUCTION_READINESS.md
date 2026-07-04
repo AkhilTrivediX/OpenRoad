@@ -168,13 +168,13 @@ OpenRoad releases must eventually include:
 
 ## Current Readiness Debt
 
-These are known production gaps after the production server foundation.
+These are known production gaps after the API/auth/tenancy contract.
 
 - App-level error boundary is still pending.
 - Some UI orchestration still lives inside `App.tsx`; app module decomposition is pending.
 - Server persistence is single-tenant and file-backed, not a managed database with migrations, backups, and restore drills.
-- Full-state APIs are private/admin deployment surfaces until authentication and roles exist.
-- Authentication, workspace membership, team roles, tenant isolation, and audit events are not implemented.
+- Full-state APIs are protected by single-user/admin-token mode, but browser session auth is not implemented.
+- Persistent authentication, workspace membership, team roles, tenant isolation, and audit events are not implemented.
 - Hosted deployment pipeline and CI workflow are not implemented.
 - Observability is limited to process logs; structured operational events and dashboards are pending.
 - Public portal abuse controls, requester identity, rate limits, and notification preferences are pending.
@@ -182,14 +182,14 @@ These are known production gaps after the production server foundation.
 
 ## Next Production Move
 
-Next branch: `feat/api-auth-tenancy-contract`
+Next branch: `feat/team-saas-foundation`
 
 Purpose:
 
-- Define REST API versioning, error, validation, pagination, and optimistic concurrency policy.
-- Define actor types for owner, member, public visitor, requester, service account, and integration actor.
-- Define workspace membership and role matrix.
-- Define cross-workspace isolation rules and public/private visibility enforcement.
-- Add permission tests for representative workspace, portal, and integration actor scenarios.
+- Introduce the first persistent team data model behind the API contract.
+- Add server-side workspace records and membership persistence.
+- Add audit events for private state writes and public-surface mutations.
+- Define managed storage migration and rollback behavior.
+- Prepare the hosted deployment path for real beta use.
 
-Team SaaS, provider integrations, notifications, and public launch work should build on top of this trust boundary.
+Provider integrations, notifications, and public launch work should build on top of this team trust boundary.

@@ -96,7 +96,7 @@ As an OpenRoad maintainer adding GitHub, Linear, or Jira sync, I need a stable a
 ## Evidence
 
 - Branch: `feat/integration-adapter-contract`
-- Commit SHAs: `ef38275`; post-review hardening commit pending.
+- Commit SHAs: `ef38275`, `dc61622`.
 - Date: 2026-07-04.
 - Acceptance criteria status: Passed.
 - Commands run:

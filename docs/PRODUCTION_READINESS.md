@@ -168,28 +168,28 @@ OpenRoad releases must eventually include:
 
 ## Current Readiness Debt
 
-These are known production gaps after the API/auth/tenancy contract.
+These are known production gaps after the Team SaaS foundation.
 
 - App-level error boundary is still pending.
 - Some UI orchestration still lives inside `App.tsx`; app module decomposition is pending.
-- Server persistence is single-tenant and file-backed, not a managed database with migrations, backups, and restore drills.
+- Product and team persistence are file-backed, not managed SQL with online migrations and restore drills.
 - Full-state APIs are protected by single-user/admin-token mode, but browser session auth is not implemented.
-- Persistent authentication, workspace membership, team roles, tenant isolation, and audit events are not implemented.
-- Hosted deployment pipeline and CI workflow are not implemented.
+- Persistent workspace membership and audit events exist, but OAuth/session auth and invitation flows are not implemented.
+- CI exists for the production gate, but hosted deployment and release promotion are not implemented.
 - Observability is limited to process logs; structured operational events and dashboards are pending.
 - Public portal abuse controls, requester identity, rate limits, and notification preferences are pending.
 - Browser QA is manual rather than automated end-to-end CI.
 
 ## Next Production Move
 
-Next branch: `feat/team-saas-foundation`
+Next branch: `feat/self-host-ops-foundation`
 
 Purpose:
 
-- Introduce the first persistent team data model behind the API contract.
-- Add server-side workspace records and membership persistence.
-- Add audit events for private state writes and public-surface mutations.
-- Define managed storage migration and rollback behavior.
-- Prepare the hosted deployment path for real beta use.
+- Add Docker Compose and service configuration.
+- Add backup and restore commands for data and team metadata files.
+- Add admin bootstrap documentation.
+- Add upgrade notes and release checklist.
+- Add production smoke script for self-host operators.
 
-Provider integrations, notifications, and public launch work should build on top of this team trust boundary.
+Provider integrations, notifications, and public launch work should build on top of this self-hostable operations boundary.

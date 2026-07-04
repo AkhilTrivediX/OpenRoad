@@ -157,14 +157,17 @@ Acceptance:
 
 Branch: `feat/team-saas-foundation`
 
+Status: active.
+
 Build:
 
 - Backend API.
-- Database schema and migrations.
-- Authentication.
-- Workspace membership.
+- Versioned team metadata schema.
+- Workspace membership persistence.
+- Workspace-scoped APIs.
 - Server-side validation.
-- Hosted deployment workflow.
+- Audit event persistence.
+- Hosted deployment workflow scaffolding.
 - Observability baseline.
 
 Acceptance:

@@ -15,6 +15,6 @@
     "outDir": "server-dist",
     "noEmit": false
   },
-  "include": ["server/**/*.ts", "src/domain/**/*.ts"],
+  "include": ["server/**/*.ts", "src/domain/**/*.ts", "src/integrations/**/*.ts"],
   "exclude": ["server/**/*.test.ts", "src/**/*.test.ts"]
 }

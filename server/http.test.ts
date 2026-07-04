@@ -16,6 +16,7 @@ import {
   type RoadmapItem
 } from "../src/domain/openroad";
 import { InMemoryPortalRateLimiter, createOpenRoadServer, type PortalRateLimiter } from "./http";
+import { FileIntegrationStore } from "./integrations";
 import { FileOpenRoadStore } from "./store";
 import { FileTeamStore } from "./team";
 import type { AuthOptions } from "./access";
@@ -306,6 +307,223 @@ describe("OpenRoad production server", () => {
 
     expect(response.status).toBe(403);
     expect(response.body.error.code).toBe("forbidden");
+  });
+
+  it("imports GitHub issues into requests and persists mappings outside core state", async () => {
+    const { dataFile, integrationFile, teamFile, url } = await startTestServer();
+
+    const response = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/github/issues/import`, {
+      body: JSON.stringify(gitHubImportPayload()),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const coreStateText = await readFile(dataFile, "utf8");
+    const integrationState = JSON.parse(await readFile(integrationFile, "utf8")) as {
+      installations: unknown[];
+      mappings: Array<{ external: { type: string }; openRoad: { id: string } }>;
+    };
+    const teamState = JSON.parse(await readFile(teamFile, "utf8")) as {
+      auditEvents: Array<{ type: string; workspaceId: string }>;
+    };
+
+    expect(response.status).toBe(201);
+    expect(response.body.status).toBe("created");
+    expect(response.body.request).toMatchObject({
+      requester: "akhil",
+      source: "GitHub",
+      title: "Import GitHub issues",
+      visibility: "Private"
+    });
+    expect(response.body.mappings).toHaveLength(2);
+    expect(integrationState.installations).toHaveLength(1);
+    expect(integrationState.mappings).toHaveLength(2);
+    expect(integrationState.mappings.map((mapping) => mapping.external.type).sort()).toEqual([
+      "issue",
+      "pull-request"
+    ]);
+    expect(integrationState.mappings[0].openRoad.id).toBe(response.body.request.id);
+    expect(coreStateText).not.toContain("providerAccountId");
+    expect(teamState.auditEvents[0]).toMatchObject({
+      type: "integration.github.issue.import",
+      workspaceId: "acme"
+    });
+  });
+
+  it("re-imports the same GitHub issue by updating the mapped request", async () => {
+    const { store, url } = await startTestServer();
+
+    const created = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/github/issues/import`, {
+      body: JSON.stringify(gitHubImportPayload()),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const updated = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/github/issues/import`, {
+      body: JSON.stringify(
+        gitHubImportPayload({
+          issue: gitHubIssuePayload({
+            labels: [{ name: "planned" }],
+            title: "Updated GitHub issue"
+          })
+        })
+      ),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const persisted = await store.load();
+    const workspace = persisted.state.workspaces.find((item) => item.id === "acme");
+    const matchingRequests = workspace?.requests.filter(
+      (request) => request.id === created.body.request.id
+    );
+
+    expect(created.status).toBe(201);
+    expect(updated.status).toBe(200);
+    expect(updated.body.request.id).toBe(created.body.request.id);
+    expect(updated.body.request.title).toBe("Updated GitHub issue");
+    expect(matchingRequests).toHaveLength(1);
+  });
+
+  it("keeps GitHub duplicate detection scoped to workspace and installation", async () => {
+    const { integrationStore, url } = await startTestServer();
+
+    const acmeImport = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/github/issues/import`, {
+      body: JSON.stringify(gitHubImportPayload()),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const maintainerImport = await fetchJson(
+      `${url}/api/openroad/workspaces/maintainer/integrations/github/issues/import`,
+      {
+        body: JSON.stringify(gitHubImportPayload()),
+        headers: { "Content-Type": "application/json" },
+        method: "POST"
+      }
+    );
+    const integrations = await integrationStore.load();
+    const issueMappings = integrations.state.mappings.filter(
+      (mapping) => mapping.external.type === "issue"
+    );
+
+    expect(acmeImport.status).toBe(201);
+    expect(maintainerImport.status).toBe(201);
+    expect(issueMappings).toHaveLength(2);
+    expect(new Set(issueMappings.map((mapping) => mapping.id))).toHaveLength(2);
+    expect(new Set(issueMappings.map((mapping) => mapping.openRoad.workspaceId))).toEqual(
+      new Set(["acme", "maintainer"])
+    );
+  });
+
+  it("links a GitHub issue to an existing request without creating a duplicate request", async () => {
+    const { store, url } = await startTestServer();
+    const before = await store.load();
+    const existingRequest = before.state.workspaces[0].requests[0];
+
+    const response = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/github/issues/import`, {
+      body: JSON.stringify(gitHubImportPayload({ requestId: existingRequest.id })),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const after = await store.load();
+    const workspace = after.state.workspaces.find((item) => item.id === "acme");
+
+    expect(response.status).toBe(200);
+    expect(response.body.request.id).toBe(existingRequest.id);
+    expect(workspace?.requests).toHaveLength(before.state.workspaces[0].requests.length);
+    expect(workspace?.requests.find((request) => request.id === existingRequest.id)?.title).toBe(
+      "Import GitHub issues"
+    );
+  });
+
+  it("protects GitHub import from public and viewer actors while allowing contributor and integration actors", async () => {
+    const { url } = await startTestServer({
+      auth: { adminToken: "secret", singleUserMode: false, trustProxyHeaders: true }
+    });
+
+    const publicWrite = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/github/issues/import`, {
+      body: JSON.stringify(gitHubImportPayload()),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const viewerWrite = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/github/issues/import`, {
+      body: JSON.stringify(gitHubImportPayload()),
+      headers: {
+        ...workspaceActorHeaders("acme", "Viewer"),
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    const contributorWrite = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/github/issues/import`,
+      {
+        body: JSON.stringify(
+          gitHubImportPayload({
+            issue: gitHubIssuePayload({ node_id: "I_kwDOGH124", number: 43 })
+          })
+        ),
+        headers: {
+          ...workspaceActorHeaders("acme", "Contributor"),
+          "Content-Type": "application/json"
+        },
+        method: "POST"
+      }
+    );
+    const integrationWrite = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/github/issues/import`,
+      {
+        body: JSON.stringify(
+          gitHubImportPayload({
+            issue: gitHubIssuePayload({ node_id: "I_kwDOGH125", number: 44 })
+          })
+        ),
+        headers: {
+          ...integrationActorHeaders("acme", "github-install"),
+          "Content-Type": "application/json"
+        },
+        method: "POST"
+      }
+    );
+    const integrationCrossWorkspace = await fetchJson(
+      `${url}/api/openroad/workspaces/maintainer/integrations/github/issues/import`,
+      {
+        body: JSON.stringify(
+          gitHubImportPayload({
+            issue: gitHubIssuePayload({ node_id: "I_kwDOGH126", number: 45 })
+          })
+        ),
+        headers: {
+          ...integrationActorHeaders("acme", "github-install"),
+          "Content-Type": "application/json"
+        },
+        method: "POST"
+      }
+    );
+
+    expect(publicWrite.status).toBe(403);
+    expect(viewerWrite.status).toBe(403);
+    expect(contributorWrite.status).toBe(201);
+    expect(integrationWrite.status).toBe(201);
+    expect(integrationCrossWorkspace.status).toBe(403);
+  });
+
+  it("rejects invalid GitHub imports without mutating state or integration metadata", async () => {
+    const { dataFile, integrationFile, integrationStore, url } = await startTestServer();
+    await integrationStore.load();
+    const beforeState = await readFile(dataFile, "utf8");
+    const beforeIntegrations = await readFile(integrationFile, "utf8");
+
+    const response = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/github/issues/import`, {
+      body: JSON.stringify(
+        gitHubImportPayload({
+          issue: { ...gitHubIssuePayload(), node_id: "", id: "", title: "" }
+        })
+      ),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error.code).toBe("invalid_request");
+    expect(await readFile(dataFile, "utf8")).toBe(beforeState);
+    expect(await readFile(integrationFile, "utf8")).toBe(beforeIntegrations);
   });
 
   it("returns public portal data without private workspace details", async () => {
@@ -622,10 +840,13 @@ describe("OpenRoad production server", () => {
     expect(allowed.body).toMatchObject({
       status: "ok",
       stores: {
+        integration: expect.any(String),
         openRoad: expect.any(String),
         team: expect.any(String)
       },
       totals: {
+        integrationInstallations: expect.any(Number),
+        integrationMappings: expect.any(Number),
         workspaces: 2
       }
     });
@@ -679,13 +900,16 @@ async function startTestServer(
   await writeFile(join(directory, "secret.txt"), "secret", "utf8");
 
   const dataFile = join(directory, "state.json");
+  const integrationFile = join(directory, "integrations.json");
   const teamFile = join(directory, "team.json");
   const store = new FileOpenRoadStore(dataFile);
+  const integrationStore = new FileIntegrationStore(integrationFile);
   const teamStore = new FileTeamStore(teamFile);
   await store.load();
   const server = createOpenRoadServer({
     auth: options.auth,
     distDir,
+    integrationStore,
     logger: { error: vi.fn(), log: vi.fn() },
     portalRateLimiter: options.portalRateLimiter,
     store,
@@ -694,7 +918,7 @@ async function startTestServer(
   const url = await listen(server);
   openServers.push(server);
 
-  return { dataFile, store, teamFile, teamStore, url };
+  return { dataFile, integrationFile, integrationStore, store, teamFile, teamStore, url };
 }
 
 function workspaceActorHeaders(workspaceId: string, role: string) {
@@ -703,6 +927,14 @@ function workspaceActorHeaders(workspaceId: string, role: string) {
     "x-openroad-actor-type": "workspace-member",
     "x-openroad-workspace-id": workspaceId,
     "x-openroad-workspace-role": role
+  };
+}
+
+function integrationActorHeaders(workspaceId: string, integrationId: string) {
+  return {
+    "x-openroad-actor-type": "integration",
+    "x-openroad-integration-id": integrationId,
+    "x-openroad-workspace-id": workspaceId
   };
 }
 
@@ -729,6 +961,58 @@ async function fetchJson(url: string, init?: RequestInit) {
   return {
     body: (await response.json()) as Record<string, any>,
     status: response.status
+  };
+}
+
+function gitHubImportPayload(overrides: Record<string, unknown> = {}) {
+  return {
+    installation: {
+      accountId: "AkhilTrivediX",
+      accountName: "AkhilTrivediX",
+      id: "github-install",
+      permissions: ["read:external", "read:openroad", "write:openroad"]
+    },
+    issue: gitHubIssuePayload(),
+    pullRequests: [gitHubPullRequestPayload()],
+    ...overrides
+  };
+}
+
+function gitHubIssuePayload(overrides: Record<string, unknown> = {}) {
+  return {
+    body: "Expose GitHub issue context.",
+    html_url: "https://github.com/AkhilTrivediX/OpenRoad/issues/42",
+    labels: [{ name: "needs-decision" }],
+    node_id: "I_kwDOGH123",
+    number: 42,
+    repository: gitHubRepositoryPayload(),
+    state: "open",
+    title: "Import GitHub issues",
+    user: { login: "akhil" },
+    ...overrides
+  };
+}
+
+function gitHubPullRequestPayload() {
+  return {
+    html_url: "https://github.com/AkhilTrivediX/OpenRoad/pull/7",
+    node_id: "PR_kwDOPR123",
+    number: 7,
+    repository: gitHubRepositoryPayload(),
+    state: "open",
+    title: "Implement GitHub import",
+    user: { login: "akhil" }
+  };
+}
+
+function gitHubRepositoryPayload() {
+  return {
+    full_name: "AkhilTrivediX/OpenRoad",
+    html_url: "https://github.com/AkhilTrivediX/OpenRoad",
+    name: "OpenRoad",
+    node_id: "R_kwDOR123",
+    owner: { login: "AkhilTrivediX" },
+    private: false
   };
 }
 

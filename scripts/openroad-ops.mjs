@@ -9,31 +9,44 @@ const defaultWorkspaceId = "acme";
 
 export async function createBackup(options = {}) {
   const dataFile = resolve(options.dataFile ?? process.env.OPENROAD_DATA_FILE ?? ".openroad/openroad-state.json");
+  const integrationFile = resolve(
+    options.integrationFile ?? process.env.OPENROAD_INTEGRATION_FILE ?? ".openroad/openroad-integrations.json"
+  );
   const teamFile = resolve(options.teamFile ?? process.env.OPENROAD_TEAM_FILE ?? ".openroad/openroad-team.json");
   const outputDir = resolve(options.outputDir ?? ".openroad/backups");
   const createdAt = new Date().toISOString();
   const backupName = options.name ?? `openroad-backup-${safeTimestamp(createdAt)}`;
   const backupDir = join(outputDir, backupName);
   const dataArchiveName = "openroad-state.json";
+  const integrationArchiveName = "openroad-integrations.json";
   const teamArchiveName = "openroad-team.json";
 
-  const [dataJson, teamJson, packageJson] = await Promise.all([
+  const [dataJson, integrationSource, teamJson, packageJson] = await Promise.all([
     readJsonFile(dataFile, "OpenRoad state file"),
+    readIntegrationSource(integrationFile),
     readJsonFile(teamFile, "OpenRoad team metadata file"),
     readPackageJson()
   ]);
+  const integrationJson = integrationSource.json;
 
   validateOpenRoadState(dataJson);
+  validateIntegrationState(integrationJson);
   validateTeamState(teamJson);
 
   await mkdir(outputDir, { recursive: true });
   await mkdir(backupDir, { recursive: false });
-  await Promise.all([
-    copyFile(dataFile, join(backupDir, dataArchiveName)),
-    copyFile(teamFile, join(backupDir, teamArchiveName))
-  ]);
+  await copyFile(dataFile, join(backupDir, dataArchiveName));
+  if (integrationSource.exists) {
+    await copyFile(integrationFile, join(backupDir, integrationArchiveName));
+  } else {
+    await writeJsonFile(join(backupDir, integrationArchiveName), integrationJson);
+  }
+  await copyFile(teamFile, join(backupDir, teamArchiveName));
 
   const [dataStats, teamStats] = await Promise.all([stat(dataFile), stat(teamFile)]);
+  const integrationStats = integrationSource.exists
+    ? await stat(integrationFile)
+    : { size: Buffer.byteLength(`${JSON.stringify(integrationJson, null, 2)}\n`) };
   const manifest = {
     app: {
       name: stringOrFallback(packageJson.name, "openroad"),
@@ -47,6 +60,13 @@ export async function createBackup(options = {}) {
         sizeBytes: dataStats.size,
         sourcePath: dataFile
       },
+      integration: {
+        archiveName: integrationArchiveName,
+        schemaVersion: integrationJson.schemaVersion,
+        sizeBytes: integrationStats.size,
+        sourcePath: integrationFile,
+        sourceStatus: integrationSource.exists ? "file" : "default-empty"
+      },
       team: {
         archiveName: teamArchiveName,
         schemaVersion: teamJson.schemaVersion,
@@ -55,7 +75,7 @@ export async function createBackup(options = {}) {
       }
     },
     manifestVersion: backupManifestVersion,
-    type: "openroad-file-pair"
+    type: "openroad-file-snapshot"
   };
 
   await writeJsonFile(join(backupDir, "manifest.json"), manifest);
@@ -70,38 +90,56 @@ export async function restoreBackup(options = {}) {
 
   const inputDir = resolve(options.inputDir);
   const dataFile = resolve(options.dataFile ?? process.env.OPENROAD_DATA_FILE ?? ".openroad/openroad-state.json");
+  const integrationFile = resolve(
+    options.integrationFile ?? process.env.OPENROAD_INTEGRATION_FILE ?? ".openroad/openroad-integrations.json"
+  );
   const teamFile = resolve(options.teamFile ?? process.env.OPENROAD_TEAM_FILE ?? ".openroad/openroad-team.json");
   const manifest = await readManifest(inputDir, options.force === true);
   const dataArchiveName = manifest?.files?.data?.archiveName ?? "openroad-state.json";
+  const integrationArchiveName = manifest?.files?.integration?.archiveName ?? "openroad-integrations.json";
   const teamArchiveName = manifest?.files?.team?.archiveName ?? "openroad-team.json";
   const dataSource = join(inputDir, dataArchiveName);
+  const integrationSource = join(inputDir, integrationArchiveName);
   const teamSource = join(inputDir, teamArchiveName);
   const safetyDir =
     options.safetyDir ??
     join(dirname(dataFile), "restore-safety", `openroad-pre-restore-${safeTimestamp(new Date().toISOString())}`);
 
   if (!options.force) {
-    const [dataJson, teamJson] = await Promise.all([
+    const [dataJson, integrationJson, teamJson] = await Promise.all([
       readJsonFile(dataSource, "backup OpenRoad state file"),
+      readJsonFile(integrationSource, "backup OpenRoad integration metadata file"),
       readJsonFile(teamSource, "backup OpenRoad team metadata file")
     ]);
     validateOpenRoadState(dataJson);
+    validateIntegrationState(integrationJson);
     validateTeamState(teamJson);
   } else {
     await assertReadable(dataSource, "backup OpenRoad state file");
+    await assertReadable(integrationSource, "backup OpenRoad integration metadata file");
     await assertReadable(teamSource, "backup OpenRoad team metadata file");
   }
 
   await mkdir(safetyDir, { recursive: true });
   await copyIfExists(dataFile, join(safetyDir, basename(dataFile)));
+  await copyIfExists(integrationFile, join(safetyDir, basename(integrationFile)));
   await copyIfExists(teamFile, join(safetyDir, basename(teamFile)));
 
-  await Promise.all([mkdir(dirname(dataFile), { recursive: true }), mkdir(dirname(teamFile), { recursive: true })]);
-  await Promise.all([copyFile(dataSource, dataFile), copyFile(teamSource, teamFile)]);
+  await Promise.all([
+    mkdir(dirname(dataFile), { recursive: true }),
+    mkdir(dirname(integrationFile), { recursive: true }),
+    mkdir(dirname(teamFile), { recursive: true })
+  ]);
+  await Promise.all([
+    copyFile(dataSource, dataFile),
+    copyFile(integrationSource, integrationFile),
+    copyFile(teamSource, teamFile)
+  ]);
 
   return {
     restored: {
       dataFile,
+      integrationFile,
       teamFile
     },
     safetyDir
@@ -179,8 +217,9 @@ export class OpsError extends Error {
 async function readManifest(inputDir, force) {
   try {
     const manifest = await readJsonFile(join(inputDir, "manifest.json"), "backup manifest");
-    if (manifest?.manifestVersion !== backupManifestVersion || manifest?.type !== "openroad-file-pair") {
-      throw new OpsError("invalid_manifest", "Backup manifest is not an OpenRoad file-pair manifest.");
+    const supportedTypes = new Set(["openroad-file-pair", "openroad-file-snapshot"]);
+    if (manifest?.manifestVersion !== backupManifestVersion || !supportedTypes.has(manifest?.type)) {
+      throw new OpsError("invalid_manifest", "Backup manifest is not an OpenRoad file snapshot manifest.");
     }
     return manifest;
   } catch (error) {
@@ -234,6 +273,21 @@ async function readJsonFile(file, label) {
   }
 }
 
+async function readIntegrationSource(file) {
+  try {
+    return {
+      exists: true,
+      json: await readJsonFile(file, "OpenRoad integration metadata file")
+    };
+  } catch (error) {
+    if (!isNotFound(error)) throw error;
+    return {
+      exists: false,
+      json: createEmptyIntegrationState()
+    };
+  }
+}
+
 async function writeJsonFile(file, value) {
   await writeFile(file, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
@@ -273,6 +327,28 @@ function validateTeamState(value) {
   ) {
     throw new OpsError("invalid_team_state", "OpenRoad team metadata backup is missing required collections.");
   }
+}
+
+function validateIntegrationState(value) {
+  if (
+    !isRecord(value) ||
+    typeof value.schemaVersion !== "number" ||
+    !Array.isArray(value.installations) ||
+    !Array.isArray(value.mappings)
+  ) {
+    throw new OpsError(
+      "invalid_integration_state",
+      "OpenRoad integration metadata backup is missing required collections."
+    );
+  }
+}
+
+function createEmptyIntegrationState() {
+  return {
+    installations: [],
+    mappings: [],
+    schemaVersion: 1
+  };
 }
 
 function parseArgs(argv) {
@@ -317,7 +393,7 @@ function safeTimestamp(value) {
 }
 
 function isNotFound(error) {
-  return error?.code === "ENOENT";
+  return error?.code === "ENOENT" || error?.code === "missing_file";
 }
 
 function errorMessage(error) {
@@ -362,8 +438,8 @@ function printHelp() {
   console.log(`OpenRoad operations
 
 Commands:
-  backup  --output-dir <dir> [--data-file <file>] [--team-file <file>] [--name <name>]
-  restore --input-dir <dir> [--data-file <file>] [--team-file <file>] [--force]
+  backup  --output-dir <dir> [--data-file <file>] [--integration-file <file>] [--team-file <file>] [--name <name>]
+  restore --input-dir <dir> [--data-file <file>] [--integration-file <file>] [--team-file <file>] [--force]
   smoke   [--base-url <url>] [--workspace-id <id>] [--admin-token <token>]
 `);
 }

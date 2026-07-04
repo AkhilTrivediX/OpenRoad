@@ -24,6 +24,14 @@ export const syncResultKinds = [
   "fatal-error"
 ] as const;
 
+export const integrationPermissions = [
+  "read:external",
+  "write:external",
+  "read:openroad",
+  "write:openroad",
+  "webhook:receive"
+] as const;
+
 export type IntegrationProvider = (typeof integrationProviders)[number];
 export type ExternalObjectType = (typeof externalObjectTypes)[number];
 export type OpenRoadObjectType = (typeof openRoadObjectTypes)[number];
@@ -40,12 +48,7 @@ export type IntegrationInstallation = {
   workspaceId: string;
 };
 
-export type IntegrationPermission =
-  | "read:external"
-  | "write:external"
-  | "read:openroad"
-  | "write:openroad"
-  | "webhook:receive";
+export type IntegrationPermission = (typeof integrationPermissions)[number];
 
 export type ExternalObjectRef = {
   id: string;

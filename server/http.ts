@@ -24,15 +24,43 @@ import {
   type Workspace
 } from "../src/domain/openroad.js";
 import {
+  createExternalObjectKey,
+  type ExternalObjectMapping,
+  type IntegrationInstallation,
+  type IntegrationPermission
+} from "../src/integrations/adapter.js";
+import {
+  createGitHubInstallation,
+  createGitHubIssueExternalRef,
+  createGitHubIssueMapping,
+  createGitHubPullRequestMapping,
+  createOpenRoadRequestFromGitHubIssue,
+  getGitHubInstallationCapabilities,
+  githubRequiredInstallationPermissions,
+  parseGitHubIssuePayload,
+  parseGitHubPullRequestPayload,
+  syncOpenRoadRequestFromGitHubIssue,
+  type GitHubIssue,
+  type GitHubInstallationInput,
+  type GitHubPullRequest
+} from "../src/integrations/github.js";
+import {
   OpenRoadStoreError,
   parseOpenRoadState,
   type OpenRoadStore
 } from "./store.js";
+import {
+  IntegrationStoreError,
+  parseIntegrationState,
+  type IntegrationState,
+  type IntegrationStore
+} from "./integrations.js";
 import type { AuditEvent, TeamStore } from "./team.js";
 
 type CreateOpenRoadServerOptions = {
   auth?: AuthOptions;
   distDir?: string;
+  integrationStore?: IntegrationStore;
   logger?: Pick<Console, "error" | "log">;
   portalRateLimiter?: PortalRateLimiter;
   store: OpenRoadStore;
@@ -47,6 +75,7 @@ type ApiErrorCode =
   | "invalid_request"
   | "invalid_state"
   | "future_schema"
+  | "not_configured"
   | "not_found"
   | "payload_too_large"
   | "rate_limited"
@@ -143,6 +172,7 @@ export function createPortalRateLimiterFromEnv(env = process.env): PortalRateLim
 export function createOpenRoadServer({
   auth,
   distDir = resolve("dist"),
+  integrationStore,
   logger = console,
   portalRateLimiter = createPortalRateLimiterFromEnv(),
   store,
@@ -164,6 +194,7 @@ export function createOpenRoadServer({
           store,
           access,
           auth,
+          integrationStore,
           teamStore,
           portalRateLimiter
         );
@@ -191,6 +222,7 @@ async function handleApiRequest(
   store: OpenRoadStore,
   access: AccessContext,
   auth: AuthOptions | undefined,
+  integrationStore: IntegrationStore | undefined,
   teamStore: TeamStore | undefined,
   portalRateLimiter: PortalRateLimiter
 ) {
@@ -252,7 +284,7 @@ async function handleApiRequest(
   }
 
   if (requestUrl.pathname === "/api/openroad/ops/status") {
-    await handleOpsStatusRequest(request, response, store, access, teamStore);
+    await handleOpsStatusRequest(request, response, store, access, teamStore, integrationStore);
     return;
   }
 
@@ -297,6 +329,23 @@ async function handleApiRequest(
       portalRateLimiter,
       portalCommentMatch[1],
       portalCommentMatch[2]
+    );
+    return;
+  }
+
+  const githubIssueImportMatch = requestUrl.pathname.match(
+    /^\/api\/openroad\/workspaces\/([^/]+)\/integrations\/github\/issues\/import$/
+  );
+
+  if (githubIssueImportMatch) {
+    await handleGitHubIssueImportRequest(
+      request,
+      response,
+      store,
+      access,
+      teamStore,
+      integrationStore,
+      githubIssueImportMatch[1]
     );
     return;
   }
@@ -599,12 +648,297 @@ async function handleWorkspaceActionRequest(
   }
 }
 
+async function handleGitHubIssueImportRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  store: OpenRoadStore,
+  access: AccessContext,
+  teamStore: TeamStore | undefined,
+  integrationStore: IntegrationStore | undefined,
+  encodedWorkspaceId: string
+) {
+  if (request.method !== "POST") {
+    writeApiError(response, 405, "invalid_method", "This endpoint only supports POST.", access);
+    return;
+  }
+
+  const workspaceId = decodeURIComponent(encodedWorkspaceId);
+
+  try {
+    requirePermission(access, "workspace:write", workspaceId);
+
+    if (!integrationStore) {
+      throw new ApiRequestError(
+        "not_configured",
+        503,
+        "OpenRoad integration metadata store is not configured."
+      );
+    }
+
+    const payload = await readJsonBody(request, 500_000);
+    const gitHubPayload = parseGitHubIssueImportPayload(payload, workspaceId);
+    const current = await store.load();
+    const workspace = current.state.workspaces.find((item) => item.id === workspaceId);
+
+    if (!workspace) {
+      throw new ApiRequestError("not_found", 404, "Workspace was not found.");
+    }
+
+    const integrationResult = await integrationStore.load();
+    const importResult = createGitHubIssueImportState(
+      workspace,
+      integrationResult.state,
+      gitHubPayload,
+      new Date().toISOString()
+    );
+
+    const nextState = parseOpenRoadState(
+      openRoadReducer(current.state, {
+        request: importResult.request,
+        type: importResult.created ? "create-request" : "replace-request",
+        workspaceId
+      })
+    );
+    const state = await store.replaceState(nextState);
+    const integrationState = await integrationStore.replaceState(importResult.integrationState);
+    const auditEvent = await recordAuditEvent(teamStore, state, access, {
+      summary: `${importResult.created ? "Imported" : "Updated"} GitHub issue ${
+        gitHubPayload.issue.repository.fullName
+      }#${gitHubPayload.issue.number}.`,
+      type: importResult.created ? "integration.github.issue.import" : "integration.github.issue.sync",
+      workspaceId
+    });
+
+    writeJson(
+      response,
+      importResult.created ? 201 : 200,
+      {
+        installation: sanitizeInstallation(importResult.installation),
+        mappings: importResult.mappings,
+        request: importResult.request,
+        revision: auditEvent?.id ?? `github-import-${Date.now()}`,
+        status: importResult.created ? "created" : "updated",
+        totals: {
+          installations: integrationState.installations.length,
+          mappings: integrationState.mappings.length
+        }
+      },
+      access
+    );
+  } catch (error) {
+    writeKnownApiError(response, error, access);
+  }
+}
+
+type GitHubIssueImportPayload = {
+  installation: IntegrationInstallation;
+  issue: GitHubIssue;
+  pullRequests: GitHubPullRequest[];
+  requestId?: string;
+  workspaceId: string;
+};
+
+type GitHubIssueImportStateResult = {
+  created: boolean;
+  installation: IntegrationInstallation;
+  integrationState: IntegrationState;
+  mappings: ExternalObjectMapping[];
+  request: RequestItem;
+};
+
+function parseGitHubIssueImportPayload(
+  payload: unknown,
+  workspaceId: string
+): GitHubIssueImportPayload {
+  if (!isRecord(payload)) {
+    throw new ApiRequestError("invalid_request", 400, "GitHub import payload must be an object.");
+  }
+
+  try {
+    const issue = parseGitHubIssuePayload(payload.issue);
+    const installation = createGitHubInstallation(
+      parseGitHubInstallationPayload(payload.installation, workspaceId)
+    );
+    const pullRequests = Array.isArray(payload.pullRequests)
+      ? payload.pullRequests.map(parseGitHubPullRequestPayload)
+      : [];
+    const requestId = getBoundedText(payload.requestId, 120);
+
+    return {
+      installation,
+      issue,
+      pullRequests,
+      requestId,
+      workspaceId
+    };
+  } catch (error) {
+    throw new ApiRequestError(
+      "invalid_request",
+      400,
+      error instanceof Error ? error.message : "GitHub import payload is invalid."
+    );
+  }
+}
+
+function parseGitHubInstallationPayload(
+  value: unknown,
+  workspaceId: string
+): GitHubInstallationInput {
+  if (!isRecord(value)) {
+    throw new Error("GitHub installation payload must be an object.");
+  }
+
+  const accountId =
+    getBoundedText(value.accountId, 160) ??
+    getBoundedText(value.providerAccountId, 160) ??
+    getBoundedText(value.accountName, 160);
+  const accountName =
+    getBoundedText(value.accountName, 160) ??
+    getBoundedText(value.providerAccountName, 160) ??
+    getBoundedText(value.accountId, 160);
+  const id = getBoundedText(value.id, 160);
+
+  if (!id) throw new Error("GitHub installation id is required.");
+  if (!accountId) throw new Error("GitHub account id is required.");
+  if (!accountName) throw new Error("GitHub account name is required.");
+
+  return {
+    accountId,
+    accountName,
+    createdAt: getBoundedText(value.createdAt, 80),
+    id,
+    permissions: parseIntegrationPermissions(value.permissions),
+    status: parseIntegrationInstallationStatus(value.status),
+    workspaceId
+  };
+}
+
+function createGitHubIssueImportState(
+  workspace: Workspace,
+  integrationState: IntegrationState,
+  payload: GitHubIssueImportPayload,
+  now: string
+): GitHubIssueImportStateResult {
+  if (payload.installation.status !== "active") {
+    throw new ApiRequestError(
+      "invalid_request",
+      400,
+      "GitHub installation must be active before importing issues."
+    );
+  }
+
+  if (!getGitHubInstallationCapabilities(payload.installation).canImportIssues) {
+    throw new ApiRequestError(
+      "invalid_request",
+      400,
+      "GitHub installation does not have enough permissions to import issues."
+    );
+  }
+
+  const issueRef = createGitHubIssueExternalRef(payload.issue);
+  const existingMapping = integrationState.mappings.find((mapping) =>
+    mapping.installationId === payload.installation.id &&
+    mapping.openRoad.workspaceId === payload.workspaceId &&
+    isSameExternalObject(mapping, issueRef)
+  );
+  const targetRequestId = payload.requestId ?? existingMapping?.openRoad.id;
+  const existingRequest = targetRequestId
+    ? workspace.requests.find((item) => item.id === targetRequestId)
+    : undefined;
+
+  if (payload.requestId && !existingRequest) {
+    throw new ApiRequestError("not_found", 404, "OpenRoad request was not found.");
+  }
+
+  if (existingMapping && !existingRequest && !payload.requestId) {
+    throw new ApiRequestError(
+      "invalid_state",
+      422,
+      "GitHub issue mapping points to a missing OpenRoad request."
+    );
+  }
+
+  const request = existingRequest
+    ? syncOpenRoadRequestFromGitHubIssue(existingRequest, payload.issue, now)
+    : createOpenRoadRequestFromGitHubIssue(payload.issue, {
+        existingRequestIds: workspace.requests.map((item) => item.id),
+        now
+      });
+  const openRoad = {
+    id: request.id,
+    type: "request" as const,
+    workspaceId: payload.workspaceId
+  };
+  const mappings = [
+    createGitHubIssueMapping(payload.installation, payload.issue, openRoad, now),
+    ...payload.pullRequests.map((pullRequest) =>
+      createGitHubPullRequestMapping(payload.installation, pullRequest, openRoad, now)
+    )
+  ];
+  const nextIntegrationState = parseIntegrationState({
+    ...integrationState,
+    installations: upsertById(integrationState.installations, payload.installation),
+    mappings: upsertManyById(integrationState.mappings, mappings)
+  });
+
+  return {
+    created: !existingRequest,
+    installation: payload.installation,
+    integrationState: nextIntegrationState,
+    mappings,
+    request
+  };
+}
+
+function parseIntegrationPermissions(value: unknown): IntegrationPermission[] {
+  if (!Array.isArray(value)) return githubRequiredInstallationPermissions;
+
+  return value
+    .map((permission) => getBoundedText(permission, 80))
+    .filter((permission): permission is IntegrationPermission =>
+      githubRequiredInstallationPermissions.includes(permission as IntegrationPermission) ||
+      permission === "write:external" ||
+      permission === "webhook:receive"
+    );
+}
+
+function parseIntegrationInstallationStatus(value: unknown) {
+  if (value === "active" || value === "disconnected" || value === "suspended") {
+    return value;
+  }
+
+  return undefined;
+}
+
+function isSameExternalObject(
+  mapping: ExternalObjectMapping,
+  ref: ReturnType<typeof createGitHubIssueExternalRef>
+) {
+  return (
+    mapping.status !== "disconnected" &&
+    createExternalObjectKey(mapping.external) === createExternalObjectKey(ref)
+  );
+}
+
+function sanitizeInstallation(installation: IntegrationInstallation) {
+  return { ...installation };
+}
+
+function upsertManyById<T extends { id: string }>(items: T[], nextItems: T[]) {
+  return nextItems.reduce((currentItems, nextItem) => upsertById(currentItems, nextItem), items);
+}
+
+function upsertById<T extends { id: string }>(items: T[], nextItem: T) {
+  return [nextItem, ...items.filter((item) => item.id !== nextItem.id)];
+}
+
 async function handleOpsStatusRequest(
   request: IncomingMessage,
   response: ServerResponse,
   store: OpenRoadStore,
   access: AccessContext,
-  teamStore: TeamStore | undefined
+  teamStore: TeamStore | undefined,
+  integrationStore: IntegrationStore | undefined
 ) {
   if (request.method !== "GET") {
     writeApiError(response, 405, "invalid_method", "This endpoint only supports GET.", access);
@@ -615,6 +949,7 @@ async function handleOpsStatusRequest(
     requirePermission(access, "state:read");
     const result = await store.load();
     const team = teamStore ? await teamStore.load(result.state) : undefined;
+    const integrations = integrationStore ? await integrationStore.load() : undefined;
 
     writeJson(
       response,
@@ -622,11 +957,14 @@ async function handleOpsStatusRequest(
       {
         status: "ok",
         stores: {
+          integration: integrations?.status ?? "not_configured",
           openRoad: result.status,
           team: team?.status ?? "not_configured"
         },
         totals: {
           auditEvents: team?.state.auditEvents.length ?? 0,
+          integrationInstallations: integrations?.state.installations.length ?? 0,
+          integrationMappings: integrations?.state.mappings.length ?? 0,
           memberships: team?.state.memberships.length ?? 0,
           users: team?.state.users.length ?? 0,
           workspaces: result.state.workspaces.length
@@ -1070,7 +1408,18 @@ function writeKnownApiError(
     return;
   }
 
+  if (error instanceof IntegrationStoreError) {
+    const status = error.code === "future_schema" ? 409 : 422;
+    writeApiError(response, status, error.code, error.message, access);
+    return;
+  }
+
   if (error instanceof AccessDeniedError) {
+    writeApiError(response, error.status, error.code, error.message, access);
+    return;
+  }
+
+  if (error instanceof ApiRequestError) {
     writeApiError(response, error.status, error.code, error.message, access);
     return;
   }
@@ -1233,6 +1582,16 @@ function isGlobalAction(action: OpenRoadAction) {
 class ApiBodyError extends Error {
   constructor(
     readonly code: Extract<ApiErrorCode, "invalid_json" | "payload_too_large">,
+    message: string
+  ) {
+    super(message);
+  }
+}
+
+class ApiRequestError extends Error {
+  constructor(
+    readonly code: ApiErrorCode,
+    readonly status: number,
     message: string
   ) {
     super(message);

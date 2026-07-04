@@ -87,6 +87,7 @@ Public portal responses use the OpenRoad public projection and must not include 
 - `GET /api/openroad/workspaces`
 - `GET /api/openroad/workspaces/:workspaceId`
 - `POST /api/openroad/workspaces/:workspaceId/actions`
+- `POST /api/openroad/workspaces/:workspaceId/integrations/github/issues/import`
 - `GET /api/openroad/audit-events`
 - `GET /api/openroad/ops/status`
 
@@ -94,10 +95,13 @@ Workspace-scoped routes require the actor to be scoped to the requested workspac
 
 Workspace-scoped action responses return the updated workspace and a revision marker. They must not return the full multi-workspace state.
 
+GitHub issue import is workspace-scoped and requires workspace write permission. It accepts fixture/API payloads only in the current slice; it must not accept GitHub OAuth tokens, App private keys, webhook secrets, or raw credential fields.
+
 ## Environment
 
 ```powershell
 $env:OPENROAD_ADMIN_TOKEN="replace-with-long-random-token"
+$env:OPENROAD_INTEGRATION_FILE=".openroad/openroad-integrations.json"
 $env:OPENROAD_TRUST_PROXY_HEADERS="false"
 $env:OPENROAD_SINGLE_USER_MODE="false"
 ```

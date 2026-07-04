@@ -10,7 +10,7 @@ Each feature must also satisfy `docs/PRODUCTION_READINESS.md` before merging to 
 
 Current stage: Stage 2 Team Beta foundation in progress.
 
-The standalone loop now covers workspaces, requests, triage, internal work, roadmap planning, changelog drafts, public portal preview, local durability, production APIs, basic tenancy boundaries, file-backed team metadata, audit events, self-host operations, a first app-module boundary, hardened public portal write APIs, and the provider-neutral integration adapter contract. The next production work should implement the first provider-specific slice on top of that boundary.
+The standalone loop now covers workspaces, requests, triage, internal work, roadmap planning, changelog drafts, public portal preview, local durability, production APIs, basic tenancy boundaries, file-backed team metadata, audit events, self-host operations, a first app-module boundary, hardened public portal write APIs, the provider-neutral integration adapter contract, and a payload-backed GitHub issue import/link API. The next production work should add live GitHub App installation on top of that boundary.
 
 ## Feature 1: Workspace Shell
 
@@ -340,20 +340,44 @@ Dependencies:
 
 Branch: `feat/github-issue-sync`
 
-Status: next.
+Status: implemented and production-checked.
 
 Build:
 
-- GitHub App installation flow.
-- Import/link GitHub issues.
-- Sync issue status.
-- Link pull requests.
-- Permission-aware display.
+- GitHub installation metadata model.
+- Payload-backed GitHub issue import/link API.
+- Re-import updates mapped requests instead of creating duplicates.
+- Pull request external mappings.
+- File-backed integration metadata store.
+- Backup/restore support for integration metadata.
+- Workspace-scoped access and audit events.
 
 Acceptance:
 
 - GitHub enriches OpenRoad but remains optional.
 - Disconnecting GitHub does not delete or corrupt core OpenRoad objects.
+- GitHub mappings stay outside the core OpenRoad workspace schema.
+- Live OAuth, provider tokens, and webhooks remain deferred to `feat/github-app-installation`.
+
+## Feature 9A: GitHub App Installation
+
+Branch: `feat/github-app-installation`
+
+Status: next.
+
+Build:
+
+- GitHub App installation flow.
+- Server-only GitHub App credential handling.
+- Installation callback and permission verification.
+- Live issue fetch using stored installation metadata.
+- Disconnect flow that preserves OpenRoad data.
+
+Acceptance:
+
+- Users can connect GitHub without pasting issue payloads.
+- Tokens and private keys never enter browser bundles or audit logs.
+- Existing payload-backed import remains usable for tests and self-host operators.
 
 ## Feature 10: Linear Issue Sync
 

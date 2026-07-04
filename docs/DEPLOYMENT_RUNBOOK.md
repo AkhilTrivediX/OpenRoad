@@ -1,15 +1,15 @@
 # OpenRoad Deployment And Self-Host Runbook
 
-This runbook covers the current production path: one Node process serving the built app, OpenRoad state, team metadata, and public portal APIs. It also defines the first supported self-host path with Docker Compose, backup/restore commands, and smoke checks.
+This runbook covers the current production path: one Node process serving the built app, OpenRoad state, integration metadata, team metadata, and public portal APIs. It also defines the first supported self-host path with Docker Compose, backup/restore commands, and smoke checks.
 
 ## Current Operator Contract
 
 - OpenRoad is self-hostable as a single Node service.
-- Mutable data lives in two JSON files: `OPENROAD_DATA_FILE` and `OPENROAD_TEAM_FILE`.
+- Mutable data lives in three JSON files: `OPENROAD_DATA_FILE`, `OPENROAD_INTEGRATION_FILE`, and `OPENROAD_TEAM_FILE`.
 - Docker Compose stores those files in the `openroad-data` volume at `/data`.
 - `OPENROAD_ADMIN_TOKEN` protects private APIs when configured.
 - The public portal API remains unauthenticated and returns only public data.
-- Backups contain product, requester, team, membership, and audit data; store them like production data.
+- Backups contain product, requester, integration, team, membership, and audit data; store them like production data.
 
 ## Build
 
@@ -24,6 +24,7 @@ Use this path when running directly on a server or VM without Docker.
 
 ```powershell
 $env:OPENROAD_DATA_FILE="C:\openroad\openroad-state.json"
+$env:OPENROAD_INTEGRATION_FILE="C:\openroad\openroad-integrations.json"
 $env:OPENROAD_TEAM_FILE="C:\openroad\openroad-team.json"
 $env:OPENROAD_OWNER_EMAIL="owner@example.com"
 $env:OPENROAD_OWNER_NAME="Workspace Owner"
@@ -40,6 +41,7 @@ pnpm start
 
 ```powershell
 $env:OPENROAD_DATA_FILE="C:\openroad\openroad-state.json"
+$env:OPENROAD_INTEGRATION_FILE="C:\openroad\openroad-integrations.json"
 $env:OPENROAD_TEAM_FILE="C:\openroad\openroad-team.json"
 $env:OPENROAD_OWNER_EMAIL="owner@example.com"
 $env:OPENROAD_OWNER_NAME="Workspace Owner"
@@ -72,7 +74,7 @@ The Compose service:
 
 - Builds from `Dockerfile`.
 - Publishes `${OPENROAD_PORT:-4173}` to container port `4173`.
-- Stores product and team data in the `openroad-data` volume.
+- Stores product, integration, and team data in the `openroad-data` volume.
 - Runs with `OPENROAD_SINGLE_USER_MODE=false`.
 - Requires `OPENROAD_ADMIN_TOKEN` before startup.
 - Applies process-local public portal write limits from `OPENROAD_PORTAL_RATE_LIMIT_MAX` and `OPENROAD_PORTAL_RATE_LIMIT_WINDOW_MS`.
@@ -96,14 +98,15 @@ pnpm ops:restore -- --input-dir C:\openroad\backups\openroad-backup-2026-07-04T1
 pnpm ops:smoke -- --base-url http://127.0.0.1:4173 --workspace-id acme --admin-token $env:OPENROAD_ADMIN_TOKEN
 ```
 
-For Docker Compose, run the same commands from the repository checkout on the host. Point `OPENROAD_DATA_FILE` and `OPENROAD_TEAM_FILE` at bind-mounted files if you manage data outside the named Docker volume. For named volumes, use `docker compose cp` or a temporary helper container to copy `/data/openroad-state.json` and `/data/openroad-team.json` before running host-side restore operations.
+For Docker Compose, run the same commands from the repository checkout on the host. Point `OPENROAD_DATA_FILE`, `OPENROAD_INTEGRATION_FILE`, and `OPENROAD_TEAM_FILE` at bind-mounted files if you manage data outside the named Docker volume. For named volumes, use `docker compose cp` or a temporary helper container to copy `/data/openroad-state.json`, `/data/openroad-integrations.json`, and `/data/openroad-team.json` before running host-side restore operations.
 
 ## Backup
 
-Back up the product and team files together. They form one logical data snapshot.
+Back up the product, integration, and team files together. They form one logical data snapshot.
 
 ```powershell
 $env:OPENROAD_DATA_FILE="C:\openroad\openroad-state.json"
+$env:OPENROAD_INTEGRATION_FILE="C:\openroad\openroad-integrations.json"
 $env:OPENROAD_TEAM_FILE="C:\openroad\openroad-team.json"
 pnpm ops:backup -- --output-dir C:\openroad\backups
 ```
@@ -111,6 +114,7 @@ pnpm ops:backup -- --output-dir C:\openroad\backups
 The backup directory contains:
 
 - `openroad-state.json`
+- `openroad-integrations.json`
 - `openroad-team.json`
 - `manifest.json`
 
@@ -126,7 +130,7 @@ pnpm ops:restore -- --input-dir C:\openroad\backups\openroad-backup-2026-07-04T1
 
 Restore validation checks the backup manifest and expected JSON shape before replacing active files. The command creates a pre-restore safety backup under `restore-safety` before copying the restored files into place.
 
-Use `--force` only when you intentionally need to recover from a missing manifest or hand-repaired JSON shape and have separately inspected the files. Restore still requires both state and team files to be present.
+Use `--force` only when you intentionally need to recover from a missing manifest or hand-repaired JSON shape and have separately inspected the files. Restore still requires state, integration, and team files to be present.
 
 ## Smoke Test
 
@@ -190,7 +194,7 @@ For local single-user mode without `OPENROAD_ADMIN_TOKEN`, omit `--admin-token`;
 - OAuth/session auth is not implemented.
 - Team metadata is file-backed, not managed SQL.
 - Trusted proxy headers are disabled by default.
-- Background jobs, webhooks, provider tokens, and billing are not implemented.
+- Payload-backed GitHub issue import exists; live GitHub App OAuth, background jobs, webhooks, provider tokens, Linear, Jira, and billing are not implemented.
 - Docker images are build-local only; publishing and signed release artifacts are future release work.
 - Named Docker volume backup requires an operator copy step or a future packaged volume helper.
 - Public portal rate limits are in-memory per Node process; distributed deployments need a shared limiter in a future slice.

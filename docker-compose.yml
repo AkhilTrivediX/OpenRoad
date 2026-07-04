@@ -9,6 +9,7 @@ services:
     environment:
       OPENROAD_ADMIN_TOKEN: "${OPENROAD_ADMIN_TOKEN:?Set OPENROAD_ADMIN_TOKEN before starting OpenRoad}"
       OPENROAD_DATA_FILE: /data/openroad-state.json
+      OPENROAD_INTEGRATION_FILE: "${OPENROAD_INTEGRATION_FILE:-/data/openroad-integrations.json}"
       OPENROAD_TEAM_FILE: /data/openroad-team.json
       OPENROAD_DIST_DIR: /app/dist
       OPENROAD_OWNER_EMAIL: "${OPENROAD_OWNER_EMAIL:-owner@openroad.local}"

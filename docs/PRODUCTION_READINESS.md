@@ -170,7 +170,6 @@ OpenRoad releases must eventually include:
 
 These are known production gaps after the requester notifications and local assistant triage foundations.
 
-- App-level error boundary is still pending.
 - Some UI orchestration still lives inside `App.tsx`; the first helper/module extraction is complete, but component-level splitting remains future work.
 - Product, integration, and team persistence are file-backed, not managed SQL with online migrations.
 - Full-state APIs are protected by single-user/admin-token mode, but browser session auth is not implemented.
@@ -184,12 +183,12 @@ These are known production gaps after the requester notifications and local assi
 
 ## Next Production Move
 
-Next branch: `feat/error-boundary-recovery`
+Next branch: `feat/public-portal-identity-abuse-controls`
 
 Purpose:
 
-- Add an app-level error boundary and recovery path so runtime UI failures do not strand users.
-- Preserve local data recovery, import/export, and reset paths.
+- Add persistent public requester identity and stronger abuse controls before serious public portal exposure.
+- Preserve public/private projection boundaries and the standalone public portal workflow.
 - Preserve the existing production gate: feature branch, test plan first, focused tests, `pnpm check`, browser QA when UI changes, smoke test, audit, merge, then push.
 
 Provider token storage, live Linear/Jira fetch, Jira webhooks, notification delivery adapters, and conflict UI remain hardening work that should stay behind server-only secret management and/or explicit delivery infrastructure.

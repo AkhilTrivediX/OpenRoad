@@ -1270,6 +1270,67 @@ dd {
   gap: 8px;
 }
 
+.recovery-shell {
+  align-items: center;
+  display: grid;
+  min-height: 100vh;
+  padding: 24px;
+}
+
+.recovery-panel {
+  border: 1px solid var(--line);
+  display: grid;
+  gap: 14px;
+  margin: 0 auto;
+  max-width: 620px;
+  padding: 24px;
+  width: min(100%, 620px);
+}
+
+.recovery-kicker {
+  color: var(--route);
+  font-family: var(--label-font);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.recovery-panel h1 {
+  font-size: 34px;
+  line-height: 1.05;
+  margin: 0;
+}
+
+.recovery-panel p {
+  color: var(--muted);
+  line-height: 1.6;
+  margin: 0;
+}
+
+.recovery-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.recovery-note {
+  border-left: 2px solid var(--route);
+  padding-left: 10px;
+}
+
+@media (max-width: 620px) {
+  .recovery-shell {
+    padding: 14px;
+  }
+
+  .recovery-panel {
+    padding: 18px;
+  }
+
+  .recovery-panel h1 {
+    font-size: 26px;
+  }
+}
+
 .notification-item {
   background: var(--plate);
   border-left: 2px solid var(--route);

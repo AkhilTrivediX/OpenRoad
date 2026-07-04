@@ -10,7 +10,7 @@ Each feature must also satisfy `docs/PRODUCTION_READINESS.md` before merging to 
 
 Current stage: Stage 2 Team Beta foundation in progress.
 
-The standalone loop now covers workspaces, requests, triage, internal work, roadmap planning, changelog drafts, public portal preview, local durability, production APIs, basic tenancy boundaries, file-backed team metadata, audit events, self-host operations, a first app-module boundary, hardened public portal write APIs, the provider-neutral integration adapter contract, a payload-backed GitHub issue import/link API, server-only GitHub App installation verification, live GitHub issue fetch through verified installations, signed GitHub webhooks, safe disconnect handling, Linear issue import/link, Jira issue import/link with explicit field mapping, requester notification preferences/outbox events, and deterministic local assistant triage. The next production work should move into public release operations while provider token storage/live sync, notification delivery adapters, and real model-backed AI adapters remain separate hardening slices.
+The standalone loop now covers workspaces, requests, triage, internal work, roadmap planning, changelog drafts, public portal preview, local durability, production APIs, basic tenancy boundaries, file-backed team metadata, audit events, self-host operations, app-level crash recovery, a first app-module boundary, hardened public portal write APIs, the provider-neutral integration adapter contract, a payload-backed GitHub issue import/link API, server-only GitHub App installation verification, live GitHub issue fetch through verified installations, signed GitHub webhooks, safe disconnect handling, Linear issue import/link, Jira issue import/link with explicit field mapping, requester notification preferences/outbox events, deterministic local assistant triage, and release candidate manifest tooling. The next production work should move into public portal identity/abuse controls while provider token storage/live sync, notification delivery adapters, and real model-backed AI adapters remain separate hardening slices.
 
 ## Feature 1: Workspace Shell
 
@@ -200,6 +200,26 @@ Acceptance:
 - Invalid and future-schema writes are rejected.
 - Public portal API does not leak private workspace data.
 - Standalone local development remains optional and non-blocking.
+
+### App Error Boundary Recovery
+
+Branch: `feat/error-boundary-recovery`
+
+Status: implemented and production-checked.
+
+Build:
+
+- Root-level React error boundary.
+- Recovery fallback with retry.
+- Local browser-data reset using the existing OpenRoad local persistence clear path.
+- Privacy-safe fallback copy that does not expose stack traces or persisted data.
+
+Acceptance:
+
+- Unexpected React render errors show a recovery screen instead of a blank app.
+- Users can retry without data loss.
+- Users can clear only OpenRoad local browser data when local state is damaged.
+- No external error reporting or data upload is introduced.
 
 ### Self-Host Operations Foundation
 

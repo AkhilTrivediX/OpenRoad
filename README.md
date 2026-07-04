@@ -37,7 +37,7 @@ OpenRoad now has a working standalone product loop, production server foundation
 - Live GitHub issue fetch through verified installations without persisted tokens.
 - Signed GitHub App webhook ingestion, idempotent linked issue sync, and safe disconnect handling.
 - Encrypted server-only provider credential storage primitives for GitHub, Linear, and Jira.
-- Provider-neutral background sync job foundation with private runner boundary.
+- Provider-neutral background sync job foundation with private runner boundary and GitHub linked-issue worker.
 - Safe Linear OAuth setup plus payload-backed Linear issue import/link.
 - Safe Jira OAuth setup plus payload-backed Jira issue import/link with explicit field mapping.
 - Requester notification preferences plus an internal outbox for status and changelog updates.
@@ -45,7 +45,7 @@ OpenRoad now has a working standalone product loop, production server foundation
 - Release candidate manifest tooling for version, checksum, support-window, and dry-run publishing verification.
 - Docker Compose, backup/restore, and smoke-check commands for self-host operators.
 
-Current production limits are explicit: OAuth/session auth, invitation flows, managed database migrations, hosted release promotion, deeper observability, browser Settings UI for integrations, OAuth callback exchange, live provider sync workers, Linear/Jira live fetch/webhooks, direct email/provider notification delivery, real model-backed AI adapters with consent/prompt redaction/audit logs, and conflict UI are planned next-stage work.
+Current production limits are explicit: OAuth/session auth, invitation flows, managed database migrations, hosted release promotion, deeper observability, browser Settings UI for integrations, OAuth callback exchange, Linear/Jira live fetch/webhooks, provider write-back, direct email/provider notification delivery, real model-backed AI adapters with consent/prompt redaction/audit logs, and conflict UI are planned next-stage work.
 
 Current docs:
 

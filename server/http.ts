@@ -128,6 +128,10 @@ import {
   type GitHubAppConfig
 } from "./github-app.js";
 import {
+  canConfigureGitHubIntegrationSyncWorker,
+  createGitHubIntegrationSyncWorker
+} from "./github-sync-worker.js";
+import {
   createSafeLinearOAuthSetup,
   linearOAuthConfigFromEnv,
   type LinearOAuthConfig
@@ -287,6 +291,16 @@ export function createOpenRoadServer({
   const runNotificationDeliveryExclusive = createExclusiveRunner();
   const runIntegrationMutationExclusive = createExclusiveRunner();
   const runIntegrationSyncExclusive = createExclusiveRunner();
+  const resolvedIntegrationSyncWorker =
+    integrationSyncWorker ??
+    (integrationStore && canConfigureGitHubIntegrationSyncWorker(githubAppConfig)
+      ? createGitHubIntegrationSyncWorker({
+          githubAppClient,
+          integrationStore,
+          runIntegrationMutationExclusive,
+          store
+        })
+      : undefined);
 
   return createServer(async (request, response) => {
     const access = createAccessContext(request, auth);
@@ -305,7 +319,7 @@ export function createOpenRoadServer({
           githubAppClient,
           githubAppConfig,
           integrationStore,
-          integrationSyncWorker,
+          resolvedIntegrationSyncWorker,
           jiraOAuthConfig,
           linearOAuthConfig,
           notificationDeliveryAdapter,

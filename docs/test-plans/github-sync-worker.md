@@ -16,7 +16,7 @@ As a self-host operator or workspace owner, I can verify a GitHub App installati
 - Production server auto-configures the worker only when GitHub App credentials and integration stores are available.
 - Installation-wide jobs sync active GitHub issue mappings already linked to the installation.
 - Mapping-scoped jobs sync only the selected active GitHub issue mapping.
-- Live issue fetch uses short-lived GitHub App installation tokens through the existing `GitHubAppClient` boundary.
+- Live issue fetch uses targeted GitHub App issue requests with short-lived installation tokens through the existing `GitHubAppClient` boundary.
 - Worker mutates OpenRoad requests and mapping `lastSyncedAt` through the existing server-side integration mutation lane.
 - Worker returns sanitized success, retryable failure, and fatal failure summaries to the background sync runner.
 - Runner keeps existing queue semantics: claim, lease, retry backoff, redacted errors, completion metadata, and audit event.
@@ -42,7 +42,7 @@ As a self-host operator or workspace owner, I can verify a GitHub App installati
 - The worker rejects non-GitHub jobs and inactive/missing/disconnected installations safely.
 - Installation-wide sync only processes active GitHub issue mappings for the requested workspace/installation.
 - Mapping-scoped sync only processes the requested active mapping and rejects cross-installation/cross-workspace mappings.
-- The worker fetches GitHub issues by repository using short-lived installation tokens and never persists or returns those tokens.
+- The worker fetches each mapped GitHub issue by repository and issue number using short-lived installation tokens and never persists or returns those tokens.
 - Synced GitHub issues update existing OpenRoad requests through the established GitHub mapper.
 - Unmapped live GitHub issues are ignored by the worker and do not create surprise OpenRoad requests.
 - Missing mapped issues in the live GitHub response are reported in the sanitized summary without deleting requests or mappings.
@@ -57,11 +57,12 @@ As a self-host operator or workspace owner, I can verify a GitHub App installati
 
 - GitHub worker factory returns no worker when GitHub App setup is incomplete.
 - GitHub worker processes an installation-wide job with two active issue mappings in one repository.
-- GitHub worker groups mapped issue fetches by repository and calls `listRepositoryIssues` with the GitHub installation id.
+- GitHub worker fetches mapped issues directly with `getRepositoryIssue` so closed or older linked issues are not missed by list pagination.
 - GitHub worker updates existing OpenRoad request title/status/tags/comments from live GitHub issue data.
 - GitHub worker updates mapping `lastSyncedAt` for synced issue mappings.
 - GitHub worker ignores unmapped live issues and does not create new requests.
 - GitHub worker returns a success summary with synced and missing counts.
+- GitHub worker revalidates installation/mapping state after live fetch before applying updates.
 - Mapping-scoped sync fetches and updates only the selected mapping.
 - Cross-workspace, cross-installation, disconnected, non-issue, and missing mappings fail safely.
 - GitHub API upstream errors map to retryable worker results without leaking token-shaped text.

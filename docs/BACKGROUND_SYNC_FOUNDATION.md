@@ -1,13 +1,13 @@
 # Background Sync Foundation
 
-OpenRoad now has a provider-neutral background sync job foundation for GitHub, Linear, and Jira integrations. It does not call provider APIs yet. The goal of this slice is durable, bounded, private sync work metadata that future live fetch and write-back adapters can use safely.
+OpenRoad has a provider-neutral background sync job foundation for GitHub, Linear, and Jira integrations. GitHub now has a live worker for already-linked issue mappings when GitHub App credentials are configured; Linear/Jira live workers and provider write-back remain future work.
 
 ## Current Capability
 
 - Integration metadata schema `3` stores `syncJobs` in `OPENROAD_INTEGRATION_FILE`.
 - Workspace owners/admins can enqueue sync jobs for active provider installations.
 - A private global sync runner endpoint can claim due jobs and process them through a server-side worker adapter.
-- The built-in production server has no live provider worker adapter configured yet, so the runner returns `503 not_configured` until a future slice supplies one.
+- The built-in production server wires a GitHub worker when GitHub App credentials are configured; otherwise the runner returns `503 not_configured` until a worker is available.
 - Retryable failures stay queued with backoff and attempt metadata.
 - Running jobs have a lease and become claimable again after the lease expires, so a crashed process does not strand work forever.
 - Fatal failures are marked failed without deleting job history.
@@ -51,7 +51,7 @@ Future provider workers must fetch/decrypt credentials server-side through the c
 
 ## Deferred Work
 
-- Live GitHub/Linear/Jira fetch workers.
+- Linear/Jira live fetch workers.
 - Provider write-back.
 - OAuth callback token exchange.
 - Browser Settings UI for manual sync controls.

@@ -135,7 +135,7 @@ Integration sync job enqueue routes require `integration:manage`, which is reser
 
 - `POST /api/openroad/integrations/sync/run`
 
-The sync runner route requires global owner/admin write access. It is disabled with `503 not_configured` until a server-side integration sync worker adapter is configured. The runner claims due queued or stale-running jobs, processes them server-side, redacts worker failure text before persistence, and returns sanitized processing counts.
+The sync runner route requires global owner/admin write access. It auto-configures a GitHub worker when GitHub App credentials are available and otherwise stays disabled with `503 not_configured` until a server-side integration sync worker adapter is configured. The runner claims due queued or stale-running jobs, processes them server-side, redacts worker failure text before persistence, and returns sanitized processing counts.
 
 The GitHub webhook route is not authorized by OpenRoad actor headers. It is provider-signature protected: the server requires `OPENROAD_GITHUB_APP_WEBHOOK_SECRET` and verifies `X-Hub-Signature-256` against the raw request body with HMAC-SHA256 before parsing JSON or mutating state.
 

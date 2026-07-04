@@ -47,6 +47,7 @@ export type GitHubAppInstallationApiPayload = {
 export type GitHubAppClient = {
   createInstallationAccessToken(installationId: string): Promise<GitHubInstallationAccessToken>;
   getInstallation(installationId: string): Promise<GitHubAppInstallationApiPayload>;
+  getRepositoryIssue(options: GitHubRepositoryIssueGetOptions): Promise<GitHubIssue>;
   listRepositoryIssues(options: GitHubRepositoryIssueListOptions): Promise<GitHubIssue[]>;
 };
 
@@ -61,6 +62,13 @@ export type GitHubRepositoryIssueListOptions = {
   perPage?: number;
   repo: string;
   state?: "all" | "closed" | "open";
+};
+
+export type GitHubRepositoryIssueGetOptions = {
+  installationId: string;
+  issueNumber: number;
+  owner: string;
+  repo: string;
 };
 
 export type GitHubAppJwtOptions = {
@@ -188,6 +196,37 @@ export class FetchGitHubAppClient implements GitHubAppClient {
     return body
       .filter((item): item is Record<string, unknown> => isRecord(item) && !isRecord(item.pull_request))
       .map((item) => parseGitHubIssuePayload(item));
+  }
+
+  async getRepositoryIssue(options: GitHubRepositoryIssueGetOptions) {
+    const accessToken = await this.createInstallationAccessToken(options.installationId);
+    const response = await this.fetchImpl(
+      `${this.config.apiBaseUrl}/repos/${encodeURIComponent(options.owner)}/${encodeURIComponent(
+        options.repo
+      )}/issues/${encodeURIComponent(String(options.issueNumber))}`,
+      {
+        headers: {
+          Accept: "application/vnd.github+json",
+          Authorization: `Bearer ${accessToken.token}`,
+          "X-GitHub-Api-Version": "2022-11-28"
+        }
+      }
+    );
+
+    if (!response.ok) {
+      throw new GitHubAppClientError(
+        "github_api_error",
+        `GitHub issue fetch failed with status ${response.status}.`,
+        response.status
+      );
+    }
+
+    const body = (await response.json()) as unknown;
+    if (!isRecord(body)) {
+      throw new GitHubAppClientError("invalid_response", "GitHub issue response was invalid.");
+    }
+
+    return parseGitHubIssuePayload(body);
   }
 
   private async createJwt() {

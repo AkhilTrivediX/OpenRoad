@@ -230,6 +230,58 @@ describe("GitHub App installation helpers", () => {
     expect(JSON.stringify(issues)).not.toContain("installation-token");
   });
 
+  it("fetches a targeted repository issue with an installation token", async () => {
+    const { privateKey } = generateKeyPairSync("rsa", {
+      modulusLength: 2048,
+      privateKeyEncoding: { format: "pem", type: "pkcs8" },
+      publicKeyEncoding: { format: "pem", type: "spki" }
+    });
+    const urls: string[] = [];
+    const client = new FetchGitHubAppClient(
+      {
+        apiBaseUrl: "https://api.github.test",
+        appBaseUrl: "https://github.test",
+        appId: "12345",
+        privateKey,
+        slug: "openroad-test",
+        webhookSecretConfigured: false
+      },
+      async (url, init) => {
+        urls.push(String(url));
+        const authorization = init?.headers
+          ? new Headers(init.headers).get("authorization") ?? ""
+          : "";
+
+        if (String(url).endsWith("/access_tokens")) {
+          return new Response(JSON.stringify({ token: "installation-token" }), { status: 201 });
+        }
+
+        expect(String(url)).toBe("https://api.github.test/repos/AkhilTrivediX/OpenRoad/issues/42");
+        expect(authorization).toBe("Bearer installation-token");
+        return new Response(JSON.stringify(gitHubIssuePayload({ node_id: "I_kwDOGH123", number: 42 })), {
+          status: 200
+        });
+      }
+    );
+
+    const issue = await client.getRepositoryIssue({
+      installationId: "98765",
+      issueNumber: 42,
+      owner: "AkhilTrivediX",
+      repo: "OpenRoad"
+    });
+
+    expect(issue).toMatchObject({
+      id: "I_kwDOGH123",
+      number: 42,
+      repository: {
+        fullName: "AkhilTrivediX/OpenRoad"
+      }
+    });
+    expect(urls).toContain("https://api.github.test/app/installations/98765/access_tokens");
+    expect(JSON.stringify(issue)).not.toContain("installation-token");
+  });
+
   it("reads private keys from file when env uses a file path", async ({ task }) => {
     const root = join(process.env.TMP ?? process.env.TEMP ?? ".", `openroad-github-app-${Date.now()}-${task.name}`);
     const privateKeyFile = join(root, "app.pem");

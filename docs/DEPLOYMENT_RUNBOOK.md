@@ -191,7 +191,7 @@ OpenRoad stores provider-neutral sync jobs in `openroad-integrations.json` and e
 - `POST /api/openroad/workspaces/:workspaceId/integrations/:provider/sync/jobs`
 - `POST /api/openroad/integrations/sync/run`
 
-The enqueue endpoint requires `integration:manage`. The runner endpoint requires global owner/admin write access and is disabled with `503 not_configured` until a server-side provider worker adapter is configured in a future release. Jobs contain scoped metadata and bounded, redacted summaries only; they must not contain provider tokens, encrypted credential payloads, raw provider payloads, webhook signatures, request headers, or request bodies.
+The enqueue endpoint requires `integration:manage`. The runner endpoint requires global owner/admin write access. When GitHub App credentials are configured, OpenRoad auto-wires a GitHub worker for already-linked issue mappings; without an available worker, the runner returns `503 not_configured`. Jobs contain scoped metadata and bounded, redacted summaries only; they must not contain provider tokens, encrypted credential payloads, raw provider payloads, webhook signatures, request headers, or request bodies.
 
 While OpenRoad uses file-backed integration metadata, integration writes are serialized inside one Node process. Running jobs receive a lease and can be reclaimed after the lease expires if a process crashes mid-run. Multi-process/distributed locking remains future database or external queue work.
 
@@ -294,7 +294,7 @@ For local single-user mode without `OPENROAD_ADMIN_TOKEN`, omit `--admin-token`;
 - OAuth/session auth is not implemented.
 - Team metadata is file-backed, not managed SQL.
 - Trusted proxy headers are disabled by default.
-- Payload-backed GitHub issue import, GitHub App installation verification, live issue fetch, signed webhooks, safe disconnect APIs, encrypted server-only provider credential storage, provider-neutral background sync job metadata, payload-backed Linear issue import, payload-backed Jira issue import, requester notification outbox/preferences, and a server-side JSONL notification delivery handoff exist; live provider sync workers, OAuth callback exchange, Linear/Jira live sync/webhooks, direct email/provider notification delivery, conflict UI, and billing are not implemented.
+- Payload-backed GitHub issue import, GitHub App installation verification, live issue fetch, signed webhooks, safe disconnect APIs, encrypted server-only provider credential storage, provider-neutral background sync job metadata, a GitHub worker for already-linked issue mappings, payload-backed Linear issue import, payload-backed Jira issue import, requester notification outbox/preferences, and a server-side JSONL notification delivery handoff exist; OAuth callback exchange, Linear/Jira live sync/webhooks, provider write-back, direct email/provider notification delivery, conflict UI, and billing are not implemented.
 - Docker images are build-local by default; release manifests can record publishing metadata, but registry publishing infrastructure is not bundled yet.
 - Signed artifact infrastructure is not bundled yet; release manifests record signing as not configured unless an operator supplies signing metadata.
 - Named Docker volume backup requires an operator copy step or a future packaged volume helper.

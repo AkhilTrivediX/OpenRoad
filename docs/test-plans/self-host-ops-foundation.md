@@ -110,7 +110,7 @@ As a self-host operator, I can configure OpenRoad from environment variables, st
 ## Evidence
 
 - Branch: `feat/self-host-ops-foundation`
-- Commit SHA: `f014f98`.
+- Commit SHA: `3ba208a`.
 - Date: 2026-07-04.
 - Acceptance criteria status: Passed for Node production self-host path, backup/restore tooling, token-mode smoke, docs, and static container review. Docker build/config execution was not run because Docker is not installed in this environment.
 - Commands run:

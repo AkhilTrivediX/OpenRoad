@@ -168,7 +168,7 @@ OpenRoad releases must eventually include:
 
 ## Current Readiness Debt
 
-These are known production gaps after the Public Portal Hardening foundation.
+These are known production gaps after the Integration Adapter Contract foundation.
 
 - App-level error boundary is still pending.
 - Some UI orchestration still lives inside `App.tsx`; the first helper/module extraction is complete, but component-level splitting remains future work.
@@ -178,18 +178,19 @@ These are known production gaps after the Public Portal Hardening foundation.
 - Backup/restore and local self-host smoke commands exist, but published Docker images and hosted release promotion are not implemented.
 - Observability is limited to process logs; structured operational events and dashboards are pending.
 - Public portal write controls and process-local rate limits exist, but persistent requester identity, notification preferences, and distributed abuse controls are pending.
+- Provider adapter contract exists, but no live GitHub, Linear, or Jira installation/sync flow is implemented yet.
 - Browser QA is manual rather than automated end-to-end CI.
 
 ## Next Production Move
 
-Next branch: `feat/integration-adapter-contract`
+Next branch: `feat/github-issue-sync`
 
 Purpose:
 
-- Define provider adapter interfaces for GitHub, Linear, and Jira.
-- Add external object mapping and conflict model without provider-specific UI leakage.
-- Add sync job state and retry contract.
-- Add provider fixture tests.
+- Implement the first provider-specific adapter using the shared contract.
+- Add GitHub issue import/link fixture coverage before live credentials.
+- Define GitHub App installation permission needs.
+- Keep disconnect behavior non-destructive.
 - Keep standalone OpenRoad workflows working with zero integrations.
 
-GitHub, Linear, Jira, notifications, and AI work should build on top of this adapter boundary.
+Linear, Jira, notifications, and AI work should follow the same adapter boundary after the GitHub slice proves it.

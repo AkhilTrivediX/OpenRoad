@@ -146,12 +146,20 @@ As a self-host operator or workspace owner, I can store a server-side Linear cre
 ## Evidence
 
 - Branch: `feat/linear-sync-worker`
-- Implementation commit SHA: Pending.
-- Date: Pending.
-- Acceptance criteria status: Pending.
-- Commands run: Pending.
-- Browser/viewports tested: Pending.
-- Accessibility checks: Pending.
-- Reviewer notes: Pending.
+- Implementation commit SHA: `59842000aab5abacda2eccce4221fd2068ad86fb`
+- Date: 2026-07-04.
+- Acceptance criteria status: Passed for this production slice. The branch adds a server-only Linear GraphQL client, auto-configured Linear sync worker, provider dispatcher, encrypted credential lookup, Settings manual sync readiness, and a small app-shell nav deep-link fix while keeping standalone mode, GitHub sync, Jira honesty, and provider secret redaction intact.
+- Commands run:
+  - `pnpm vitest run src/integrations/linear.test.ts src/persistence/openroadIntegrations.test.ts` passed: 2 files, 13 tests.
+  - `pnpm vitest run server/linear-sync-worker.test.ts server/github-sync-worker.test.ts src/integrations/linear.test.ts` passed: 3 files, 23 tests.
+  - `pnpm vitest run server/linear-sync-worker.test.ts server/github-sync-worker.test.ts server/http.test.ts src/persistence/openroadIntegrations.test.ts src/App.test.tsx src/integrations/linear.test.ts` passed: 6 files, 151 tests.
+  - `pnpm vitest run src/App.test.tsx` passed after the nav deep-link fix: 1 file, 50 tests.
+  - `pnpm check` passed after final edits: 26 files, 294 tests, plus production client and server builds.
+  - `pnpm release:verify` passed after implementation commit `59842000aab5abacda2eccce4221fd2068ad86fb`; dry-run manifest included current `dist` and `server-dist` artifact hashes, Docker dry-run mode, and signing not configured.
+  - `node C:\Users\PC\.agents\skills\impeccable\scripts\detect.mjs --json src\App.tsx src\styles.css` returned `[]`.
+  - Built-server smoke passed against `server-dist/server/index.js` with temporary file-backed state, `OPENROAD_ADMIN_TOKEN`, `OPENROAD_TOKEN_ENCRYPTION_KEY`, and a fake Linear GraphQL API: `ops:smoke` passed health/contract/portal/private auth checks; Linear issue import created the linked request; encrypted Linear credential storage returned metadata only; Settings status reported Linear manual sync ready; sync enqueue/run processed one Linear job; fake Linear received one targeted issue query with bearer auth; persisted request title changed to `Updated from Linear smoke`; mapping `lastSyncedAt` was set; sync job ended `succeeded`; fake token, stripped URL query value, ciphertext, and authorization text were not present in checked API responses or persisted OpenRoad state.
+- Browser/viewports tested: In-app browser at 1280x720 against a temporary built server with a linked Linear issue and stored credential. Verified `#settings` deep-link lands on Settings inside the fixed PWA shell, Settings is the active sidebar item, document dimensions remain 1280x720 with no page-level scroll, GitHub sync is disabled in the fixture, Linear sync is enabled, and no secret-shaped text renders.
+- Accessibility checks: Linear manual sync action has provider-specific accessible name `Linear sync linked issues`; GitHub retains `GitHub sync linked issues`; active navigation uses `aria-current="page"` for the current hash target; status is conveyed through text plus badges; disabled GitHub/Jira states have nearby operational copy.
+- Reviewer notes: The worker deliberately syncs only already-linked Linear issue mappings and does not import unmapped Linear issues, implement OAuth callback exchange, refresh tokens, webhooks, provider write-back, or conflict UI. Browser QA found the prior hardcoded Inbox nav active state; this branch fixes it with hash-aware nav state and guarded deep-link scrolling because it directly affected Settings orientation.
 - Known unresolved risks: OAuth callback exchange, token refresh, Linear webhooks, provider write-back, conflict UI, scheduler packaging, distributed locks, Jira live worker, and browser credential management remain later production slices.
-- Rollback notes: Pending.
+- Rollback notes: Revert `59842000aab5abacda2eccce4221fd2068ad86fb` and this evidence commit, or remove `OPENROAD_TOKEN_ENCRYPTION_KEY` to disable the auto-configured Linear worker. No OpenRoad state or integration metadata schema migration was introduced; existing schema `7` and integration metadata schema `3` remain compatible. If live sync changed request content unexpectedly, restore the pre-branch backup and rerun `pnpm ops:smoke`.

@@ -10,7 +10,7 @@ Each feature must also satisfy `docs/PRODUCTION_READINESS.md` before merging to 
 
 Current stage: Stage 2 Team Beta foundation in progress.
 
-The standalone loop now covers workspaces, requests, triage, internal work, roadmap planning, changelog drafts, public portal preview, local durability, production APIs, basic tenancy boundaries, file-backed team metadata, audit events, self-host operations, app-level crash recovery, a first app-module boundary, hardened public portal write APIs with persisted visitor vote identity, the provider-neutral integration adapter contract, a payload-backed GitHub issue import/link API, server-only GitHub App installation verification, live GitHub issue fetch through verified installations, signed GitHub webhooks, safe disconnect handling, encrypted server-only provider credential storage, provider-neutral background sync job foundations, GitHub and Linear workers for already-linked issue mappings, progressive Settings visibility with GitHub/Linear manual sync controls, Linear issue import/link, Jira issue import/link with explicit field mapping, requester notification preferences/outbox events plus JSONL delivery handoff, deterministic local assistant triage, and release candidate manifest tooling. The next production work should add Jira live worker support while full connect/disconnect Settings flows, direct email/provider notification delivery, and real model-backed AI adapters remain separate hardening slices.
+The standalone loop now covers workspaces, requests, triage, internal work, roadmap planning, changelog drafts, public portal preview, local durability, production APIs, basic tenancy boundaries, file-backed team metadata, audit events, self-host operations, app-level crash recovery, a first app-module boundary, hardened public portal write APIs with persisted visitor vote identity, the provider-neutral integration adapter contract, a payload-backed GitHub issue import/link API, server-only GitHub App installation verification, live GitHub issue fetch through verified installations, signed GitHub webhooks, safe disconnect handling, encrypted server-only provider credential storage, provider-neutral background sync job foundations, GitHub/Linear/Jira workers for already-linked issue mappings, progressive Settings visibility with GitHub/Linear/Jira manual sync controls, Linear issue import/link, Jira issue import/link with explicit field mapping, requester notification preferences/outbox events plus JSONL delivery handoff, deterministic local assistant triage, and release candidate manifest tooling. The next production work should continue hardening provider connect/disconnect, webhooks, direct email/provider notification delivery, and real model-backed AI adapters as separate slices.
 
 ## Feature 1: Workspace Shell
 
@@ -558,7 +558,7 @@ Acceptance:
 - Standalone mode remains useful with no server integration metadata.
 - Settings shows GitHub, Jira, and Linear readiness honestly without copying provider metadata into workspace state.
 - GitHub manual sync never exposes provider secrets and uses existing queue/runner boundaries.
-- Linear manual sync is enabled only when encrypted server-side credentials and linked mappings exist; Jira stays visible without fake live worker parity.
+- Linear and Jira manual sync are enabled only when encrypted server-side credentials and linked mappings exist.
 
 ## Feature 11E: Linear Sync Worker
 
@@ -585,7 +585,7 @@ Acceptance:
 
 Branch: `feat/jira-sync-worker`
 
-Status: planned; implementation must follow `docs/test-plans/jira-sync-worker.md`.
+Status: implemented and production-checked.
 
 Build:
 

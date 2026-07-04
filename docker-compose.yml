@@ -32,6 +32,7 @@ services:
       OPENROAD_JIRA_CLIENT_ID: "${OPENROAD_JIRA_CLIENT_ID:-}"
       OPENROAD_JIRA_CLIENT_SECRET: "${OPENROAD_JIRA_CLIENT_SECRET:-}"
       OPENROAD_JIRA_REDIRECT_URI: "${OPENROAD_JIRA_REDIRECT_URI:-}"
+      OPENROAD_JIRA_API_BASE_URL: "${OPENROAD_JIRA_API_BASE_URL:-https://api.atlassian.com/ex/jira}"
       PORT: "4173"
     volumes:
       - openroad-data:/data

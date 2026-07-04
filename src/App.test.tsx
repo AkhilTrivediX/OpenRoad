@@ -180,6 +180,31 @@ describe("OpenRoad workspace shell", () => {
     expect(document.body.textContent).not.toContain("linear-access-secret");
   });
 
+  it("runs Jira manual sync from Settings when the server reports support", async () => {
+    vi.stubEnv("VITE_OPENROAD_SERVER_SYNC", "on");
+    const fetchMock = createSettingsIntegrationFetchMock({ jiraReady: true });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "Jira sync linked issues" }));
+
+    expect(await screen.findByText("Jira linked issue sync completed.")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/openroad/workspaces/acme/integrations/jira/sync/jobs",
+      expect.objectContaining({ method: "POST" })
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/openroad/integrations/sync/run",
+      expect.objectContaining({
+        body: JSON.stringify({ limit: 5, provider: "jira", workspaceId: "acme" }),
+        method: "POST"
+      })
+    );
+    expect(document.body.textContent).not.toContain("jira-access-secret");
+  });
+
   it("switches workspaces", async () => {
     const user = userEvent.setup();
     render(<App />);
@@ -1215,7 +1240,7 @@ describe("OpenRoad workspace shell", () => {
   }, 10_000);
 });
 
-function createSettingsIntegrationFetchMock(options: { linearReady?: boolean } = {}) {
+function createSettingsIntegrationFetchMock(options: { jiraReady?: boolean; linearReady?: boolean } = {}) {
   const state = createInitialOpenRoadState();
 
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -1285,29 +1310,40 @@ function createSettingsIntegrationFetchMock(options: { linearReady?: boolean } =
             totalInstallations: 1
           },
           {
-            accounts: [],
-            activeCredentials: 0,
-            activeInstallations: 0,
+            accounts: options.jiraReady
+              ? [
+                  {
+                    createdAt: "2026-07-04T00:00:00Z",
+                    id: "jira-install-jira-cloud",
+                    providerAccountName: "OpenRoad Jira",
+                    status: "active"
+                  }
+                ]
+              : [],
+            activeCredentials: options.jiraReady ? 1 : 0,
+            activeInstallations: options.jiraReady ? 1 : 0,
             capabilities: {
-              disconnect: false,
-              import: false,
-              liveSync: false,
-              manualSync: false,
+              disconnect: Boolean(options.jiraReady),
+              import: Boolean(options.jiraReady),
+              liveSync: Boolean(options.jiraReady),
+              manualSync: Boolean(options.jiraReady),
               setup: false,
               webhooks: false
             },
-            connection: "optional",
+            connection: options.jiraReady ? "connected" : "optional",
             label: "Jira",
-            linkedIssueMappings: 0,
-            linkedMappings: 0,
+            linkedIssueMappings: options.jiraReady ? 1 : 0,
+            linkedMappings: options.jiraReady ? 1 : 0,
             provider: "jira",
             queuedSyncJobs: 0,
             recentJobs: [],
             runningSyncJobs: 0,
             setupConfigured: false,
-            statusText: "Optional. Server setup is not configured yet.",
-            syncWorkerConfigured: false,
-            totalInstallations: 0
+            statusText: options.jiraReady
+              ? "Connected. 1 linked issue mapping ready for manual sync."
+              : "Optional. Server setup is not configured yet.",
+            syncWorkerConfigured: Boolean(options.jiraReady),
+            totalInstallations: options.jiraReady ? 1 : 0
           },
           {
             accounts: options.linearReady
@@ -1356,6 +1392,10 @@ function createSettingsIntegrationFetchMock(options: { linearReady?: boolean } =
     }
 
     if (url === "/api/openroad/workspaces/acme/integrations/linear/sync/jobs") {
+      return jsonResponse({ job: { id: "sync-job-1", status: "queued" }, status: "queued" }, 201);
+    }
+
+    if (url === "/api/openroad/workspaces/acme/integrations/jira/sync/jobs") {
       return jsonResponse({ job: { id: "sync-job-1", status: "queued" }, status: "queued" }, 201);
     }
 

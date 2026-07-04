@@ -186,6 +186,44 @@ describe("OpenRoad integration status client", () => {
     );
   });
 
+  it("queues and runs Jira manual sync", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ status: "queued" }, 201))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          processed: [{ id: "sync-job-1", kind: "success", status: "succeeded" }],
+          status: "processed"
+        })
+      );
+
+    const result = await runProviderManualSync(
+      "jira",
+      "acme",
+      "jira-install",
+      fetchImpl as unknown as typeof fetch
+    );
+
+    expect(result).toEqual({
+      jobStatus: "succeeded",
+      message: "Jira linked issue sync completed.",
+      status: "succeeded"
+    });
+    expect(fetchImpl).toHaveBeenNthCalledWith(
+      1,
+      "/api/openroad/workspaces/acme/integrations/jira/sync/jobs",
+      expect.objectContaining({ method: "POST" })
+    );
+    expect(fetchImpl).toHaveBeenNthCalledWith(
+      2,
+      "/api/openroad/integrations/sync/run",
+      expect.objectContaining({
+        body: JSON.stringify({ limit: 5, provider: "jira", workspaceId: "acme" }),
+        method: "POST"
+      })
+    );
+  });
+
   it("keeps a queued result when the private runner is unavailable", async () => {
     const fetchImpl = vi
       .fn()

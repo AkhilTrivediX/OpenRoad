@@ -153,6 +153,14 @@ import {
   jiraOAuthConfigFromEnv,
   type JiraOAuthConfig
 } from "./jira.js";
+import {
+  FetchJiraApiClient,
+  type JiraApiClient
+} from "./jira-api.js";
+import {
+  canConfigureJiraIntegrationSyncWorker,
+  createJiraIntegrationSyncWorker
+} from "./jira-sync-worker.js";
 import type { AuditEvent, TeamStore } from "./team.js";
 
 type CreateOpenRoadServerOptions = {
@@ -162,6 +170,7 @@ type CreateOpenRoadServerOptions = {
   githubAppConfig?: GitHubAppConfig;
   integrationStore?: IntegrationStore;
   integrationSyncWorker?: IntegrationSyncWorker;
+  jiraApiClient?: JiraApiClient;
   jiraOAuthConfig?: JiraOAuthConfig;
   linearApiClient?: LinearApiClient;
   linearOAuthConfig?: LinearOAuthConfig;
@@ -290,6 +299,7 @@ export function createOpenRoadServer({
   githubAppClient = new FetchGitHubAppClient(githubAppConfig),
   integrationStore,
   integrationSyncWorker,
+  jiraApiClient = new FetchJiraApiClient(),
   jiraOAuthConfig = jiraOAuthConfigFromEnv(),
   linearApiClient = new FetchLinearApiClient(),
   linearOAuthConfig = linearOAuthConfigFromEnv(),
@@ -309,6 +319,7 @@ export function createOpenRoadServer({
     githubAppClient,
     githubAppConfig,
     integrationStore,
+    jiraApiClient,
     linearApiClient,
     runIntegrationMutationExclusive,
     store,
@@ -318,7 +329,7 @@ export function createOpenRoadServer({
     integrationSyncWorker ?? createProviderIntegrationSyncWorker(configuredIntegrationSyncWorkers);
   const configuredIntegrationSyncProviders = new Set<IntegrationProvider>(
     integrationSyncWorker
-      ? ["github"]
+      ? ["github", "jira", "linear"]
       : (Object.keys(configuredIntegrationSyncWorkers) as IntegrationProvider[])
   );
 
@@ -373,6 +384,7 @@ function createConfiguredIntegrationSyncWorkers({
   githubAppClient,
   githubAppConfig,
   integrationStore,
+  jiraApiClient,
   linearApiClient,
   runIntegrationMutationExclusive,
   store,
@@ -381,6 +393,7 @@ function createConfiguredIntegrationSyncWorkers({
   githubAppClient: GitHubAppClient;
   githubAppConfig: GitHubAppConfig;
   integrationStore: IntegrationStore | undefined;
+  jiraApiClient: JiraApiClient;
   linearApiClient: LinearApiClient;
   runIntegrationMutationExclusive: NotificationDeliveryRunner;
   store: OpenRoadStore;
@@ -396,6 +409,17 @@ function createConfiguredIntegrationSyncWorkers({
             integrationStore,
             runIntegrationMutationExclusive,
             store
+          })
+        }
+      : {}),
+    ...(canConfigureJiraIntegrationSyncWorker(tokenVault)
+      ? {
+          jira: createJiraIntegrationSyncWorker({
+            integrationStore,
+            jiraApiClient,
+            runIntegrationMutationExclusive,
+            store,
+            tokenVault
           })
         }
       : {}),
@@ -2543,7 +2567,7 @@ function canProviderLiveSync({
     return syncWorkerConfigured && activeInstallations > 0 && activeCredentials > 0;
   }
 
-  return false;
+  return syncWorkerConfigured && activeInstallations > 0 && activeCredentials > 0;
 }
 
 function canProviderManualSync({
@@ -2569,7 +2593,7 @@ function canProviderManualSync({
     return syncWorkerConfigured && activeInstallations > 0 && activeCredentials > 0 && linkedIssueMappings > 0;
   }
 
-  return false;
+  return syncWorkerConfigured && activeInstallations > 0 && activeCredentials > 0 && linkedIssueMappings > 0;
 }
 
 function getIntegrationStatusText({
@@ -2619,8 +2643,20 @@ function getIntegrationStatusText({
     return "Connected. Link a Linear issue before running manual sync.";
   }
 
+  if (provider === "jira" && canManualSync) {
+    return `Connected. ${linkedIssueMappings} linked issue mapping${linkedIssueMappings === 1 ? "" : "s"} ready for manual sync.`;
+  }
+
+  if (provider === "jira" && activeInstallations > 0 && !syncWorkerConfigured) {
+    return "Connected. The Jira sync worker is not configured for this deployment.";
+  }
+
+  if (provider === "jira" && activeInstallations > 0 && activeCredentials === 0) {
+    return "Connected. Store a Jira credential before running live sync.";
+  }
+
   if (provider === "jira" && activeInstallations > 0) {
-    return "Connected for import and linking. Live background sync is planned for a later slice.";
+    return "Connected. Link a Jira issue before running manual sync.";
   }
 
   if (connection === "attention") {

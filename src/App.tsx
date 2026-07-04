@@ -169,7 +169,7 @@ export function App() {
     createStandaloneIntegrationStatus(resolveInitialWorkspaceId(loadResult.state, loadSelectedWorkspaceId()))
   );
   const [integrationActionMessage, setIntegrationActionMessage] = useState("");
-  const [syncingProvider, setSyncingProvider] = useState<"github" | "linear" | undefined>();
+  const [syncingProvider, setSyncingProvider] = useState<"github" | "jira" | "linear" | undefined>();
   const [exportPreview, setExportPreview] = useState("");
   const [importDraft, setImportDraft] = useState("");
   const [isCreatingWorkspace, setIsCreatingWorkspace] = useState(false);
@@ -571,7 +571,9 @@ export function App() {
   }
 
   async function syncProviderLinkedIssues(provider: IntegrationProviderStatus) {
-    if (provider.provider !== "github" && provider.provider !== "linear") return;
+    if (provider.provider !== "github" && provider.provider !== "jira" && provider.provider !== "linear") {
+      return;
+    }
     const installationId = provider.accounts[0]?.id;
     if (!installationId || syncingProvider) return;
 
@@ -3698,22 +3700,18 @@ export function App() {
                         <span className={`status-badge ${getProviderTone(provider)}`}>
                           {getProviderConnectionLabel(provider)}
                         </span>
-                        {provider.provider === "github" || provider.provider === "linear" ? (
-                          <button
-                            aria-label={`${provider.label} sync linked issues`}
-                            className="secondary-action compact provider-action"
-                            disabled={
-                              !provider.capabilities.manualSync || syncingProvider === provider.provider
-                            }
-                            onClick={() => void syncProviderLinkedIssues(provider)}
-                            type="button"
-                          >
-                            <RotateCcw aria-hidden="true" size={14} />
-                            {syncingProvider === provider.provider ? "Syncing..." : "Sync linked issues"}
-                          </button>
-                        ) : (
-                          <span className="provider-action-note">Live sync later</span>
-                        )}
+                        <button
+                          aria-label={`${provider.label} sync linked issues`}
+                          className="secondary-action compact provider-action"
+                          disabled={
+                            !provider.capabilities.manualSync || syncingProvider === provider.provider
+                          }
+                          onClick={() => void syncProviderLinkedIssues(provider)}
+                          type="button"
+                        >
+                          <RotateCcw aria-hidden="true" size={14} />
+                          {syncingProvider === provider.provider ? "Syncing..." : "Sync linked issues"}
+                        </button>
                       </div>
 
                       <details className="provider-details">

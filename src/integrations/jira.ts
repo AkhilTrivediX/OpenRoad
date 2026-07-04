@@ -117,7 +117,10 @@ export function parseJiraIssuePayload(value: unknown): JiraIssue {
   const title = requireText(getString(fields.summary) ?? getString(value.summary), "Jira issue summary");
   const project = parseJiraProject(fields.project ?? value.project);
   const status = parseJiraStatus(fields.status ?? value.status);
-  const url = getString(value.browseUrl) ?? getString(value.url) ?? getString(value.self) ?? `jira:${key}`;
+  const url = normalizeExternalUrl(
+    getString(value.browseUrl) ?? getString(value.url) ?? getString(value.self),
+    `jira:${key}`
+  );
 
   return {
     assignee: parseJiraPerson(fields.assignee ?? value.assignee),
@@ -514,6 +517,20 @@ function getString(value: unknown) {
   if (typeof value === "string") return value.trim() || undefined;
   if (typeof value === "number" && Number.isFinite(value)) return String(value);
   return undefined;
+}
+
+function normalizeExternalUrl(value: string | undefined, fallback: string) {
+  if (!value) return fallback;
+
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:" && url.protocol !== "http:") return fallback;
+    url.search = "";
+    url.hash = "";
+    return url.toString();
+  } catch {
+    return fallback;
+  }
 }
 
 function requireText(value: string | undefined, label: string) {

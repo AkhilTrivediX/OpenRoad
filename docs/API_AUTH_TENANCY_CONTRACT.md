@@ -126,6 +126,8 @@ Jira issue import is workspace-scoped and requires workspace write permission. I
 
 Jira OAuth setup requires `integration:manage`, which is reserved for local owners/admins and workspace owners. It returns a safe Atlassian authorization URL and setup state, but does not exchange OAuth codes or persist tokens.
 
+Jira live sync requires a queued sync job, an active Jira installation, an active encrypted Jira credential with `read:external`, and the private sync runner. It fetches already-linked issues server-side through Jira Cloud REST and must never return access tokens, authorization headers, encrypted credential internals, or raw Jira REST payloads.
+
 Provider credential create/list/revoke routes require `integration:manage`, which is reserved for local owners/admins and workspace owners. Credential storage requires `OPENROAD_TOKEN_ENCRYPTION_KEY`; credentials must be scoped to an active installation in the same workspace and provider. Responses return only metadata and never return access tokens, refresh tokens, ciphertext, IVs, tags, or encryption key material.
 
 Integration sync job enqueue routes require `integration:manage`, which is reserved for local owners/admins and workspace owners. Jobs must be scoped to an active installation in the same workspace and provider. Responses return sanitized job metadata and never return provider tokens, encrypted credentials, raw provider payloads, webhook signatures, request headers, or request bodies. Concurrent integration metadata writes are serialized inside one Node process while OpenRoad uses file-backed stores.
@@ -138,7 +140,7 @@ Integration sync job enqueue routes require `integration:manage`, which is reser
 
 - `POST /api/openroad/integrations/sync/run`
 
-The sync runner route requires global owner/admin write access. It auto-configures a GitHub worker when GitHub App credentials are available and a Linear worker when `OPENROAD_TOKEN_ENCRYPTION_KEY` plus an active Linear credential are available. It stays disabled with `503 not_configured` when no server-side integration sync worker adapter can be configured. The runner claims due queued or stale-running jobs, processes them server-side, redacts worker failure text before persistence, and returns sanitized processing counts.
+The sync runner route requires global owner/admin write access. It auto-configures a GitHub worker when GitHub App credentials are available and Linear/Jira workers when `OPENROAD_TOKEN_ENCRYPTION_KEY` plus active provider credentials are available. It stays disabled with `503 not_configured` when no server-side integration sync worker adapter can be configured. The runner claims due queued or stale-running jobs, processes them server-side, redacts worker failure text before persistence, and returns sanitized processing counts.
 
 The GitHub webhook route is not authorized by OpenRoad actor headers. It is provider-signature protected: the server requires `OPENROAD_GITHUB_APP_WEBHOOK_SECRET` and verifies `X-Hub-Signature-256` against the raw request body with HMAC-SHA256 before parsing JSON or mutating state.
 
@@ -163,6 +165,7 @@ $env:OPENROAD_JIRA_AUTH_BASE_URL="https://auth.atlassian.com"
 $env:OPENROAD_JIRA_CLIENT_ID="jira-client-id"
 $env:OPENROAD_JIRA_CLIENT_SECRET="replace-with-jira-client-secret"
 $env:OPENROAD_JIRA_REDIRECT_URI="https://openroad.example.com/api/openroad/integrations/jira/oauth/callback"
+$env:OPENROAD_JIRA_API_BASE_URL="https://api.atlassian.com/ex/jira"
 $env:OPENROAD_TRUST_PROXY_HEADERS="false"
 $env:OPENROAD_SINGLE_USER_MODE="false"
 ```

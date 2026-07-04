@@ -47,6 +47,7 @@ $env:OPENROAD_JIRA_AUTH_BASE_URL="https://auth.atlassian.com"
 $env:OPENROAD_JIRA_CLIENT_ID=""
 $env:OPENROAD_JIRA_CLIENT_SECRET=""
 $env:OPENROAD_JIRA_REDIRECT_URI=""
+$env:OPENROAD_JIRA_API_BASE_URL="https://api.atlassian.com/ex/jira"
 $env:OPENROAD_SINGLE_USER_MODE="false"
 $env:OPENROAD_TRUST_PROXY_HEADERS="false"
 $env:PORT="4173"
@@ -80,6 +81,7 @@ $env:OPENROAD_JIRA_AUTH_BASE_URL="https://auth.atlassian.com"
 $env:OPENROAD_JIRA_CLIENT_ID=""
 $env:OPENROAD_JIRA_CLIENT_SECRET=""
 $env:OPENROAD_JIRA_REDIRECT_URI=""
+$env:OPENROAD_JIRA_API_BASE_URL="https://api.atlassian.com/ex/jira"
 $env:OPENROAD_SINGLE_USER_MODE="false"
 $env:OPENROAD_TRUST_PROXY_HEADERS="false"
 $env:PORT="4173"
@@ -193,7 +195,7 @@ OpenRoad stores provider-neutral sync jobs in `openroad-integrations.json` and e
 - `POST /api/openroad/workspaces/:workspaceId/integrations/:provider/sync/jobs`
 - `POST /api/openroad/integrations/sync/run`
 
-The enqueue endpoint requires `integration:manage`. The runner endpoint requires global owner/admin write access. When GitHub App credentials are configured, OpenRoad auto-wires a GitHub worker for already-linked issue mappings; without an available worker, the runner returns `503 not_configured`. Jobs contain scoped metadata and bounded, redacted summaries only; they must not contain provider tokens, encrypted credential payloads, raw provider payloads, webhook signatures, request headers, or request bodies.
+The enqueue endpoint requires `integration:manage`. The runner endpoint requires global owner/admin write access. When GitHub App credentials are configured, OpenRoad auto-wires a GitHub worker for already-linked issue mappings. When `OPENROAD_TOKEN_ENCRYPTION_KEY` and active provider credentials are configured, OpenRoad auto-wires Linear and Jira workers for already-linked issue mappings. Without an available worker, the runner returns `503 not_configured`. Jobs contain scoped metadata and bounded, redacted summaries only; they must not contain provider tokens, encrypted credential payloads, raw provider payloads, webhook signatures, request headers, or request bodies.
 
 While OpenRoad uses file-backed integration metadata, integration writes are serialized inside one Node process. Running jobs receive a lease and can be reclaimed after the lease expires if a process crashes mid-run. Multi-process/distributed locking remains future database or external queue work.
 
@@ -296,7 +298,7 @@ For local single-user mode without `OPENROAD_ADMIN_TOKEN`, omit `--admin-token`;
 - OAuth/session auth is not implemented.
 - Team metadata is file-backed, not managed SQL.
 - Trusted proxy headers are disabled by default.
-- Payload-backed GitHub issue import, GitHub App installation verification, live issue fetch, signed webhooks, safe disconnect APIs, encrypted server-only provider credential storage, provider-neutral background sync job metadata, GitHub and Linear workers for already-linked issue mappings, payload-backed Linear issue import, payload-backed Jira issue import, requester notification outbox/preferences, and a server-side JSONL notification delivery handoff exist; OAuth callback exchange, Jira live sync, Linear/Jira webhooks, provider write-back, direct email/provider notification delivery, conflict UI, and billing are not implemented.
+- Payload-backed GitHub issue import, GitHub App installation verification, live issue fetch, signed webhooks, safe disconnect APIs, encrypted server-only provider credential storage, provider-neutral background sync job metadata, GitHub/Linear/Jira workers for already-linked issue mappings, payload-backed Linear issue import, payload-backed Jira issue import, requester notification outbox/preferences, and a server-side JSONL notification delivery handoff exist; OAuth callback exchange, Linear/Jira webhooks, provider write-back, direct email/provider notification delivery, conflict UI, and billing are not implemented.
 - Docker images are build-local by default; release manifests can record publishing metadata, but registry publishing infrastructure is not bundled yet.
 - Signed artifact infrastructure is not bundled yet; release manifests record signing as not configured unless an operator supplies signing metadata.
 - Named Docker volume backup requires an operator copy step or a future packaged volume helper.

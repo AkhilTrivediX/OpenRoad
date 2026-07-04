@@ -1,6 +1,6 @@
 # Jira Issue Sync
 
-OpenRoad supports a first Jira integration slice that keeps Jira complexity outside the core OpenRoad domain.
+OpenRoad supports Jira import, linking, encrypted credential storage, and live sync while keeping Jira complexity outside the core OpenRoad domain.
 
 ## Implemented
 
@@ -11,6 +11,7 @@ OpenRoad supports a first Jira integration slice that keeps Jira complexity outs
 - Workspace-scoped installation metadata.
 - Encrypted server-only credential records through the provider-neutral credential API when `OPENROAD_TOKEN_ENCRYPTION_KEY` is configured.
 - Provider-neutral background sync jobs for active Jira installations.
+- Live Jira Cloud REST sync for already-linked issue mappings through the private sync runner when an active encrypted Jira credential is stored.
 - Provider/id-scoped integration actors, for example `jira:jira-install-jira-cloud-id`.
 - Audit events for Jira issue import/update.
 
@@ -31,6 +32,7 @@ $env:OPENROAD_JIRA_AUTH_BASE_URL="https://auth.atlassian.com"
 $env:OPENROAD_JIRA_CLIENT_ID="jira-client-id"
 $env:OPENROAD_JIRA_CLIENT_SECRET="replace-with-jira-client-secret"
 $env:OPENROAD_JIRA_REDIRECT_URI="https://openroad.example.com/api/openroad/integrations/jira/oauth/callback"
+$env:OPENROAD_JIRA_API_BASE_URL="https://api.atlassian.com/ex/jira"
 ```
 
 The setup endpoint returns:
@@ -114,13 +116,15 @@ Credential storage requires `integration:manage`, an active Jira installation in
 
 `POST /api/openroad/workspaces/:workspaceId/integrations/jira/sync/jobs`
 
-The endpoint queues provider-neutral sync jobs for active Jira installations. The private runner is `POST /api/openroad/integrations/sync/run`, but live Jira REST workers remain deferred.
+The endpoint queues provider-neutral sync jobs for active Jira installations. The private runner is `POST /api/openroad/integrations/sync/run`.
+
+When `OPENROAD_TOKEN_ENCRYPTION_KEY` is configured and an active Jira credential exists for the installation, the server auto-wires a Jira sync worker. The worker refreshes already-linked Jira issue mappings only. It does not search projects, import unmapped Jira issues, or write back to Jira.
+
+The Jira REST client defaults to `https://api.atlassian.com/ex/jira/{cloudId}/rest/api/2/issue/{issueIdOrKey}` and can be pointed at a fake/self-host test endpoint with `OPENROAD_JIRA_API_BASE_URL`. It uses OAuth bearer authorization server-side and requests a bounded field set for issue sync. Jira `429`, `408`, `409`, and `5xx` responses become retryable sync failures with bounded backoff; malformed responses fail without persisting raw provider payloads.
 
 ## Deferred
 
 - OAuth callback and token exchange.
-- Live Jira REST fetch.
 - Jira webhook endpoint and signature/idempotency handling.
-- Background sync jobs.
 - Conflict UI.
 - Full browser connect/import/disconnect flows and Jira sync logs.

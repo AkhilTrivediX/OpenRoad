@@ -41,6 +41,7 @@ describe("openroad assistant helpers", () => {
 
   it("ranks duplicate suggestions with specific explanations and excludes unsafe candidates", () => {
     const selected = createRequest({
+      description: "Users cannot see API rate limits before requests fail.",
       id: "api-limits",
       requester: "CLI user",
       source: "Portal",
@@ -71,7 +72,16 @@ describe("openroad assistant helpers", () => {
       }),
       merged,
       createRequest({
+        description: "Single-page guide styling is hard to scan.",
+        id: "tag-only-api",
+        requester: "Docs reader",
+        source: "Email",
+        tags: ["api"],
+        title: "Reader color contrast"
+      }),
+      createRequest({
         id: "theme-request",
+        description: "Documentation theme preference.",
         tags: ["docs"],
         title: "Dark theme"
       })
@@ -112,13 +122,16 @@ describe("openroad assistant helpers", () => {
     );
 
     expect(suggestion).toMatchObject({
-      publicSummary: "Bulk export progress is now visible for account admins.",
+      publicSummary:
+        "A product update is ready. Review this private draft and write approved public wording before publishing.",
       requestIds: ["exports"],
       sourceKey: "work:done-work",
       sourceType: "Work",
-      title: "Bulk export progress"
+      title: "Review completed work for changelog"
     });
     expect(suggestion.privateNotes).toContain("Assistant draft; review before publishing.");
+    expect(suggestion.privateNotes).not.toContain("Bulk export progress");
+    expect(suggestion.publicSummary).not.toContain("account admins");
     expect(suggestion.privateNotes).not.toContain("Internal customer escalation detail");
   });
 
@@ -133,10 +146,13 @@ describe("openroad assistant helpers", () => {
       requestIds: ["docs-theme"],
       sourceKey: "manual",
       sourceType: "Manual",
-      title: "Dark mode for docs site update",
+      title: "Review request for changelog",
       workItemIds: []
     });
-    expect(suggestion.publicSummary).toContain("Dark mode for docs site");
+    expect(suggestion.publicSummary).toBe(
+      "A request update may be ready. Review this private draft and write approved public wording before publishing."
+    );
+    expect(suggestion.publicSummary).not.toContain("Dark mode for docs site");
   });
 
   it("builds a complete selected-request assistant bundle from workspace context", () => {
@@ -156,7 +172,7 @@ describe("openroad assistant helpers", () => {
   });
 });
 
-const weakScoreFloor = 20;
+const weakScoreFloor = 44;
 
 function createRequest(overrides: Partial<RequestItem> = {}): RequestItem {
   return {

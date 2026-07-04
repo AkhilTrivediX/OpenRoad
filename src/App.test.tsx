@@ -794,22 +794,30 @@ describe("OpenRoad workspace shell", () => {
 
     const assistant = screen.getByLabelText("Assistant triage");
     expect(within(assistant).getByText("Triage assist")).toBeInTheDocument();
+    const assistantToggle = within(assistant).getByRole("checkbox", {
+      name: "Assistant suggestions"
+    });
+    expect(assistantToggle).toBeChecked();
     expect(within(assistant).getByText("Possible duplicates")).toBeInTheDocument();
     expect(
       screen.queryByRole("complementary", {
-        name: "Selected changelog draft API rate limit visibility"
+        name: "Selected changelog draft Review roadmap item for changelog"
       })
     ).not.toBeInTheDocument();
+    await user.click(assistantToggle);
+    expect(within(assistant).getByText("Assistant suggestions are paused for this session.")).toBeInTheDocument();
+    expect(within(assistant).queryByRole("button", { name: "Create private draft" })).not.toBeInTheDocument();
+    await user.click(assistantToggle);
 
     await user.click(within(assistant).getByRole("button", { name: "Create private draft" }));
     const changelogDetail = screen.getByRole("complementary", {
-      name: "Selected changelog draft API rate limit visibility"
+      name: "Selected changelog draft Review roadmap item for changelog"
     });
 
-    expect(within(changelogDetail).getByLabelText("State for API rate limit visibility")).toHaveValue("Draft");
-    expect(within(changelogDetail).getByLabelText("Visibility for API rate limit visibility")).toHaveValue("Private");
-    expect(within(changelogDetail).getByLabelText("Public wording for API rate limit visibility")).toHaveValue(
-      "Expose usage thresholds before CLI users hit API limits."
+    expect(within(changelogDetail).getByLabelText("State for Review roadmap item for changelog")).toHaveValue("Draft");
+    expect(within(changelogDetail).getByLabelText("Visibility for Review roadmap item for changelog")).toHaveValue("Private");
+    expect(within(changelogDetail).getByLabelText("Public wording for Review roadmap item for changelog")).toHaveValue(
+      "A roadmap update may be ready. Review this private draft and write approved public wording before publishing."
     );
   });
 

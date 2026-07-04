@@ -1149,11 +1149,6 @@ dd {
   padding: 10px;
 }
 
-.assistant-panel .source-history-header small {
-  color: var(--muted);
-  margin-left: auto;
-}
-
 .assistant-summary {
   display: grid;
   gap: 8px;
@@ -1224,6 +1219,32 @@ dd {
 
 .assistant-changelog .secondary-action {
   justify-self: start;
+}
+
+.assistant-toggle {
+  align-items: center;
+  color: var(--muted);
+  display: inline-flex;
+  font-family: var(--label-font);
+  font-size: 11px;
+  gap: 6px;
+  margin-left: auto;
+  text-transform: uppercase;
+}
+
+.assistant-toggle input {
+  accent-color: var(--route);
+  height: 14px;
+  margin: 0;
+  width: 14px;
+}
+
+.assistant-paused {
+  border-left: 2px solid var(--line-strong);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  padding-left: 8px;
 }
 
 .notification-panel .source-history-header small {

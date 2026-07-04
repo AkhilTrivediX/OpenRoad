@@ -38,7 +38,7 @@ export type AssistantTriageSuggestion = {
 };
 
 const maxDuplicateSuggestions = 3;
-const weakDuplicateScore = 30;
+const weakDuplicateScore = 45;
 const stopWords = new Set([
   "and",
   "are",
@@ -120,17 +120,19 @@ export function createAssistantChangelogSuggestion(
     return {
       privateNotes: [
         "Assistant draft; review before publishing.",
-        `Source work: ${doneWork.title}.`,
+        "Source: linked Done work.",
         `Request status: ${request.status}.`,
-        `${request.votes} votes and ${request.comments.length} comments.`
+        `${request.votes} votes and ${request.comments.length} comments.`,
+        "Public wording is intentionally generic until a maintainer writes approved copy."
       ].join(" "),
-      publicSummary: doneWork.description || `${request.title} is ready for users.`,
+      publicSummary:
+        "A product update is ready. Review this private draft and write approved public wording before publishing.",
       reasons: ["Linked Done work", `Request signal: ${request.votes} votes`],
       requestIds: [request.id],
       roadmapItemIds: [],
       sourceKey: `work:${doneWork.id}`,
       sourceType: "Work",
-      title: doneWork.title,
+      title: "Review completed work for changelog",
       workItemIds: [doneWork.id]
     };
   }
@@ -142,15 +144,17 @@ export function createAssistantChangelogSuggestion(
         "Assistant draft; review before publishing.",
         `Roadmap lane: ${roadmapItem.lane}.`,
         `Confidence: ${roadmapItem.confidence}.`,
-        `Request status: ${request.status}.`
+        `Request status: ${request.status}.`,
+        "Public wording is intentionally generic until a maintainer writes approved copy."
       ].join(" "),
-      publicSummary: roadmapItem.summary || `${request.title} is moving forward.`,
+      publicSummary:
+        "A roadmap update may be ready. Review this private draft and write approved public wording before publishing.",
       reasons: [`Linked ${roadmapItem.lane} roadmap item`, `${roadmapItem.confidence} confidence`],
       requestIds: [request.id],
       roadmapItemIds: [roadmapItem.id],
       sourceKey: `roadmap:${roadmapItem.id}`,
       sourceType: "Roadmap",
-      title: roadmapItem.title,
+      title: "Review roadmap item for changelog",
       workItemIds: [...roadmapItem.workItemIds]
     };
   }
@@ -159,15 +163,17 @@ export function createAssistantChangelogSuggestion(
     privateNotes: [
       "Assistant draft; review before publishing.",
       `Request status: ${request.status}.`,
-      `${request.votes} votes and ${request.comments.length} comments.`
+      `${request.votes} votes and ${request.comments.length} comments.`,
+      "Public wording is intentionally generic until a maintainer writes approved copy."
     ].join(" "),
-    publicSummary: `${request.title}: ${summarizeProblem(request)}`,
+    publicSummary:
+      "A request update may be ready. Review this private draft and write approved public wording before publishing.",
     reasons: ["Selected request context", `Request signal: ${request.votes} votes`],
     requestIds: [request.id],
     roadmapItemIds: [],
     sourceKey: "manual",
     sourceType: "Manual",
-    title: `${request.title} update`,
+    title: "Review request for changelog",
     workItemIds: []
   };
 }
@@ -214,6 +220,15 @@ function scoreDuplicateCandidate(
   if (selectedRequest.status === candidate.status) {
     score += 4;
     reasons.push(`Same status: ${candidate.status}`);
+  }
+
+  const sameRequester =
+    normalizeTerm(selectedRequest.requester) === normalizeTerm(candidate.requester);
+  const sameSource = normalizeTerm(selectedRequest.source) === normalizeTerm(candidate.source);
+  const hasTextSignal = titleOverlap.length > 0 || descriptionOverlap.length >= 2;
+  const hasStrongNonTextSignal = tagOverlap.length >= 2 && (sameRequester || sameSource);
+  if (!hasTextSignal && !hasStrongNonTextSignal) {
+    score = Math.min(score, weakDuplicateScore - 1);
   }
 
   return { request: candidate, reasons, score };

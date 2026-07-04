@@ -73,8 +73,10 @@ These headers are for future auth proxy/session integration and tests. Do not en
 - `GET /api/health`
 - `GET /api/openroad/contract`
 - `GET /api/openroad/workspaces/:workspaceId/portal`
+- `POST /api/openroad/workspaces/:workspaceId/portal/requests/:requestId/vote`
+- `POST /api/openroad/workspaces/:workspaceId/portal/requests/:requestId/comments`
 
-Public portal responses use the OpenRoad public projection and must not include requester source, internal comments, hidden comments, private roadmap items, private changelog entries, draft changelog entries, or private notes.
+Public portal responses use the OpenRoad public projection and must not include requester source, internal comments, hidden comments, private roadmap items, private changelog entries, draft changelog entries, or private notes. Public portal write routes must validate portal settings, public request visibility, requester scope, and rate limits before mutation.
 
 ## Private Routes
 

@@ -10,7 +10,7 @@ Each feature must also satisfy `docs/PRODUCTION_READINESS.md` before merging to 
 
 Current stage: Stage 2 Team Beta foundation in progress.
 
-The standalone loop now covers workspaces, requests, triage, internal work, roadmap planning, changelog drafts, public portal preview, local durability, production APIs, basic tenancy boundaries, file-backed team metadata, audit events, self-host operations, and a first app-module boundary. The next production work should harden the public portal surface before adding provider integrations or AI assistance.
+The standalone loop now covers workspaces, requests, triage, internal work, roadmap planning, changelog drafts, public portal preview, local durability, production APIs, basic tenancy boundaries, file-backed team metadata, audit events, self-host operations, a first app-module boundary, and hardened public portal write APIs. The next production work should define the integration adapter boundary before GitHub, Linear, or Jira-specific work.
 
 ## Feature 1: Workspace Shell
 
@@ -287,6 +287,26 @@ Dependencies:
 - Public/private visibility rules must be tested.
 - Auth/requester/public visitor model must be defined.
 - Abuse, moderation, and rate-limit plan must exist.
+
+### Public Portal Hardening
+
+Branch: `feat/public-portal-hardening`
+
+Status: merged to `main`.
+
+Build:
+
+- Server-side public vote and comment endpoints.
+- Requester identity normalization for public actions.
+- Process-local public write rate limit.
+- Public-only mutation responses.
+- Validation for disabled portal settings, private requests, archived requests, and invalid comments.
+
+Acceptance:
+
+- Public writes cannot mutate private or archived requests.
+- Public write responses never expose internal/private portal data.
+- Repeated public writes can be rate-limited before persistence.
 
 ## Feature 8: Integration Adapter Contract
 

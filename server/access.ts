@@ -132,6 +132,18 @@ export const routeProtections: RouteProtection[] = [
     path: "/api/openroad/workspaces/:workspaceId/portal",
     permission: "portal:read",
     scope: "public"
+  },
+  {
+    methods: ["POST"],
+    path: "/api/openroad/workspaces/:workspaceId/portal/requests/:requestId/vote",
+    permission: "portal:interact",
+    scope: "public"
+  },
+  {
+    methods: ["POST"],
+    path: "/api/openroad/workspaces/:workspaceId/portal/requests/:requestId/comments",
+    permission: "portal:interact",
+    scope: "public"
   }
 ];
 

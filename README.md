@@ -99,6 +99,8 @@ The server exposes:
 - `GET /api/openroad/audit-events`
 - `GET /api/openroad/ops/status`
 - `GET /api/openroad/workspaces/:workspaceId/portal`
+- `POST /api/openroad/workspaces/:workspaceId/portal/requests/:requestId/vote`
+- `POST /api/openroad/workspaces/:workspaceId/portal/requests/:requestId/comments`
 
 When `OPENROAD_ADMIN_TOKEN` is configured, private state APIs require `Authorization: Bearer <token>`. The portal API remains public and returns only the public projection. See [API auth and tenancy contract](docs/API_AUTH_TENANCY_CONTRACT.md).
 

@@ -28,6 +28,8 @@ $env:OPENROAD_TEAM_FILE="C:\openroad\openroad-team.json"
 $env:OPENROAD_OWNER_EMAIL="owner@example.com"
 $env:OPENROAD_OWNER_NAME="Workspace Owner"
 $env:OPENROAD_ADMIN_TOKEN="replace-with-long-random-token"
+$env:OPENROAD_PORTAL_RATE_LIMIT_MAX="30"
+$env:OPENROAD_PORTAL_RATE_LIMIT_WINDOW_MS="60000"
 $env:OPENROAD_SINGLE_USER_MODE="false"
 $env:OPENROAD_TRUST_PROXY_HEADERS="false"
 $env:PORT="4173"
@@ -42,6 +44,8 @@ $env:OPENROAD_TEAM_FILE="C:\openroad\openroad-team.json"
 $env:OPENROAD_OWNER_EMAIL="owner@example.com"
 $env:OPENROAD_OWNER_NAME="Workspace Owner"
 $env:OPENROAD_ADMIN_TOKEN="replace-with-long-random-token"
+$env:OPENROAD_PORTAL_RATE_LIMIT_MAX="30"
+$env:OPENROAD_PORTAL_RATE_LIMIT_WINDOW_MS="60000"
 $env:OPENROAD_SINGLE_USER_MODE="false"
 $env:OPENROAD_TRUST_PROXY_HEADERS="false"
 $env:PORT="4173"
@@ -71,6 +75,7 @@ The Compose service:
 - Stores product and team data in the `openroad-data` volume.
 - Runs with `OPENROAD_SINGLE_USER_MODE=false`.
 - Requires `OPENROAD_ADMIN_TOKEN` before startup.
+- Applies process-local public portal write limits from `OPENROAD_PORTAL_RATE_LIMIT_MAX` and `OPENROAD_PORTAL_RATE_LIMIT_WINDOW_MS`.
 
 ## Admin Bootstrap
 
@@ -138,6 +143,7 @@ The smoke command checks:
 - `GET /api/openroad/workspaces/:workspaceId/portal`
 - Private ops API denial without a token when token mode is configured.
 - Private ops API success with `Authorization: Bearer <token>`.
+- Public portal read and write APIs should never return private workspace data.
 
 For local single-user mode without `OPENROAD_ADMIN_TOKEN`, omit `--admin-token`; the command expects private ops status to be readable by the local owner.
 
@@ -177,6 +183,7 @@ For local single-user mode without `OPENROAD_ADMIN_TOKEN`, omit `--admin-token`;
 - Keep `OPENROAD_TRUST_PROXY_HEADERS=false` unless a trusted reverse proxy is enforcing identity headers.
 - Do not publish `/data`, backup directories, or restore-safety directories.
 - Treat backup archives as sensitive because they contain requester, workspace, membership, and audit data.
+- Tune public portal rate limits for the deployment shape. Current limits are process-local and reset on restart.
 
 ## Current Limits
 
@@ -186,3 +193,4 @@ For local single-user mode without `OPENROAD_ADMIN_TOKEN`, omit `--admin-token`;
 - Background jobs, webhooks, provider tokens, and billing are not implemented.
 - Docker images are build-local only; publishing and signed release artifacts are future release work.
 - Named Docker volume backup requires an operator copy step or a future packaged volume helper.
+- Public portal rate limits are in-memory per Node process; distributed deployments need a shared limiter in a future slice.

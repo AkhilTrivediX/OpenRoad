@@ -15,7 +15,7 @@ import {
   type RequestItem,
   type RoadmapItem
 } from "../src/domain/openroad";
-import { createOpenRoadServer } from "./http";
+import { InMemoryPortalRateLimiter, createOpenRoadServer, type PortalRateLimiter } from "./http";
 import { FileOpenRoadStore } from "./store";
 import { FileTeamStore } from "./team";
 import type { AuthOptions } from "./access";
@@ -335,6 +335,194 @@ describe("OpenRoad production server", () => {
     expect(text).not.toContain("Secret private notes");
   });
 
+  it("records public portal votes through a public-only response projection", async () => {
+    const { store, url } = await startTestServer();
+    const state = createStateWithPrivatePortalData();
+    await store.replaceState(state);
+
+    const response = await fetchJson(`${url}/api/openroad/workspaces/acme/portal/requests/public-request/vote`, {
+      body: JSON.stringify({ requester: { id: "visitor-1", name: "Visitor One" } }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const persisted = await store.load();
+    const request = persisted.state.workspaces[0].requests.find((item) => item.id === "public-request");
+
+    expect(response.status).toBe(200);
+    expect(response.body.request).toMatchObject({
+      id: "public-request",
+      votes: state.workspaces[0].requests[0].votes + 1
+    });
+    expect(JSON.stringify(response.body)).not.toContain("Internal comment");
+    expect(JSON.stringify(response.body)).not.toContain("Hidden comment");
+    expect(JSON.stringify(response.body)).not.toContain("Secret requester");
+    expect(request?.votes).toBe(state.workspaces[0].requests[0].votes + 1);
+  });
+
+  it("records public portal comments without exposing private comments", async () => {
+    const { store, url } = await startTestServer();
+    await store.replaceState(createStateWithPrivatePortalData());
+
+    const response = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/portal/requests/public-request/comments`,
+      {
+        body: JSON.stringify({
+          body: "This would help our support team.",
+          requester: { id: "visitor-2", name: "Customer lead" }
+        }),
+        headers: { "Content-Type": "application/json" },
+        method: "POST"
+      }
+    );
+    const persisted = await store.load();
+    const request = persisted.state.workspaces[0].requests.find((item) => item.id === "public-request");
+    const comment = request?.comments.find((item) => item.body === "This would help our support team.");
+
+    expect(response.status).toBe(201);
+    expect(response.body.request.comments).toContainEqual(
+      expect.objectContaining({
+        author: "Customer lead",
+        body: "This would help our support team."
+      })
+    );
+    expect(JSON.stringify(response.body)).not.toContain("Internal comment");
+    expect(JSON.stringify(response.body)).not.toContain("Hidden comment");
+    expect(comment).toMatchObject({
+      author: "Customer lead",
+      visibility: "Public"
+    });
+  });
+
+  it("rejects public portal writes for private, archived, or disabled targets", async () => {
+    const { store, url } = await startTestServer();
+    const state = createStateWithPrivatePortalData();
+    await store.replaceState(state);
+
+    const privateRequest = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/portal/requests/private-request/vote`,
+      {
+        body: JSON.stringify({ requester: { id: "visitor" } }),
+        headers: { "Content-Type": "application/json" },
+        method: "POST"
+      }
+    );
+
+    await store.replaceState({
+      ...state,
+      workspaces: [
+        {
+          ...state.workspaces[0],
+          requests: state.workspaces[0].requests.map((request) =>
+            request.id === "public-request" ? { ...request, archived: true } : request
+          )
+        },
+        ...state.workspaces.slice(1)
+      ]
+    });
+    const archivedRequest = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/portal/requests/public-request/vote`,
+      {
+        body: JSON.stringify({ requester: { id: "visitor" } }),
+        headers: { "Content-Type": "application/json" },
+        method: "POST"
+      }
+    );
+
+    await store.replaceState({
+      ...state,
+      workspaces: [
+        {
+          ...state.workspaces[0],
+          portal: { ...state.workspaces[0].portal, allowVoting: false }
+        },
+        ...state.workspaces.slice(1)
+      ]
+    });
+    const disabledVoting = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/portal/requests/public-request/vote`,
+      {
+        body: JSON.stringify({ requester: { id: "visitor" } }),
+        headers: { "Content-Type": "application/json" },
+        method: "POST"
+      }
+    );
+
+    expect(privateRequest.status).toBe(404);
+    expect(archivedRequest.status).toBe(404);
+    expect(disabledVoting.status).toBe(403);
+  });
+
+  it("validates public portal comments and honors disabled commenting", async () => {
+    const { store, url } = await startTestServer();
+    const state = createStateWithPrivatePortalData();
+    await store.replaceState(state);
+
+    const blank = await fetchJson(`${url}/api/openroad/workspaces/acme/portal/requests/public-request/comments`, {
+      body: JSON.stringify({ body: "   ", requester: { id: "visitor" } }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const oversized = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/portal/requests/public-request/comments`,
+      {
+        body: JSON.stringify({ body: "x".repeat(1_201), requester: { id: "visitor" } }),
+        headers: { "Content-Type": "application/json" },
+        method: "POST"
+      }
+    );
+
+    await store.replaceState({
+      ...state,
+      workspaces: [
+        {
+          ...state.workspaces[0],
+          portal: { ...state.workspaces[0].portal, allowComments: false }
+        },
+        ...state.workspaces.slice(1)
+      ]
+    });
+    const disabled = await fetchJson(`${url}/api/openroad/workspaces/acme/portal/requests/public-request/comments`, {
+      body: JSON.stringify({ body: "Valid but disabled", requester: { id: "visitor" } }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+
+    expect(blank.status).toBe(400);
+    expect(blank.body.error.code).toBe("invalid_request");
+    expect(oversized.status).toBe(400);
+    expect(oversized.body.error.code).toBe("invalid_request");
+    expect(disabled.status).toBe(403);
+  });
+
+  it("rate limits public portal writes before persistence", async () => {
+    const { store, url } = await startTestServer({
+      portalRateLimiter: new InMemoryPortalRateLimiter({ maxRequests: 1, windowMs: 60_000 })
+    });
+    const state = createStateWithPrivatePortalData();
+    await store.replaceState(state);
+    const vote = {
+      body: JSON.stringify({ requester: { id: "visitor-rate-limit" } }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    };
+
+    const first = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/portal/requests/public-request/vote`,
+      vote
+    );
+    const second = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/portal/requests/public-request/vote`,
+      vote
+    );
+    const persisted = await store.load();
+    const request = persisted.state.workspaces[0].requests.find((item) => item.id === "public-request");
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(429);
+    expect(second.body.error.code).toBe("rate_limited");
+    expect(request?.votes).toBe(state.workspaces[0].requests[0].votes + 1);
+  });
+
   it("returns session and workspace lists filtered to the current actor", async () => {
     const { url } = await startTestServer({
       auth: { singleUserMode: false, trustProxyHeaders: true }
@@ -480,7 +668,9 @@ describe("OpenRoad production server", () => {
   });
 });
 
-async function startTestServer(options: { auth?: AuthOptions } = {}) {
+async function startTestServer(
+  options: { auth?: AuthOptions; portalRateLimiter?: PortalRateLimiter } = {}
+) {
   const directory = await mkdtemp(join(tmpdir(), "openroad-server-"));
   const distDir = join(directory, "dist");
   await mkdir(join(distDir, "assets"), { recursive: true });
@@ -497,6 +687,7 @@ async function startTestServer(options: { auth?: AuthOptions } = {}) {
     auth: options.auth,
     distDir,
     logger: { error: vi.fn(), log: vi.fn() },
+    portalRateLimiter: options.portalRateLimiter,
     store,
     teamStore
   });

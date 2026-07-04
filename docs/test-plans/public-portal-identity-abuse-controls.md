@@ -98,8 +98,9 @@ As a self-host OpenRoad operator, I can expose a public portal where visitors ca
 - Acceptance criteria status: Passed for schema migration, persisted public voter keys, visitor-aware public projections, idempotent duplicate votes, cookie/header visitor identity, existing portal validation, rate limiting, and private-data projection boundaries.
 - Commands run:
   - `pnpm vitest run src/domain/openroad.test.ts server/http.test.ts server/store.test.ts`: 92 tests passed.
+  - `pnpm vitest run scripts/openroad-release.test.mjs`: 6 tests passed.
   - `pnpm check`: 230 tests passed; client and server production builds passed.
-  - `pnpm release:verify`: dry-run release manifest generated for commit `58763b27c04855465896b61afaf922699620f132`.
+  - `pnpm release:verify`: dry-run release manifest generated; rollback data-migration note reports OpenRoad state schema `6`.
   - Built-server smoke on port `4298`: `pnpm ops:smoke` passed; direct public portal read, cookie-backed vote, duplicate vote dedupe, and visitor-header read checks passed.
 - Browser/viewports tested: No UI changes planned.
 - Accessibility checks: No UI changes planned.

@@ -58,7 +58,14 @@ describe("openroad release operations", () => {
       docker: { mode: "dry-run" },
       manifestVersion: 1,
       product: { name: "openroad", private: true, version: "0.1.0-rc.1" },
-      release: { channel: "rc", commit: "abc123", version: "0.1.0-rc.1" },
+      release: {
+        channel: "rc",
+        commit: "abc123",
+        rollback: {
+          dataMigration: expect.stringContaining("OpenRoad state schema 6")
+        },
+        version: "0.1.0-rc.1"
+      },
       signing: { mode: "not-configured" }
     });
     expect(result.manifest.gates.map((gate) => gate.id)).toEqual([
@@ -147,10 +154,12 @@ async function writeBuildArtifacts(root) {
   const outputFile = join(root, ".openroad", "releases", "candidate.json");
   await mkdir(join(root, "dist", "assets"), { recursive: true });
   await mkdir(join(root, "server-dist", "server"), { recursive: true });
+  await mkdir(join(root, "src", "domain"), { recursive: true });
   await writeFile(join(root, "package.json"), JSON.stringify({ name: "openroad", private: true, version: "0.1.0" }));
   await writeFile(join(root, "dist", "index.html"), "<div>OpenRoad</div>");
   await writeFile(assetFile, "console.log('ok');");
   await writeFile(join(root, "server-dist", "server", "index.js"), "export {};");
+  await writeFile(join(root, "src", "domain", "openroad.ts"), "export const openRoadSchemaVersion = 6;");
   return { assetFile, outputFile };
 }
 

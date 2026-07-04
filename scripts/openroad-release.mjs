@@ -37,6 +37,7 @@ export async function createReleaseManifest(options = {}) {
     rootDir,
     strict: options.strict !== false
   });
+  const dataMigration = options.dataMigration ?? (await resolveDataMigrationNote(rootDir));
   const manifest = {
     artifacts,
     docker: resolveDockerPlan(options),
@@ -53,7 +54,7 @@ export async function createReleaseManifest(options = {}) {
       commit,
       rollback: {
         command: "restore previous app build or image, restore backup if data changed, then run pnpm ops:smoke",
-        dataMigration: "none expected for this release manifest slice"
+        dataMigration
       },
       supportWindow: supportWindowForChannel(channel),
       version
@@ -244,6 +245,25 @@ function resolveSigningPlan(options) {
     mode: "not-configured",
     reason: "No signing key id was supplied. Do not claim signed artifacts for this release."
   };
+}
+
+async function resolveDataMigrationNote(rootDir) {
+  const schemaVersion = await readOpenRoadStateSchemaVersion(rootDir);
+  if (schemaVersion !== undefined) {
+    return `OpenRoad state schema ${schemaVersion}; automatic migrations may run on load. Back up state, integration, and team files before upgrade, and restore a pre-upgrade backup when rolling back across schema versions.`;
+  }
+
+  return "Review feature evidence and operator notes for data migration requirements before deploy.";
+}
+
+async function readOpenRoadStateSchemaVersion(rootDir) {
+  try {
+    const source = await readFile(join(rootDir, "src", "domain", "openroad.ts"), "utf8");
+    const match = source.match(/openRoadSchemaVersion\s*=\s*(\d+)/);
+    return match ? Number.parseInt(match[1], 10) : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function supportWindowForChannel(channel) {

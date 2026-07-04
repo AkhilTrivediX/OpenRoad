@@ -491,12 +491,15 @@ Build:
 - Explanation UI for suggestions.
 - Deterministic local-only assistant engine for the first production-safe slice.
 - Explicit approval before creating a private changelog draft.
+- Session-level pause control for assistant suggestions.
+- Generic changelog public fields until a maintainer writes approved copy.
 
 Acceptance:
 
 - AI never silently changes source-of-truth data.
 - Every AI action is inspectable and requires human approval.
 - No assistant suggestion is persisted or sent to external model APIs in this slice.
+- Assistant-generated changelog public fields do not copy private request, work, or roadmap source text.
 
 ## Feature 14: Public Release Operations
 

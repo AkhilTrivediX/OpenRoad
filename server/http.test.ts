@@ -478,7 +478,7 @@ describe("OpenRoad production server", () => {
           })
         ),
         headers: {
-          ...integrationActorHeaders("acme", "github-install"),
+          ...integrationActorHeaders("acme", "github:github-install"),
           "Content-Type": "application/json"
         },
         method: "POST"
@@ -493,7 +493,22 @@ describe("OpenRoad production server", () => {
           })
         ),
         headers: {
-          ...integrationActorHeaders("acme", "github-install"),
+          ...integrationActorHeaders("acme", "github:github-install"),
+          "Content-Type": "application/json"
+        },
+        method: "POST"
+      }
+    );
+    const wrongProviderIntegration = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/github/issues/import`,
+      {
+        body: JSON.stringify(
+          gitHubImportPayload({
+            issue: gitHubIssuePayload({ node_id: "I_kwDOGH127", number: 46 })
+          })
+        ),
+        headers: {
+          ...integrationActorHeaders("acme", "linear:linear-install"),
           "Content-Type": "application/json"
         },
         method: "POST"
@@ -505,6 +520,7 @@ describe("OpenRoad production server", () => {
     expect(contributorWrite.status).toBe(201);
     expect(integrationWrite.status).toBe(201);
     expect(integrationCrossWorkspace.status).toBe(403);
+    expect(wrongProviderIntegration.status).toBe(403);
   });
 
   it("rejects invalid GitHub imports without mutating state or integration metadata", async () => {
@@ -1088,7 +1104,7 @@ describe("OpenRoad production server", () => {
           })
         ),
         headers: {
-          ...integrationActorHeaders("acme", "linear-install"),
+          ...integrationActorHeaders("acme", "linear:linear-install"),
           "Content-Type": "application/json"
         },
         method: "POST"
@@ -1103,7 +1119,22 @@ describe("OpenRoad production server", () => {
           })
         ),
         headers: {
-          ...integrationActorHeaders("acme", "linear-install"),
+          ...integrationActorHeaders("acme", "linear:linear-install"),
+          "Content-Type": "application/json"
+        },
+        method: "POST"
+      }
+    );
+    const wrongProviderIntegration = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/linear/issues/import`,
+      {
+        body: JSON.stringify(
+          linearImportPayload({
+            issue: linearIssuePayload({ id: "lin-issue-127", identifier: "OPEN-47" })
+          })
+        ),
+        headers: {
+          ...integrationActorHeaders("acme", "github:github-install"),
           "Content-Type": "application/json"
         },
         method: "POST"
@@ -1119,6 +1150,7 @@ describe("OpenRoad production server", () => {
     expect(contributorWrite.status).toBe(201);
     expect(integrationWrite.status).toBe(201);
     expect(integrationCrossWorkspace.status).toBe(403);
+    expect(wrongProviderIntegration.status).toBe(403);
   });
 
   it("reports safe Linear OAuth setup without blocking standalone mode", async () => {

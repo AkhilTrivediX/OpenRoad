@@ -842,6 +842,7 @@ async function handleGitHubIssueImportRequest(
 
     const payload = await readJsonBody(request, 500_000);
     const gitHubPayload = parseGitHubIssueImportPayload(payload, workspaceId);
+    requireIntegrationActorForInstallation(access, gitHubPayload.installation);
     const current = await store.load();
     const workspace = current.state.workspaces.find((item) => item.id === workspaceId);
 
@@ -955,6 +956,7 @@ async function handleLinearIssueImportRequest(
 
     const payload = await readJsonBody(request, 500_000);
     const linearPayload = parseLinearIssueImportPayload(payload, workspaceId);
+    requireIntegrationActorForInstallation(access, linearPayload.installation);
     const current = await store.load();
     const workspace = current.state.workspaces.find((item) => item.id === workspaceId);
 
@@ -1644,6 +1646,36 @@ function requireWorkspaceWriteOrIntegrationSync(access: AccessContext, workspace
   } catch {
     requirePermission(access, "integration:sync", workspaceId);
   }
+}
+
+function requireIntegrationActorForInstallation(
+  access: AccessContext,
+  installation: IntegrationInstallation
+) {
+  if (access.actor.type !== "integration") return;
+
+  const normalizedActorId = normalizeProviderActorId(access.actor.id);
+  const normalizedInstallationId = normalizeProviderActorId(installation.id);
+  const expectedPrefix = `${installation.provider}:`;
+
+  if (
+    access.actor.workspaceId !== installation.workspaceId ||
+    normalizedActorId !== normalizedInstallationId ||
+    !normalizedActorId.startsWith(expectedPrefix)
+  ) {
+    throw new AccessDeniedError(
+      "Integration actor is not allowed to write for this provider installation."
+    );
+  }
+}
+
+function normalizeProviderActorId(value: string) {
+  const normalized = value.trim().toLowerCase();
+  if (normalized.includes(":")) return normalized;
+  if (normalized.startsWith("github-")) return `github:${normalized}`;
+  if (normalized.startsWith("linear-")) return `linear:${normalized}`;
+  if (normalized.startsWith("jira-")) return `jira:${normalized}`;
+  return normalized;
 }
 
 function getVerifiedGitHubInstallation(

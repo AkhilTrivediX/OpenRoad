@@ -163,6 +163,12 @@ export const routeProtections: RouteProtection[] = [
     path: "/api/openroad/workspaces/:workspaceId/integrations/github/app/installations/verify",
     permission: "integration:manage",
     scope: "workspace"
+  },
+  {
+    methods: ["GET"],
+    path: "/api/openroad/workspaces/:workspaceId/integrations/github/issues/live",
+    permission: "workspace:write",
+    scope: "workspace"
   }
 ];
 

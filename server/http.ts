@@ -15,9 +15,13 @@ import {
 } from "./access.js";
 import {
   createPublicPortalSnapshot,
+  createEntityId,
   openRoadReducer,
   openRoadSchemaVersion,
-  type OpenRoadAction
+  type OpenRoadAction,
+  type OpenRoadState,
+  type RequestItem,
+  type Workspace
 } from "../src/domain/openroad.js";
 import {
   OpenRoadStoreError,
@@ -30,6 +34,7 @@ type CreateOpenRoadServerOptions = {
   auth?: AuthOptions;
   distDir?: string;
   logger?: Pick<Console, "error" | "log">;
+  portalRateLimiter?: PortalRateLimiter;
   store: OpenRoadStore;
   teamStore?: TeamStore;
 };
@@ -39,11 +44,27 @@ type ApiErrorCode =
   | "forbidden"
   | "invalid_json"
   | "invalid_method"
+  | "invalid_request"
   | "invalid_state"
   | "future_schema"
   | "not_found"
   | "payload_too_large"
+  | "rate_limited"
   | "server_error";
+
+export type PortalRateLimitOptions = {
+  maxRequests: number;
+  windowMs: number;
+};
+
+export type PortalRateLimitResult = {
+  allowed: boolean;
+  retryAfterSeconds?: number;
+};
+
+export type PortalRateLimiter = {
+  consume(key: string): PortalRateLimitResult;
+};
 
 const jsonHeaders = {
   "Content-Type": "application/json; charset=utf-8",
@@ -78,10 +99,52 @@ const openRoadActionTypes = new Set([
   "replace-state"
 ]);
 
+type PortalActionKind = "comment" | "vote";
+
+type PortalRequester = {
+  id: string;
+  name: string;
+  rateLimitKey: string;
+};
+
+export class InMemoryPortalRateLimiter implements PortalRateLimiter {
+  private readonly buckets = new Map<string, { count: number; resetAt: number }>();
+
+  constructor(private readonly options: PortalRateLimitOptions) {}
+
+  consume(key: string): PortalRateLimitResult {
+    const now = Date.now();
+    const existing = this.buckets.get(key);
+
+    if (!existing || existing.resetAt <= now) {
+      this.buckets.set(key, { count: 1, resetAt: now + this.options.windowMs });
+      return { allowed: true };
+    }
+
+    if (existing.count >= this.options.maxRequests) {
+      return {
+        allowed: false,
+        retryAfterSeconds: Math.max(1, Math.ceil((existing.resetAt - now) / 1000))
+      };
+    }
+
+    existing.count += 1;
+    return { allowed: true };
+  }
+}
+
+export function createPortalRateLimiterFromEnv(env = process.env): PortalRateLimiter {
+  return new InMemoryPortalRateLimiter({
+    maxRequests: positiveInteger(env.OPENROAD_PORTAL_RATE_LIMIT_MAX, 30),
+    windowMs: positiveInteger(env.OPENROAD_PORTAL_RATE_LIMIT_WINDOW_MS, 60_000)
+  });
+}
+
 export function createOpenRoadServer({
   auth,
   distDir = resolve("dist"),
   logger = console,
+  portalRateLimiter = createPortalRateLimiterFromEnv(),
   store,
   teamStore
 }: CreateOpenRoadServerOptions): Server {
@@ -94,7 +157,16 @@ export function createOpenRoadServer({
       const requestUrl = new URL(request.url ?? "/", "http://openroad.local");
 
       if (requestUrl.pathname.startsWith("/api/")) {
-        await handleApiRequest(request, response, requestUrl, store, access, auth, teamStore);
+        await handleApiRequest(
+          request,
+          response,
+          requestUrl,
+          store,
+          access,
+          auth,
+          teamStore,
+          portalRateLimiter
+        );
         return;
       }
 
@@ -119,7 +191,8 @@ async function handleApiRequest(
   store: OpenRoadStore,
   access: AccessContext,
   auth: AuthOptions | undefined,
-  teamStore: TeamStore | undefined
+  teamStore: TeamStore | undefined,
+  portalRateLimiter: PortalRateLimiter
 ) {
   if (requestUrl.pathname === "/api/health") {
     if (request.method !== "GET") {
@@ -189,6 +262,42 @@ async function handleApiRequest(
 
   if (portalMatch) {
     await handlePortalRequest(request, response, requestUrl, store, access, portalMatch[1]);
+    return;
+  }
+
+  const portalVoteMatch = requestUrl.pathname.match(
+    /^\/api\/openroad\/workspaces\/([^/]+)\/portal\/requests\/([^/]+)\/vote$/
+  );
+
+  if (portalVoteMatch) {
+    await handlePortalVoteRequest(
+      request,
+      response,
+      store,
+      access,
+      teamStore,
+      portalRateLimiter,
+      portalVoteMatch[1],
+      portalVoteMatch[2]
+    );
+    return;
+  }
+
+  const portalCommentMatch = requestUrl.pathname.match(
+    /^\/api\/openroad\/workspaces\/([^/]+)\/portal\/requests\/([^/]+)\/comments$/
+  );
+
+  if (portalCommentMatch) {
+    await handlePortalCommentRequest(
+      request,
+      response,
+      store,
+      access,
+      teamStore,
+      portalRateLimiter,
+      portalCommentMatch[1],
+      portalCommentMatch[2]
+    );
     return;
   }
 
@@ -659,12 +768,267 @@ async function resolveStaticPath(assetPath: string, distDir: string) {
   }
 }
 
+async function handlePortalVoteRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  store: OpenRoadStore,
+  access: AccessContext,
+  teamStore: TeamStore | undefined,
+  portalRateLimiter: PortalRateLimiter,
+  encodedWorkspaceId: string,
+  encodedRequestId: string
+) {
+  if (request.method !== "POST") {
+    writeApiError(response, 405, "invalid_method", "This endpoint only supports POST.", access);
+    return;
+  }
+
+  const workspaceId = decodeURIComponent(encodedWorkspaceId);
+  const requestId = decodeURIComponent(encodedRequestId);
+
+  try {
+    const payload = await readJsonBody(request, 10_000);
+    const requester = getPortalRequester(payload, request, workspaceId);
+    const requesterAccess = createRequesterAccess(access, workspaceId, requester.id);
+    requirePermission(requesterAccess, "portal:interact", workspaceId);
+
+    const result = await store.load();
+    const nextState = updatePublicPortalRequest(
+      result.state,
+      workspaceId,
+      requestId,
+      "vote",
+      (requestItem) => ({
+        ...requestItem,
+        hasCurrentUserVote: true,
+        votes: requestItem.votes + 1
+      })
+    );
+    consumePortalRateLimit(portalRateLimiter, requester.rateLimitKey);
+    const state = await store.replaceState(nextState);
+    await recordAuditEvent(teamStore, state, requesterAccess, {
+      summary: `Public portal vote recorded for ${requestId}.`,
+      type: "portal.vote",
+      workspaceId
+    });
+    writeJson(response, 200, getPublicPortalRequestPayload(state, workspaceId, requestId), access);
+  } catch (error) {
+    writeKnownApiError(response, error, access);
+  }
+}
+
+async function handlePortalCommentRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  store: OpenRoadStore,
+  access: AccessContext,
+  teamStore: TeamStore | undefined,
+  portalRateLimiter: PortalRateLimiter,
+  encodedWorkspaceId: string,
+  encodedRequestId: string
+) {
+  if (request.method !== "POST") {
+    writeApiError(response, 405, "invalid_method", "This endpoint only supports POST.", access);
+    return;
+  }
+
+  const workspaceId = decodeURIComponent(encodedWorkspaceId);
+  const requestId = decodeURIComponent(encodedRequestId);
+
+  try {
+    const payload = await readJsonBody(request, 20_000);
+    const requester = getPortalRequester(payload, request, workspaceId);
+    const body = getPortalCommentBody(payload);
+    const requesterAccess = createRequesterAccess(access, workspaceId, requester.id);
+    requirePermission(requesterAccess, "portal:interact", workspaceId);
+
+    const result = await store.load();
+    const nextState = updatePublicPortalRequest(
+      result.state,
+      workspaceId,
+      requestId,
+      "comment",
+      (requestItem) => ({
+        ...requestItem,
+        comments: [
+          ...requestItem.comments,
+          {
+            age: "just now",
+            author: requester.name,
+            body,
+            id: createEntityId("portal-comment"),
+            visibility: "Public"
+          }
+        ]
+      })
+    );
+    consumePortalRateLimit(portalRateLimiter, requester.rateLimitKey);
+    const state = await store.replaceState(nextState);
+    await recordAuditEvent(teamStore, state, requesterAccess, {
+      summary: `Public portal comment recorded for ${requestId}.`,
+      type: "portal.comment",
+      workspaceId
+    });
+    writeJson(response, 201, getPublicPortalRequestPayload(state, workspaceId, requestId), access);
+  } catch (error) {
+    writeKnownApiError(response, error, access);
+  }
+}
+
 function getStatePayload(payload: unknown) {
   if (isRecord(payload) && "state" in payload) {
     return payload.state;
   }
 
   return payload;
+}
+
+function updatePublicPortalRequest(
+  state: OpenRoadState,
+  workspaceId: string,
+  requestId: string,
+  actionKind: PortalActionKind,
+  updater: (requestItem: RequestItem) => RequestItem
+): OpenRoadState {
+  const workspace = state.workspaces.find((item) => item.id === workspaceId);
+
+  if (!workspace) {
+    throw new PortalActionError("not_found", 404, "Workspace was not found.");
+  }
+
+  assertPortalActionAllowed(workspace, requestId, actionKind);
+
+  return {
+    ...state,
+    workspaces: state.workspaces.map((item) =>
+      item.id === workspaceId
+        ? {
+            ...item,
+            requests: item.requests.map((requestItem) =>
+              requestItem.id === requestId ? updater(requestItem) : requestItem
+            )
+          }
+        : item
+    )
+  };
+}
+
+function assertPortalActionAllowed(
+  workspace: Workspace,
+  requestId: string,
+  actionKind: PortalActionKind
+) {
+  if (!workspace.portal.enabled) {
+    throw new PortalActionError("forbidden", 403, "This OpenRoad portal is not accepting public actions.");
+  }
+
+  if (actionKind === "vote" && !workspace.portal.allowVoting) {
+    throw new PortalActionError("forbidden", 403, "This OpenRoad portal is not accepting votes.");
+  }
+
+  if (actionKind === "comment" && !workspace.portal.allowComments) {
+    throw new PortalActionError("forbidden", 403, "This OpenRoad portal is not accepting comments.");
+  }
+
+  const requestItem = workspace.requests.find((item) => item.id === requestId);
+
+  if (!requestItem || requestItem.visibility !== "Public" || requestItem.archived) {
+    throw new PortalActionError("not_found", 404, "Public request was not found.");
+  }
+}
+
+function getPublicPortalRequestPayload(
+  state: OpenRoadState,
+  workspaceId: string,
+  requestId: string
+) {
+  const workspace = state.workspaces.find((item) => item.id === workspaceId);
+  const request = workspace
+    ? createPublicPortalSnapshot(workspace).requests.find((item) => item.id === requestId)
+    : undefined;
+
+  if (!request) {
+    throw new PortalActionError("not_found", 404, "Public request was not found.");
+  }
+
+  return { request, status: "saved" };
+}
+
+function getPortalRequester(
+  payload: unknown,
+  request: IncomingMessage,
+  workspaceId: string
+): PortalRequester {
+  const requester = isRecord(payload) && isRecord(payload.requester) ? payload.requester : {};
+  const remoteAddress = request.socket.remoteAddress ?? "unknown";
+  const headerRequesterId = getSingleHeader(request.headers, "x-openroad-requester-id");
+  const rawId =
+    getBoundedText(requester.id, 120) ??
+    getBoundedText(headerRequesterId, 120) ??
+    `anonymous-${remoteAddress}`;
+  const normalizedId = normalizeIdentifier(rawId) || normalizeIdentifier(`anonymous-${remoteAddress}`);
+  const name =
+    getBoundedText(requester.name, 80) ??
+    getBoundedText(isRecord(payload) ? payload.author : undefined, 80) ??
+    "Portal visitor";
+
+  return {
+    id: normalizedId,
+    name,
+    rateLimitKey: `${workspaceId}:${remoteAddress}:${normalizedId}`
+  };
+}
+
+function getPortalCommentBody(payload: unknown) {
+  if (!isRecord(payload)) {
+    throw new PortalActionError("invalid_request", 400, "Comment payload must be an object.");
+  }
+
+  if (typeof payload.body !== "string") {
+    throw new PortalActionError("invalid_request", 400, "Comment body is required.");
+  }
+
+  const body = payload.body.trim();
+
+  if (!body) {
+    throw new PortalActionError("invalid_request", 400, "Comment body is required.");
+  }
+
+  if (body.length > 1_200) {
+    throw new PortalActionError("invalid_request", 400, "Comment body is too long.");
+  }
+
+  return body;
+}
+
+function consumePortalRateLimit(
+  portalRateLimiter: PortalRateLimiter,
+  key: string
+) {
+  const result = portalRateLimiter.consume(key);
+
+  if (result.allowed) return;
+
+  throw new PortalActionError(
+    "rate_limited",
+    429,
+    `Too many public portal actions. Retry after ${result.retryAfterSeconds ?? 1} seconds.`
+  );
+}
+
+function createRequesterAccess(
+  access: AccessContext,
+  workspaceId: string,
+  requesterId: string
+): AccessContext {
+  return {
+    ...access,
+    actor: {
+      id: requesterId,
+      type: "requester",
+      workspaceId
+    }
+  };
 }
 
 async function readJsonBody(request: IncomingMessage, maxBytes = 2_000_000) {
@@ -707,6 +1071,11 @@ function writeKnownApiError(
   }
 
   if (error instanceof AccessDeniedError) {
+    writeApiError(response, error.status, error.code, error.message, access);
+    return;
+  }
+
+  if (error instanceof PortalActionError) {
     writeApiError(response, error.status, error.code, error.message, access);
     return;
   }
@@ -754,6 +1123,29 @@ function isPathInside(targetPath: string, parentPath: string) {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function getSingleHeader(headers: IncomingMessage["headers"], name: string) {
+  const value = headers[name];
+  if (Array.isArray(value)) return value[0];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function getBoundedText(value: unknown, maxLength: number) {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim();
+  if (!normalized) return undefined;
+  return normalized.slice(0, maxLength);
+}
+
+function normalizeIdentifier(value: string) {
+  return value.trim().toLowerCase().replace(/[^a-z0-9_.:@-]+/g, "-").slice(0, 120);
+}
+
+function positiveInteger(value: string | undefined, fallback: number) {
+  if (!value) return fallback;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 function isOpenRoadActionPayload(value: unknown): value is { action: OpenRoadAction } {
@@ -841,6 +1233,16 @@ function isGlobalAction(action: OpenRoadAction) {
 class ApiBodyError extends Error {
   constructor(
     readonly code: Extract<ApiErrorCode, "invalid_json" | "payload_too_large">,
+    message: string
+  ) {
+    super(message);
+  }
+}
+
+class PortalActionError extends Error {
+  constructor(
+    readonly code: ApiErrorCode,
+    readonly status: number,
     message: string
   ) {
     super(message);

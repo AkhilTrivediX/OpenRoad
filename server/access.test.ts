@@ -28,6 +28,13 @@ describe("OpenRoad API access contract", () => {
         scope: "global"
       })
     );
+    expect(openRoadApiContract.routeProtections).toContainEqual(
+      expect.objectContaining({
+        path: "/api/openroad/workspaces/:workspaceId/portal/requests/:requestId/comments",
+        permission: "portal:interact",
+        scope: "public"
+      })
+    );
   });
 
   it("defaults to single-user owner mode when no admin token is configured", () => {
@@ -61,6 +68,7 @@ describe("OpenRoad API access contract", () => {
 
     expect(context.actor.type).toBe("public-visitor");
     expect(hasPermission(context.actor, "portal:read", "acme")).toBe(true);
+    expect(hasPermission({ id: "requester-1", type: "requester", workspaceId: "acme" }, "portal:interact", "acme")).toBe(true);
     expect(hasPermission(context.actor, "state:read")).toBe(false);
   });
 

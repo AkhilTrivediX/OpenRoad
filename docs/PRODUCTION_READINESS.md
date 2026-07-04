@@ -168,7 +168,7 @@ OpenRoad releases must eventually include:
 
 ## Current Readiness Debt
 
-These are known production gaps after the App Module Decomposition foundation.
+These are known production gaps after the Public Portal Hardening foundation.
 
 - App-level error boundary is still pending.
 - Some UI orchestration still lives inside `App.tsx`; the first helper/module extraction is complete, but component-level splitting remains future work.
@@ -177,19 +177,19 @@ These are known production gaps after the App Module Decomposition foundation.
 - Persistent workspace membership and audit events exist, but OAuth/session auth and invitation flows are not implemented.
 - Backup/restore and local self-host smoke commands exist, but published Docker images and hosted release promotion are not implemented.
 - Observability is limited to process logs; structured operational events and dashboards are pending.
-- Public portal abuse controls, requester identity, rate limits, and notification preferences are pending.
+- Public portal write controls and process-local rate limits exist, but persistent requester identity, notification preferences, and distributed abuse controls are pending.
 - Browser QA is manual rather than automated end-to-end CI.
 
 ## Next Production Move
 
-Next branch: `feat/public-portal-hardening`
+Next branch: `feat/integration-adapter-contract`
 
 Purpose:
 
-- Add public portal rate-limit and abuse-control foundations.
-- Add requester identity boundaries for public actions.
-- Ensure moderation and public/private visibility have server-side tests.
-- Keep portal workflows simple and standalone.
-- Prepare notification preferences without sending email yet.
+- Define provider adapter interfaces for GitHub, Linear, and Jira.
+- Add external object mapping and conflict model without provider-specific UI leakage.
+- Add sync job state and retry contract.
+- Add provider fixture tests.
+- Keep standalone OpenRoad workflows working with zero integrations.
 
-Provider integrations, notifications, and public launch work should build on top of this hardened public surface.
+GitHub, Linear, Jira, notifications, and AI work should build on top of this adapter boundary.

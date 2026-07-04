@@ -99,12 +99,17 @@ As an OpenRoad maintainer, I can cut a release candidate from a clean production
 ## Evidence
 
 - Branch: `feat/public-release-ops`
-- Commit SHAs: pending.
+- Commit SHAs: `5b31595` test plan, `5fe245c` implementation.
 - Date: 2026-07-04.
-- Acceptance criteria status: pending.
-- Commands run: pending.
+- Acceptance criteria status: passed on branch before merge.
+- Commands run:
+  - `pnpm vitest run scripts/openroad-release.test.mjs scripts/openroad-ops.test.mjs` passed 2 files and 14 tests.
+  - `pnpm build; pnpm release:verify` passed; dry-run release manifest included 4 artifacts, Docker `dry-run`, and signing `not-configured`.
+  - `pnpm check; pnpm release:verify` passed 19 test files and 222 tests; production client/server builds passed; release dry-run manifest generated from real build artifacts.
+  - Built-server smoke with integration environment variables unset and admin-token mode passed `health`, `contract`, `portal`, `private-denied`, and `private-token` on retry with direct ops CLI.
+  - `node scripts/openroad-release.mjs candidate --version 0.1.0-rc.1 --channel rc --commit 5fe245c7c28748a30e0b357e743a4ea3f7db2abf --output <temp manifest> --json` wrote a manifest file with 4 artifacts, Docker `dry-run`, signing `not-configured`, and no smoke token/admin-token/requester/provider data.
 - Browser/viewports tested: Not expected unless rendered UI changes.
-- Accessibility checks: pending.
-- Reviewer notes: pending.
+- Accessibility checks: No rendered UI changes. CLI output is direct and release docs are plain Markdown.
+- Reviewer notes: Carson's read-only product-surface audit found the decided feature surfaces present for their current scoped maturity: standalone mode, optional GitHub/Jira/Linear adapters, public portal, requester notifications, local assistant triage, production self-host ops, and release operations. The audit noted this branch needed evidence before production sign-off; this evidence block closes that gap. Remaining larger product gaps stay explicitly tracked: live Linear/Jira sync, notification delivery adapters, public identity/abuse controls, published Docker images/signing infrastructure, hosted deployment automation, and app-level error boundary recovery.
 - Known unresolved risks: Actual Docker registry publishing, artifact signing key management, hosted SaaS deployment automation, billing/admin controls, managed database migrations, and automated browser E2E CI remain future slices unless explicitly implemented in this branch.
 - Rollback notes: No data migration expected; rollback by reverting the branch.

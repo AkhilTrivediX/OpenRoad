@@ -1,6 +1,7 @@
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -145,9 +146,8 @@ describe("openroad release operations", () => {
 });
 
 async function createTempRoot(name) {
-  const root = join(process.env.TMP ?? process.env.TEMP ?? ".", `openroad-release-${Date.now()}-${slug(name)}`);
+  const root = await mkdtemp(join(tmpdir(), `openroad-release-${Date.now()}-${slug(name)}-`));
   tempRoots.push(root);
-  await mkdir(root, { recursive: true });
   return root;
 }
 

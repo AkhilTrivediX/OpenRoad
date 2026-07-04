@@ -123,11 +123,17 @@ As a future self-host admin or team owner, I need OpenRoad APIs to distinguish p
 ## Evidence
 
 - Branch: `feat/api-auth-tenancy-contract`
-- Commit SHA: Pending.
-- Date: Pending.
-- Commands run: Pending.
-- Browser/viewports tested: Pending.
+- Commit SHA: `ae925e6`.
+- Date: 2026-07-04.
+- Commands run:
+  - `pnpm vitest run server/access.test.ts server/http.test.ts server/store.test.ts`: 26 tests passed.
+  - `pnpm check`: 84 tests passed; client and server production builds passed.
+  - Production smoke without `OPENROAD_ADMIN_TOKEN`: health `200`, state `200`, portal `200`.
+  - Production smoke with `OPENROAD_ADMIN_TOKEN`: health `200`, unauthenticated state `403`, authenticated state `200`, portal `200`.
+- Browser/viewports tested:
+  - Production server on port `4193`, `1440x900`: root rendered, body overflow hidden, app shell height matched viewport, no horizontal overflow, operations deck owned scrolling.
+  - Production server on port `4193`, `390x844`: root rendered, body overflow hidden, app shell height matched viewport, no horizontal overflow, operations deck owned scrolling.
 - Accessibility checks: No visual UI changes expected.
-- Reviewer notes: Pending.
+- Reviewer notes: Subagent audit completed read-only; recommendations incorporated for private state route protection, token mode, trusted proxy headers, contract endpoint, and workspace/action permission tests.
 - Known unresolved risks: OAuth/session auth, persistent membership, provider token security, webhook signatures, managed database tenancy, audit events, and hosted CI/CD remain future production slices.
 - Rollback notes: Revert branch; preserve server data JSON.

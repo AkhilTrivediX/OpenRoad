@@ -100,7 +100,7 @@ As a self-host operator exposing a public OpenRoad portal, I need votes and comm
 ## Evidence
 
 - Branch: `feat/public-portal-hardening`
-- Commit SHA: pending.
+- Commit SHA: `33400e9`.
 - Date: 2026-07-04.
 - Acceptance criteria status: Passed for public vote/comment endpoints, public-only responses, disabled/private/archived request handling, validation, and process-local rate limits.
 - Commands run:

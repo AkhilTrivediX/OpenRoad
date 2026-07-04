@@ -179,6 +179,7 @@ const openRoadActionTypes = new Set([
   "replace-changelog-item",
   "delete-changelog-item",
   "replace-portal-settings",
+  "replace-notification-settings",
   "replace-workspace",
   "replace-state"
 ]);

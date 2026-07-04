@@ -136,12 +136,21 @@ As a workspace maintainer, I can open Settings and see whether OpenRoad is runni
 ## Evidence
 
 - Branch: `feat/settings-integrations-ui`
-- Implementation commit SHA: Pending.
-- Date: Pending.
-- Acceptance criteria status: Pending.
-- Commands run: Pending.
-- Browser/viewports tested: Pending.
-- Accessibility checks: Pending.
-- Reviewer notes: Pending.
+- Implementation commit SHA: `848c386f8a53348337341b857a2e3c8f7ef3ce4a`.
+- Date: 2026-07-04.
+- Acceptance criteria status: Passed. Settings keeps standalone mode usable, exposes sanitized provider readiness, enables GitHub manual sync only when supported, keeps Linear/Jira as non-fake future live-sync controls, preserves local data tools, and avoids a new Sync logs navigation item.
+- Commands run:
+  - `pnpm vitest run src/integrations/github.test.ts src/persistence/openroadIntegrations.test.ts src/App.test.tsx server/access.test.ts server/http.test.ts` passed: 5 files, 141 tests.
+  - `pnpm build:server` passed.
+  - `pnpm build:client` passed.
+  - `pnpm check` passed: 25 files, 280 tests, production client/server builds.
+  - `pnpm release:verify` passed and generated the RC manifest dry-run.
+  - `node C:\Users\PC\.agents\skills\impeccable\scripts\detect.mjs --json src\App.tsx src\styles.css` returned `[]`.
+  - Built-server smoke passed against `server-dist/server/index.js` with a fake GitHub App API: `ops:smoke`, unauthenticated status denial, GitHub issue import, sanitized Settings status, manual sync enqueue/run, linked request update, and hostile URL/token redaction were verified.
+- Browser/viewports tested:
+  - Desktop 1440x900 Settings QA passed: no body scroll, bottom status in viewport, no horizontal overflow, Settings visible, provider controls visible, local data buttons stable at 32px.
+  - Mobile 390x844 Settings QA passed: no body scroll, bottom status in viewport, no horizontal overflow, Settings visible, provider action touch targets at 44px.
+- Accessibility checks: Provider actions, recent activity disclosure, and local data tools remain keyboard-reachable; status is conveyed through text plus tone; disabled Linear/Jira actions include nearby operational copy.
+- Reviewer notes: Dalton read-only audit called out auth, sanitization, fallback, and no-clutter risks; follow-up checks added route authorization coverage, sanitized status tests, client fallback parsing, no token-shaped UI assertions, and browser overflow/touch-target QA.
 - Known unresolved risks: OAuth callback exchange, Linear/Jira live workers, provider write-back, full sync/audit timeline, conflict UI, scheduler packaging, and hosted session auth remain later production slices.
-- Rollback notes: Pending.
+- Rollback notes: Revert `848c386f8a53348337341b857a2e3c8f7ef3ce4a` and this evidence commit. No schema migration was introduced; existing OpenRoad state and integration metadata remain compatible. If manual GitHub sync changed request content unexpectedly, restore the pre-branch backup and rerun `pnpm ops:smoke`.

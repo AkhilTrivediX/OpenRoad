@@ -1070,6 +1070,44 @@ describe("OpenRoad production server", () => {
       headers: { "Content-Type": "application/json" },
       method: "POST"
     });
+    const beforeWebhook = await integrationStore.load();
+    await integrationStore.replaceState({
+      ...beforeWebhook.state,
+      installations: [
+        ...beforeWebhook.state.installations,
+        {
+          createdAt: "2026-07-04T00:00:00.000Z",
+          id: "github-install",
+          permissions: ["read:external", "read:openroad", "write:openroad"],
+          provider: "linear",
+          providerAccountId: "linear-team",
+          providerAccountName: "Linear Team",
+          status: "active",
+          workspaceId: "acme"
+        }
+      ],
+      mappings: [
+        ...beforeWebhook.state.mappings,
+        {
+          connectedAt: "2026-07-04T00:00:00.000Z",
+          external: {
+            id: "LIN_issue_1",
+            key: "LIN-1",
+            provider: "linear",
+            type: "issue",
+            url: "https://linear.app/openroad/issue/LIN-1"
+          },
+          id: "linear-colliding-installation-id",
+          installationId: "github-install",
+          openRoad: {
+            id: created.body.request.id,
+            type: "request",
+            workspaceId: "acme"
+          },
+          status: "active"
+        }
+      ]
+    });
 
     const response = await fetchJson(
       `${url}/api/openroad/integrations/github/webhook`,
@@ -1094,14 +1132,46 @@ describe("OpenRoad production server", () => {
       headers: { "Content-Type": "application/json" },
       method: "POST"
     });
+    const unsuspend = await fetchJson(
+      `${url}/api/openroad/integrations/github/webhook`,
+      signedGitHubWebhookRequest(
+        gitHubInstallationWebhookPayload({
+          action: "unsuspend",
+          installationId: "github-install"
+        }),
+        {
+          deliveryId: "delivery-installation-unsuspend-after-disconnect",
+          eventName: "installation"
+        }
+      )
+    );
+    const afterUnsuspend = await integrationStore.load();
+    const githubInstallation = afterUnsuspend.state.installations.find(
+      (installation) => installation.provider === "github"
+    );
+    const linearInstallation = afterUnsuspend.state.installations.find(
+      (installation) => installation.provider === "linear"
+    );
+    const linearMapping = afterUnsuspend.state.mappings.find(
+      (mapping) => mapping.external.provider === "linear"
+    );
 
     expect(response.status).toBe(202);
     expect(response.body.status).toBe("synced");
-    expect(integrations.state.installations[0]).toMatchObject({
+    expect(integrations.state.installations.find((installation) => installation.provider === "github")).toMatchObject({
       id: "github-install",
       status: "disconnected"
     });
-    expect(integrations.state.mappings.every((mapping) => mapping.status === "disconnected")).toBe(true);
+    expect(
+      integrations.state.mappings
+        .filter((mapping) => mapping.external.provider === "github")
+        .every((mapping) => mapping.status === "disconnected")
+    ).toBe(true);
+    expect(linearInstallation).toMatchObject({ provider: "linear", status: "active" });
+    expect(linearMapping).toMatchObject({ status: "active" });
+    expect(unsuspend.status).toBe(202);
+    expect(unsuspend.body.status).toBe("ignored");
+    expect(githubInstallation).toMatchObject({ status: "disconnected" });
     expect(request).toBeTruthy();
     expect(rejectedImport.status).toBe(422);
     expect(rejectedImport.body.error.code).toBe("invalid_state");
@@ -1119,6 +1189,25 @@ describe("OpenRoad production server", () => {
       },
       method: "POST"
     });
+    const maintainerCreated = await fetchJson(
+      `${url}/api/openroad/workspaces/maintainer/integrations/github/issues/import`,
+      {
+        body: JSON.stringify(
+          gitHubImportPayload({
+            issue: gitHubIssuePayload({
+              node_id: "I_maintainer",
+              number: 101,
+              title: "Maintainer workspace issue"
+            })
+          })
+        ),
+        headers: {
+          Authorization: "Bearer secret",
+          "Content-Type": "application/json"
+        },
+        method: "POST"
+      }
+    );
     const viewer = await fetchJson(
       `${url}/api/openroad/workspaces/acme/integrations/github/app/installations/github-install/disconnect`,
       {
@@ -1137,6 +1226,7 @@ describe("OpenRoad production server", () => {
     const state = await store.load();
 
     expect(created.status).toBe(201);
+    expect(maintainerCreated.status).toBe(201);
     expect(viewer.status).toBe(403);
     expect(owner.status).toBe(200);
     expect(owner.body).toMatchObject({
@@ -1147,7 +1237,22 @@ describe("OpenRoad production server", () => {
       },
       status: "disconnected"
     });
-    expect(integrations.state.mappings.every((mapping) => mapping.status === "disconnected")).toBe(true);
+    expect(integrations.state.installations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "github-install", status: "disconnected", workspaceId: "acme" }),
+        expect.objectContaining({ id: "github-install", status: "active", workspaceId: "maintainer" })
+      ])
+    );
+    expect(
+      integrations.state.mappings
+        .filter((mapping) => mapping.openRoad.workspaceId === "acme")
+        .every((mapping) => mapping.status === "disconnected")
+    ).toBe(true);
+    expect(
+      integrations.state.mappings
+        .filter((mapping) => mapping.openRoad.workspaceId === "maintainer")
+        .every((mapping) => mapping.status === "active")
+    ).toBe(true);
     expect(
       state.state.workspaces[0].requests.some((request) => request.id === created.body.request.id)
     ).toBe(true);

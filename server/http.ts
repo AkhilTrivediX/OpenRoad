@@ -199,6 +199,7 @@ export function createOpenRoadServer({
   teamStore
 }: CreateOpenRoadServerOptions): Server {
   const resolvedDistDir = resolve(distDir);
+  const activeGitHubWebhookDeliveries = new Set<string>();
 
   return createServer(async (request, response) => {
     const access = createAccessContext(request, auth);
@@ -218,7 +219,8 @@ export function createOpenRoadServer({
           githubAppConfig,
           integrationStore,
           teamStore,
-          portalRateLimiter
+          portalRateLimiter,
+          activeGitHubWebhookDeliveries
         );
         return;
       }
@@ -248,7 +250,8 @@ async function handleApiRequest(
   githubAppConfig: GitHubAppConfig,
   integrationStore: IntegrationStore | undefined,
   teamStore: TeamStore | undefined,
-  portalRateLimiter: PortalRateLimiter
+  portalRateLimiter: PortalRateLimiter,
+  activeGitHubWebhookDeliveries: Set<string>
 ) {
   if (requestUrl.pathname === "/api/health") {
     if (request.method !== "GET") {
@@ -434,7 +437,8 @@ async function handleApiRequest(
       access,
       teamStore,
       integrationStore,
-      githubAppConfig
+      githubAppConfig,
+      activeGitHubWebhookDeliveries
     );
     return;
   }
@@ -999,7 +1003,7 @@ function createGitHubIssueImportState(
   ];
   const nextIntegrationState = parseIntegrationState({
     ...integrationState,
-    installations: upsertById(integrationState.installations, payload.installation),
+    installations: upsertInstallationByScope(integrationState.installations, payload.installation),
     mappings: upsertManyById(integrationState.mappings, mappings)
   });
 
@@ -1048,6 +1052,31 @@ function sanitizeInstallation(installation: IntegrationInstallation) {
 
 function upsertManyById<T extends { id: string }>(items: T[], nextItems: T[]) {
   return nextItems.reduce((currentItems, nextItem) => upsertById(currentItems, nextItem), items);
+}
+
+function upsertInstallationByScope(
+  items: IntegrationInstallation[],
+  nextItem: IntegrationInstallation
+) {
+  return [nextItem, ...items.filter((item) => !isSameInstallationScope(item, nextItem))];
+}
+
+function replaceInstallationByScope(
+  items: IntegrationInstallation[],
+  nextItem: IntegrationInstallation
+) {
+  return items.map((item) => (isSameInstallationScope(item, nextItem) ? nextItem : item));
+}
+
+function isSameInstallationScope(
+  first: IntegrationInstallation,
+  second: IntegrationInstallation
+) {
+  return (
+    first.provider === second.provider &&
+    first.workspaceId === second.workspaceId &&
+    first.id === second.id
+  );
 }
 
 function upsertById<T extends { id: string }>(items: T[], nextItem: T) {
@@ -1380,7 +1409,8 @@ async function handleGitHubWebhookRequest(
   access: AccessContext,
   teamStore: TeamStore | undefined,
   integrationStore: IntegrationStore | undefined,
-  githubAppConfig: GitHubAppConfig
+  githubAppConfig: GitHubAppConfig,
+  activeGitHubWebhookDeliveries: Set<string>
 ) {
   if (request.method !== "POST") {
     writeApiError(response, 405, "invalid_method", "This endpoint only supports POST.", access);
@@ -1427,22 +1457,17 @@ async function handleGitHubWebhookRequest(
       throw new AccessDeniedError("GitHub webhook signature is invalid.");
     }
 
-    const payload = parseJsonBuffer(rawBody);
-    const current = await store.load();
-    const integrationResult = await integrationStore.load();
-    const duplicateEvent = integrationResult.state.syncEvents.find(
-      (item) => item.provider === "github" && item.deliveryId === deliveryId
-    );
-
-    if (duplicateEvent) {
+    if (activeGitHubWebhookDeliveries.has(deliveryId)) {
       writeJson(
         response,
         200,
         {
-          event: sanitizeIntegrationSyncEvent({
-            ...duplicateEvent,
+          event: createIntegrationSyncEvent({
+            deliveryId,
+            eventName,
+            now: new Date().toISOString(),
             result: "duplicate",
-            summary: `Duplicate GitHub delivery ${deliveryId} ignored.`
+            summary: `Duplicate GitHub delivery ${deliveryId} is already processing.`
           }),
           status: "duplicate"
         },
@@ -1451,43 +1476,73 @@ async function handleGitHubWebhookRequest(
       return;
     }
 
-    const result = processGitHubWebhookDelivery({
-      deliveryId,
-      eventName,
-      integrationState: integrationResult.state,
-      now: new Date().toISOString(),
-      openRoadState: current.state,
-      payload
-    });
-    const state =
-      result.openRoadState === current.state
-        ? current.state
-        : await store.replaceState(result.openRoadState);
-    const integrationState = await integrationStore.replaceState(result.integrationState);
+    activeGitHubWebhookDeliveries.add(deliveryId);
 
-    if (result.audit && result.audit.workspaceId) {
-      await recordAuditEvent(
-        teamStore,
-        state,
-        createIntegrationAccess(access, result.audit.workspaceId, result.audit.installationId),
-        result.audit
+    try {
+      const payload = parseJsonBuffer(rawBody);
+      const current = await store.load();
+      const integrationResult = await integrationStore.load();
+      const duplicateEvent = integrationResult.state.syncEvents.find(
+        (item) => item.provider === "github" && item.deliveryId === deliveryId
       );
-    }
 
-    writeJson(
-      response,
-      202,
-      {
-        event: sanitizeIntegrationSyncEvent(result.event),
-        status: result.event.result,
-        totals: {
-          installations: integrationState.installations.length,
-          mappings: integrationState.mappings.length,
-          syncEvents: integrationState.syncEvents.length
-        }
-      },
-      access
-    );
+      if (duplicateEvent) {
+        writeJson(
+          response,
+          200,
+          {
+            event: sanitizeIntegrationSyncEvent({
+              ...duplicateEvent,
+              result: "duplicate",
+              summary: `Duplicate GitHub delivery ${deliveryId} ignored.`
+            }),
+            status: "duplicate"
+          },
+          access
+        );
+        return;
+      }
+
+      const result = processGitHubWebhookDelivery({
+        deliveryId,
+        eventName,
+        integrationState: integrationResult.state,
+        now: new Date().toISOString(),
+        openRoadState: current.state,
+        payload
+      });
+      const state =
+        result.openRoadState === current.state
+          ? current.state
+          : await store.replaceState(result.openRoadState);
+      const integrationState = await integrationStore.replaceState(result.integrationState);
+
+      if (result.audit && result.audit.workspaceId) {
+        await recordAuditEvent(
+          teamStore,
+          state,
+          createIntegrationAccess(access, result.audit.workspaceId, result.audit.installationId),
+          result.audit
+        );
+      }
+
+      writeJson(
+        response,
+        202,
+        {
+          event: sanitizeIntegrationSyncEvent(result.event),
+          status: result.event.result,
+          totals: {
+            installations: integrationState.installations.length,
+            mappings: integrationState.mappings.length,
+            syncEvents: integrationState.syncEvents.length
+          }
+        },
+        access
+      );
+    } finally {
+      activeGitHubWebhookDeliveries.delete(deliveryId);
+    }
   } catch (error) {
     writeKnownApiError(response, error, access);
   }
@@ -1783,28 +1838,53 @@ function processGitHubInstallationWebhook(
     };
   }
 
-  const matchingIds = new Set(matchingInstallations.map((installation) => installation.id));
+  const affectedInstallations = matchingInstallations.filter((installation) =>
+    shouldApplyGitHubInstallationWebhookStatus(installation, nextStatus)
+  );
+
+  if (affectedInstallations.length === 0) {
+    const event = createIntegrationSyncEvent({
+      deliveryId,
+      eventName,
+      installationId: normalizeGitHubInstallationId(installationId),
+      now,
+      result: "ignored",
+      summary: `GitHub installation ${installationId} had no ${action} state change to apply.`
+    });
+
+    return {
+      event,
+      integrationState: appendIntegrationSyncEvent(integrationState, event),
+      openRoadState
+    };
+  }
+
   const nextInstallations = integrationState.installations.map((installation) =>
-    matchingIds.has(installation.id) ? { ...installation, status: nextStatus } : installation
+    affectedInstallations.some((affected) => isSameInstallationScope(installation, affected))
+      ? { ...installation, status: nextStatus }
+      : installation
   );
   const nextMappings =
     nextStatus === "disconnected"
       ? integrationState.mappings.map((mapping) =>
-          matchingIds.has(mapping.installationId) && mapping.status !== "disconnected"
+          isMappingForAnyInstallation(mapping, affectedInstallations) &&
+          mapping.status !== "disconnected"
             ? disconnectMapping(mapping, now)
             : mapping
         )
       : integrationState.mappings;
-  const workspaceIds = [...new Set(matchingInstallations.map((installation) => installation.workspaceId))];
+  const workspaceIds = [...new Set(affectedInstallations.map((installation) => installation.workspaceId))];
   const disconnectedMappings =
     nextStatus === "disconnected"
       ? integrationState.mappings.filter(
-          (mapping) => matchingIds.has(mapping.installationId) && mapping.status !== "disconnected"
+          (mapping) =>
+            isMappingForAnyInstallation(mapping, affectedInstallations) &&
+            mapping.status !== "disconnected"
         ).length
       : 0;
   const summary =
     nextStatus === "disconnected"
-      ? `Disconnected GitHub installation ${installationId} from ${matchingInstallations.length} OpenRoad workspace${matchingInstallations.length === 1 ? "" : "s"}.`
+      ? `Disconnected GitHub installation ${installationId} from ${affectedInstallations.length} OpenRoad workspace${affectedInstallations.length === 1 ? "" : "s"}.`
       : `Marked GitHub installation ${installationId} as ${nextStatus}.`;
   const event = createIntegrationSyncEvent({
     deliveryId,
@@ -1876,10 +1956,31 @@ function disconnectGitHubInstallationState(
     installation: nextInstallation,
     integrationState: parseIntegrationState({
       ...integrationState,
-      installations: upsertById(integrationState.installations, nextInstallation),
+      installations: replaceInstallationByScope(integrationState.installations, nextInstallation),
       mappings
     })
   };
+}
+
+function shouldApplyGitHubInstallationWebhookStatus(
+  installation: IntegrationInstallation,
+  nextStatus: IntegrationInstallation["status"]
+) {
+  if (nextStatus === "disconnected") return installation.status !== "disconnected";
+  if (nextStatus === "suspended") return installation.status === "active";
+  return installation.status === "suspended";
+}
+
+function isMappingForAnyInstallation(
+  mapping: ExternalObjectMapping,
+  installations: IntegrationInstallation[]
+) {
+  return installations.some(
+    (installation) =>
+      mapping.external.provider === installation.provider &&
+      mapping.installationId === installation.id &&
+      mapping.openRoad.workspaceId === installation.workspaceId
+  );
 }
 
 function parseGitHubWebhookIssue(payload: unknown) {

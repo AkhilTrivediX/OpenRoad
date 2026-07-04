@@ -62,7 +62,9 @@ describe("openroad release operations", () => {
         channel: "rc",
         commit: "abc123",
         rollback: {
-          dataMigration: expect.stringContaining("OpenRoad state schema 6")
+          dataMigration: expect.stringContaining(
+            "OpenRoad state schema 6; integration metadata schema 2"
+          )
         },
         version: "0.1.0-rc.1"
       },
@@ -154,11 +156,13 @@ async function writeBuildArtifacts(root) {
   const outputFile = join(root, ".openroad", "releases", "candidate.json");
   await mkdir(join(root, "dist", "assets"), { recursive: true });
   await mkdir(join(root, "server-dist", "server"), { recursive: true });
+  await mkdir(join(root, "server"), { recursive: true });
   await mkdir(join(root, "src", "domain"), { recursive: true });
   await writeFile(join(root, "package.json"), JSON.stringify({ name: "openroad", private: true, version: "0.1.0" }));
   await writeFile(join(root, "dist", "index.html"), "<div>OpenRoad</div>");
   await writeFile(assetFile, "console.log('ok');");
   await writeFile(join(root, "server-dist", "server", "index.js"), "export {};");
+  await writeFile(join(root, "server", "integrations.ts"), "export const openRoadIntegrationSchemaVersion = 2;");
   await writeFile(join(root, "src", "domain", "openroad.ts"), "export const openRoadSchemaVersion = 6;");
   return { assetFile, outputFile };
 }

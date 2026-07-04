@@ -12,9 +12,42 @@ import {
   type IntegrationPermission
 } from "../src/integrations/adapter.js";
 
-export const openRoadIntegrationSchemaVersion = 1;
+export const openRoadIntegrationSchemaVersion = 2;
+
+export const integrationCredentialSecretTypes = ["access-token", "refresh-token"] as const;
+
+export type IntegrationCredentialSecretType = (typeof integrationCredentialSecretTypes)[number];
+
+export type EncryptedIntegrationCredentialSecret = {
+  alg: "aes-256-gcm";
+  ciphertext: string;
+  iv: string;
+  keyId?: string;
+  tag: string;
+};
+
+export type IntegrationCredential = {
+  createdAt: string;
+  encryptedSecret?: EncryptedIntegrationCredentialSecret;
+  expiresAt?: string;
+  id: string;
+  installationId: string;
+  label?: string;
+  permissions: IntegrationPermission[];
+  provider: IntegrationProvider;
+  providerScopes: string[];
+  revokedAt?: string;
+  secretTypes: IntegrationCredentialSecretType[];
+  status: "active" | "revoked";
+  tokenType?: string;
+  updatedAt: string;
+  workspaceId: string;
+};
+
+export type IntegrationCredentialMetadata = Omit<IntegrationCredential, "encryptedSecret">;
 
 export type IntegrationState = {
+  credentials: IntegrationCredential[];
   installations: IntegrationInstallation[];
   mappings: ExternalObjectMapping[];
   schemaVersion: typeof openRoadIntegrationSchemaVersion;
@@ -33,7 +66,7 @@ export type IntegrationSyncEvent = {
   workspaceId?: string;
 };
 
-export type IntegrationStoreLoadStatus = "ready" | "seeded" | "recovered";
+export type IntegrationStoreLoadStatus = "ready" | "seeded" | "migrated" | "recovered";
 
 export type IntegrationStoreLoadResult = {
   backupPath?: string;
@@ -76,7 +109,18 @@ export class FileIntegrationStore implements IntegrationStore {
     }
 
     try {
-      return { state: parseIntegrationState(JSON.parse(raw) as unknown), status: "ready" };
+      const parsed = JSON.parse(raw) as unknown;
+      const state = parseIntegrationState(parsed);
+      const status =
+        getPersistedSchemaVersion(parsed) === openRoadIntegrationSchemaVersion
+          ? "ready"
+          : "migrated";
+
+      if (status === "migrated" || shouldPersistSanitizedState(parsed, state)) {
+        await this.writeState(state);
+      }
+
+      return { state, status };
     } catch (error) {
       if (error instanceof IntegrationStoreError && error.code === "future_schema") {
         throw error;
@@ -138,6 +182,7 @@ export class FileIntegrationStore implements IntegrationStore {
 
 export function createInitialIntegrationState(): IntegrationState {
   return {
+    credentials: [],
     installations: [],
     mappings: [],
     schemaVersion: openRoadIntegrationSchemaVersion,
@@ -160,8 +205,14 @@ export function parseIntegrationState(value: unknown): IntegrationState {
     );
   }
 
+  const schemaVersion = getPersistedSchemaVersion(value);
+  const isVersionOne = schemaVersion === 1;
+  const isCurrentVersion = schemaVersion === openRoadIntegrationSchemaVersion;
+  const credentials = isVersionOne && value.credentials === undefined ? [] : value.credentials;
+
   if (
-    value.schemaVersion !== openRoadIntegrationSchemaVersion ||
+    (!isVersionOne && !isCurrentVersion) ||
+    !Array.isArray(credentials) ||
     !Array.isArray(value.installations) ||
     !Array.isArray(value.mappings) ||
     (value.syncEvents !== undefined && !Array.isArray(value.syncEvents))
@@ -170,6 +221,7 @@ export function parseIntegrationState(value: unknown): IntegrationState {
   }
 
   if (
+    !credentials.every(isIntegrationCredential) ||
     !value.installations.every(isIntegrationInstallation) ||
     !value.mappings.every(isMapping) ||
     (Array.isArray(value.syncEvents) && !value.syncEvents.every(isSyncEvent))
@@ -178,11 +230,102 @@ export function parseIntegrationState(value: unknown): IntegrationState {
   }
 
   return cloneValue({
+    credentials: credentials.map(sanitizeIntegrationCredential),
     installations: value.installations.map(sanitizeIntegrationInstallation),
     mappings: value.mappings.map(sanitizeExternalObjectMapping),
     schemaVersion: openRoadIntegrationSchemaVersion,
     syncEvents: (value.syncEvents ?? []).map(sanitizeIntegrationSyncEvent).slice(0, 1000)
   });
+}
+
+export function sanitizeIntegrationCredential(
+  credential: IntegrationCredential
+): IntegrationCredential {
+  const sanitized: IntegrationCredential = {
+    createdAt: credential.createdAt,
+    ...(credential.status === "active" && credential.encryptedSecret
+      ? { encryptedSecret: sanitizeEncryptedIntegrationCredentialSecret(credential.encryptedSecret) }
+      : {}),
+    ...(credential.expiresAt ? { expiresAt: credential.expiresAt } : {}),
+    id: credential.id,
+    installationId: credential.installationId,
+    ...(credential.label ? { label: credential.label } : {}),
+    permissions: credential.permissions.filter(isIntegrationPermission),
+    provider: credential.provider,
+    providerScopes: uniqueStrings(credential.providerScopes),
+    ...(credential.revokedAt ? { revokedAt: credential.revokedAt } : {}),
+    secretTypes: credential.secretTypes.filter(isIntegrationCredentialSecretType),
+    status: credential.status,
+    ...(credential.tokenType ? { tokenType: credential.tokenType } : {}),
+    updatedAt: credential.updatedAt,
+    workspaceId: credential.workspaceId
+  };
+
+  if (sanitized.status === "revoked") {
+    delete sanitized.encryptedSecret;
+  }
+
+  return sanitized;
+}
+
+export function sanitizeIntegrationCredentialMetadata(
+  credential: IntegrationCredential
+): IntegrationCredentialMetadata {
+  const { encryptedSecret: _encryptedSecret, ...metadata } = sanitizeIntegrationCredential(credential);
+  return metadata;
+}
+
+export function createIntegrationCredentialSecretContext(
+  credential: Pick<IntegrationCredential, "id" | "installationId" | "provider" | "workspaceId">
+) {
+  return [
+    "openroad-integration-credential",
+    "v1",
+    credential.provider,
+    encodeURIComponent(credential.workspaceId),
+    encodeURIComponent(credential.installationId),
+    encodeURIComponent(credential.id)
+  ].join(":");
+}
+
+export function revokeIntegrationCredential(
+  credential: IntegrationCredential,
+  revokedAt: string
+): IntegrationCredential {
+  return sanitizeIntegrationCredential({
+    ...credential,
+    encryptedSecret: undefined,
+    revokedAt: credential.revokedAt ?? revokedAt,
+    status: "revoked",
+    updatedAt: revokedAt
+  });
+}
+
+export function revokeIntegrationCredentialsForInstallation(
+  credentials: IntegrationCredential[],
+  installation: Pick<IntegrationInstallation, "id" | "provider" | "workspaceId">,
+  revokedAt: string
+) {
+  const revokedCredentials: IntegrationCredential[] = [];
+  const nextCredentials = credentials.map((credential) => {
+    if (
+      credential.status === "active" &&
+      credential.provider === installation.provider &&
+      credential.workspaceId === installation.workspaceId &&
+      credential.installationId === installation.id
+    ) {
+      const revoked = revokeIntegrationCredential(credential, revokedAt);
+      revokedCredentials.push(revoked);
+      return revoked;
+    }
+
+    return credential;
+  });
+
+  return {
+    credentials: nextCredentials,
+    revokedCredentials
+  };
 }
 
 export function resolveOpenRoadIntegrationFile(env = process.env) {
@@ -261,6 +404,56 @@ function upsertById<T extends { id: string }>(items: T[], nextItem: T) {
   return [cloneValue(nextItem), ...nextItems];
 }
 
+function sanitizeEncryptedIntegrationCredentialSecret(
+  secret: EncryptedIntegrationCredentialSecret
+): EncryptedIntegrationCredentialSecret {
+  return {
+    alg: "aes-256-gcm",
+    ciphertext: secret.ciphertext,
+    iv: secret.iv,
+    ...(secret.keyId ? { keyId: secret.keyId } : {}),
+    tag: secret.tag
+  };
+}
+
+function isIntegrationCredential(value: unknown): value is IntegrationCredential {
+  return (
+    isRecord(value) &&
+    typeof value.createdAt === "string" &&
+    (value.encryptedSecret === undefined || isEncryptedIntegrationCredentialSecret(value.encryptedSecret)) &&
+    (value.expiresAt === undefined || typeof value.expiresAt === "string") &&
+    typeof value.id === "string" &&
+    typeof value.installationId === "string" &&
+    (value.label === undefined || typeof value.label === "string") &&
+    Array.isArray(value.permissions) &&
+    value.permissions.every(isIntegrationPermission) &&
+    integrationProviders.includes(value.provider as IntegrationProvider) &&
+    Array.isArray(value.providerScopes) &&
+    value.providerScopes.every((scope) => typeof scope === "string") &&
+    (value.revokedAt === undefined || typeof value.revokedAt === "string") &&
+    Array.isArray(value.secretTypes) &&
+    value.secretTypes.every(isIntegrationCredentialSecretType) &&
+    (value.status === "active" || value.status === "revoked") &&
+    (value.status !== "active" || isEncryptedIntegrationCredentialSecret(value.encryptedSecret)) &&
+    (value.tokenType === undefined || typeof value.tokenType === "string") &&
+    typeof value.updatedAt === "string" &&
+    typeof value.workspaceId === "string"
+  );
+}
+
+function isEncryptedIntegrationCredentialSecret(
+  value: unknown
+): value is EncryptedIntegrationCredentialSecret {
+  return (
+    isRecord(value) &&
+    value.alg === "aes-256-gcm" &&
+    typeof value.ciphertext === "string" &&
+    typeof value.iv === "string" &&
+    (value.keyId === undefined || typeof value.keyId === "string") &&
+    typeof value.tag === "string"
+  );
+}
+
 function isIntegrationInstallation(value: unknown): value is IntegrationInstallation {
   return (
     isRecord(value) &&
@@ -332,6 +525,23 @@ function isOpenRoadObjectRef(value: unknown) {
 
 function isIntegrationPermission(value: unknown): value is IntegrationPermission {
   return integrationPermissions.includes(value as IntegrationPermission);
+}
+
+function isIntegrationCredentialSecretType(value: unknown): value is IntegrationCredentialSecretType {
+  return integrationCredentialSecretTypes.includes(value as IntegrationCredentialSecretType);
+}
+
+function uniqueStrings(values: string[]) {
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
+}
+
+function getPersistedSchemaVersion(value: unknown) {
+  if (!isRecord(value)) return undefined;
+  return typeof value.schemaVersion === "number" ? value.schemaVersion : undefined;
+}
+
+function shouldPersistSanitizedState(original: unknown, sanitized: IntegrationState) {
+  return JSON.stringify(original) !== JSON.stringify(sanitized);
 }
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {

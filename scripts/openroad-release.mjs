@@ -248,9 +248,22 @@ function resolveSigningPlan(options) {
 }
 
 async function resolveDataMigrationNote(rootDir) {
-  const schemaVersion = await readOpenRoadStateSchemaVersion(rootDir);
+  const [schemaVersion, integrationSchemaVersion] = await Promise.all([
+    readOpenRoadStateSchemaVersion(rootDir),
+    readOpenRoadIntegrationSchemaVersion(rootDir)
+  ]);
+  const schemaNotes = [];
+
   if (schemaVersion !== undefined) {
-    return `OpenRoad state schema ${schemaVersion}; automatic migrations may run on load. Back up state, integration, and team files before upgrade, and restore a pre-upgrade backup when rolling back across schema versions.`;
+    schemaNotes.push(`OpenRoad state schema ${schemaVersion}`);
+  }
+
+  if (integrationSchemaVersion !== undefined) {
+    schemaNotes.push(`integration metadata schema ${integrationSchemaVersion}`);
+  }
+
+  if (schemaNotes.length > 0) {
+    return `${schemaNotes.join("; ")}; automatic migrations may run on load. Back up state, integration, and team files before upgrade, and restore a pre-upgrade backup when rolling back across schema versions.`;
   }
 
   return "Review feature evidence and operator notes for data migration requirements before deploy.";
@@ -260,6 +273,16 @@ async function readOpenRoadStateSchemaVersion(rootDir) {
   try {
     const source = await readFile(join(rootDir, "src", "domain", "openroad.ts"), "utf8");
     const match = source.match(/openRoadSchemaVersion\s*=\s*(\d+)/);
+    return match ? Number.parseInt(match[1], 10) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function readOpenRoadIntegrationSchemaVersion(rootDir) {
+  try {
+    const source = await readFile(join(rootDir, "server", "integrations.ts"), "utf8");
+    const match = source.match(/openRoadIntegrationSchemaVersion\s*=\s*(\d+)/);
     return match ? Number.parseInt(match[1], 10) : undefined;
   } catch {
     return undefined;

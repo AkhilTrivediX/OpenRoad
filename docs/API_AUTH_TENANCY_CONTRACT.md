@@ -96,6 +96,9 @@ Public portal responses use the OpenRoad public projection and must not include 
 - `GET /api/openroad/workspaces/:workspaceId/integrations/linear/oauth/setup`
 - `POST /api/openroad/workspaces/:workspaceId/integrations/jira/issues/import`
 - `GET /api/openroad/workspaces/:workspaceId/integrations/jira/oauth/setup`
+- `GET /api/openroad/workspaces/:workspaceId/integrations/:provider/credentials`
+- `POST /api/openroad/workspaces/:workspaceId/integrations/:provider/credentials`
+- `POST /api/openroad/workspaces/:workspaceId/integrations/:provider/credentials/:credentialId/revoke`
 - `GET /api/openroad/audit-events`
 - `GET /api/openroad/ops/status`
 
@@ -119,6 +122,8 @@ Jira issue import is workspace-scoped and requires workspace write permission. I
 
 Jira OAuth setup requires `integration:manage`, which is reserved for local owners/admins and workspace owners. It returns a safe Atlassian authorization URL and setup state, but does not exchange OAuth codes or persist tokens.
 
+Provider credential create/list/revoke routes require `integration:manage`, which is reserved for local owners/admins and workspace owners. Credential storage requires `OPENROAD_TOKEN_ENCRYPTION_KEY`; credentials must be scoped to an active installation in the same workspace and provider. Responses return only metadata and never return access tokens, refresh tokens, ciphertext, IVs, tags, or encryption key material.
+
 ## Provider-Signature Routes
 
 - `POST /api/openroad/integrations/github/webhook`
@@ -132,6 +137,8 @@ Valid deliveries are processed as integration actor work after the target worksp
 ```powershell
 $env:OPENROAD_ADMIN_TOKEN="replace-with-long-random-token"
 $env:OPENROAD_INTEGRATION_FILE=".openroad/openroad-integrations.json"
+$env:OPENROAD_TOKEN_ENCRYPTION_KEY="replace-with-at-least-32-random-characters"
+$env:OPENROAD_TOKEN_ENCRYPTION_KEY_ID="primary"
 $env:OPENROAD_GITHUB_APP_SLUG="openroad"
 $env:OPENROAD_GITHUB_APP_ID="12345"
 $env:OPENROAD_GITHUB_APP_PRIVATE_KEY_FILE="C:\openroad\github-app.private-key.pem"

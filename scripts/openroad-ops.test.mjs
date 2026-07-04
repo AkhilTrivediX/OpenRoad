@@ -32,7 +32,7 @@ describe("openroad ops", () => {
     const manifest = JSON.parse(await readFile(join(result.backupDir, "manifest.json"), "utf8"));
     expect(manifest.type).toBe("openroad-file-snapshot");
     expect(manifest.files.data.schemaVersion).toBe(2);
-    expect(manifest.files.integration.schemaVersion).toBe(1);
+    expect(manifest.files.integration.schemaVersion).toBe(2);
     expect(manifest.files.team.schemaVersion).toBe(1);
     await expect(readFile(join(result.backupDir, "openroad-state.json"), "utf8")).resolves.toContain("acme");
     await expect(readFile(join(result.backupDir, "openroad-integrations.json"), "utf8")).resolves.toContain(
@@ -61,6 +61,91 @@ describe("openroad ops", () => {
     await expect(readFile(join(result.backupDir, "openroad-integrations.json"), "utf8")).resolves.toContain(
       "mappings"
     );
+  });
+
+  it("sanitizes credential-bearing integration metadata during backup and restore", async ({ task }) => {
+    const root = await createTempRoot(task.name);
+    const source = join(root, "source");
+    const target = join(root, "target");
+    const { dataFile, integrationFile, teamFile } = await writeOpenRoadPair(source);
+    const rawIntegration = JSON.parse(await readFile(integrationFile, "utf8"));
+    await writeFile(
+      integrationFile,
+      JSON.stringify(
+        {
+          ...rawIntegration,
+          credentials: [
+            {
+              createdAt: "2026-07-04T00:00:00.000Z",
+              encryptedSecret: {
+                alg: "aes-256-gcm",
+                ciphertext: "ciphertext",
+                iv: "iv",
+                keyId: "primary",
+                tag: "tag"
+              },
+              id: "credential-github-install",
+              installationId: "github-install",
+              permissions: ["read:external"],
+              provider: "github",
+              providerScopes: ["repo"],
+              rawAccessToken: "raw-access-token",
+              refreshToken: "raw-refresh-token",
+              secretTypes: ["access-token", "refresh-token"],
+              status: "active",
+              token: "raw-token",
+              updatedAt: "2026-07-04T00:00:00.000Z",
+              workspaceId: "acme"
+            }
+          ],
+          installations: [
+            {
+              createdAt: "2026-07-04T00:00:00.000Z",
+              id: "github-install",
+              permissions: ["read:external"],
+              provider: "github",
+              providerAccountId: "AkhilTrivediX",
+              providerAccountName: "AkhilTrivediX",
+              status: "active",
+              token: "raw-installation-token",
+              workspaceId: "acme"
+            }
+          ],
+          schemaVersion: 2
+        },
+        null,
+        2
+      )
+    );
+
+    const backup = await createBackup({
+      dataFile,
+      integrationFile,
+      name: "snapshot",
+      outputDir: join(root, "backups"),
+      teamFile
+    });
+    const archivedIntegration = await readFile(join(backup.backupDir, "openroad-integrations.json"), "utf8");
+    const targetPair = await writeOpenRoadPair(target, "old-workspace");
+
+    await restoreBackup({
+      dataFile: targetPair.dataFile,
+      inputDir: backup.backupDir,
+      integrationFile: targetPair.integrationFile,
+      safetyDir: join(root, "safety"),
+      teamFile: targetPair.teamFile
+    });
+    const restoredIntegration = await readFile(targetPair.integrationFile, "utf8");
+
+    expect(archivedIntegration).toContain("ciphertext");
+    expect(archivedIntegration).toContain("credential-github-install");
+    expect(archivedIntegration).not.toContain("raw-access-token");
+    expect(archivedIntegration).not.toContain("raw-refresh-token");
+    expect(archivedIntegration).not.toContain("raw-installation-token");
+    expect(restoredIntegration).toContain("ciphertext");
+    expect(restoredIntegration).not.toContain("raw-access-token");
+    expect(restoredIntegration).not.toContain("raw-refresh-token");
+    expect(restoredIntegration).not.toContain("raw-token");
   });
 
   it("fails backup when a required source file is missing", async ({ task }) => {
@@ -204,8 +289,9 @@ async function writeOpenRoadPair(root, workspaceId = "acme") {
     JSON.stringify(
       {
         installations: [],
+        credentials: [],
         mappings: [],
-        schemaVersion: 1,
+        schemaVersion: 2,
         syncEvents: [
           {
             createdAt: "2026-07-04T00:00:00.000Z",

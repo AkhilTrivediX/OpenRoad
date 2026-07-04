@@ -28,9 +28,12 @@ import {
 import {
   createExternalObjectKey,
   disconnectMapping,
+  integrationPermissions,
+  integrationProviders,
   type ExternalObjectMapping,
   type IntegrationInstallation,
-  type IntegrationPermission
+  type IntegrationPermission,
+  type IntegrationProvider
 } from "../src/integrations/adapter.js";
 import {
   createGitHubInstallation,
@@ -79,13 +82,22 @@ import {
 } from "./store.js";
 import {
   IntegrationStoreError,
+  createIntegrationCredentialSecretContext,
   parseIntegrationState,
+  revokeIntegrationCredential,
+  revokeIntegrationCredentialsForInstallation,
+  sanitizeIntegrationCredentialMetadata,
   sanitizeIntegrationInstallation,
   sanitizeIntegrationSyncEvent,
+  type IntegrationCredential,
   type IntegrationState,
   type IntegrationStore,
   type IntegrationSyncEvent
 } from "./integrations.js";
+import {
+  createIntegrationTokenVaultFromEnv,
+  type IntegrationTokenVault
+} from "./token-vault.js";
 import {
   createExclusiveRunner,
   createNotificationDeliveryAdapterFromEnv,
@@ -129,6 +141,7 @@ type CreateOpenRoadServerOptions = {
   portalRateLimiter?: PortalRateLimiter;
   store: OpenRoadStore;
   teamStore?: TeamStore;
+  tokenVault?: IntegrationTokenVault;
 };
 
 type ApiErrorCode =
@@ -252,7 +265,8 @@ export function createOpenRoadServer({
   notificationDeliveryAdapter = createNotificationDeliveryAdapterFromEnv(),
   portalRateLimiter = createPortalRateLimiterFromEnv(),
   store,
-  teamStore
+  teamStore,
+  tokenVault = createIntegrationTokenVaultFromEnv()
 }: CreateOpenRoadServerOptions): Server {
   const resolvedDistDir = resolve(distDir);
   const activeGitHubWebhookDeliveries = new Set<string>();
@@ -281,7 +295,8 @@ export function createOpenRoadServer({
           runNotificationDeliveryExclusive,
           teamStore,
           portalRateLimiter,
-          activeGitHubWebhookDeliveries
+          activeGitHubWebhookDeliveries,
+          tokenVault
         );
         return;
       }
@@ -316,7 +331,8 @@ async function handleApiRequest(
   runNotificationDeliveryExclusive: NotificationDeliveryRunner,
   teamStore: TeamStore | undefined,
   portalRateLimiter: PortalRateLimiter,
-  activeGitHubWebhookDeliveries: Set<string>
+  activeGitHubWebhookDeliveries: Set<string>,
+  tokenVault: IntegrationTokenVault
 ) {
   if (requestUrl.pathname === "/api/health") {
     if (request.method !== "GET") {
@@ -601,6 +617,44 @@ async function handleApiRequest(
       integrationStore,
       githubInstallationDisconnectMatch[1],
       githubInstallationDisconnectMatch[2]
+    );
+    return;
+  }
+
+  const integrationCredentialsMatch = requestUrl.pathname.match(
+    /^\/api\/openroad\/workspaces\/([^/]+)\/integrations\/([^/]+)\/credentials$/
+  );
+
+  if (integrationCredentialsMatch) {
+    await handleIntegrationCredentialCollectionRequest(
+      request,
+      response,
+      store,
+      access,
+      teamStore,
+      integrationStore,
+      tokenVault,
+      integrationCredentialsMatch[1],
+      integrationCredentialsMatch[2]
+    );
+    return;
+  }
+
+  const integrationCredentialRevokeMatch = requestUrl.pathname.match(
+    /^\/api\/openroad\/workspaces\/([^/]+)\/integrations\/([^/]+)\/credentials\/([^/]+)\/revoke$/
+  );
+
+  if (integrationCredentialRevokeMatch) {
+    await handleIntegrationCredentialRevokeRequest(
+      request,
+      response,
+      store,
+      access,
+      teamStore,
+      integrationStore,
+      integrationCredentialRevokeMatch[1],
+      integrationCredentialRevokeMatch[2],
+      integrationCredentialRevokeMatch[3]
     );
     return;
   }
@@ -1831,6 +1885,379 @@ function upsertById<T extends { id: string }>(items: T[], nextItem: T) {
   return [nextItem, ...items.filter((item) => item.id !== nextItem.id)];
 }
 
+async function handleIntegrationCredentialCollectionRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  store: OpenRoadStore,
+  access: AccessContext,
+  teamStore: TeamStore | undefined,
+  integrationStore: IntegrationStore | undefined,
+  tokenVault: IntegrationTokenVault,
+  encodedWorkspaceId: string,
+  encodedProvider: string
+) {
+  if (request.method !== "GET" && request.method !== "POST") {
+    writeApiError(response, 405, "invalid_method", "This endpoint supports GET and POST.", access);
+    return;
+  }
+
+  const workspaceId = decodeURIComponent(encodedWorkspaceId);
+
+  try {
+    const provider = parseIntegrationProviderPath(encodedProvider);
+    requirePermission(access, "integration:manage", workspaceId);
+
+    if (!integrationStore) {
+      throw new ApiRequestError(
+        "not_configured",
+        503,
+        "OpenRoad integration metadata store is not configured."
+      );
+    }
+
+    const current = await store.load();
+    const workspace = current.state.workspaces.find((item) => item.id === workspaceId);
+
+    if (!workspace) {
+      throw new ApiRequestError("not_found", 404, "Workspace was not found.");
+    }
+
+    const integrationResult = await integrationStore.load();
+
+    if (request.method === "GET") {
+      writeJson(
+        response,
+        200,
+        {
+          credentials: integrationResult.state.credentials
+            .filter(
+              (credential) =>
+                credential.provider === provider && credential.workspaceId === workspaceId
+            )
+            .map(sanitizeIntegrationCredentialMetadata),
+          provider,
+          status: "listed",
+          workspace: {
+            id: workspace.id,
+            name: workspace.name
+          }
+        },
+        access
+      );
+      return;
+    }
+
+    if (tokenVault.status !== "ready") {
+      throw new ApiRequestError("not_configured", 503, tokenVault.reason);
+    }
+
+    const payload = await readJsonBody(request, 50_000);
+    const now = new Date().toISOString();
+    const { credential, installation } = createIntegrationCredentialFromPayload({
+      integrationState: integrationResult.state,
+      now,
+      payload,
+      provider,
+      tokenVault,
+      workspaceId
+    });
+    const nextIntegrationState = parseIntegrationState({
+      ...integrationResult.state,
+      credentials: upsertById(integrationResult.state.credentials, credential)
+    });
+    await integrationStore.replaceState(nextIntegrationState);
+    const auditEvent = await recordAuditEvent(teamStore, current.state, access, {
+      summary: `Stored ${provider} credential for installation ${installation.id}.`,
+      type: "integration.credentials.create",
+      workspaceId
+    });
+
+    writeJson(
+      response,
+      201,
+      {
+        credential: sanitizeIntegrationCredentialMetadata(credential),
+        provider,
+        revision: auditEvent?.id ?? `integration-credential-${Date.now()}`,
+        status: "stored"
+      },
+      access
+    );
+  } catch (error) {
+    writeKnownApiError(response, error, access);
+  }
+}
+
+async function handleIntegrationCredentialRevokeRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  store: OpenRoadStore,
+  access: AccessContext,
+  teamStore: TeamStore | undefined,
+  integrationStore: IntegrationStore | undefined,
+  encodedWorkspaceId: string,
+  encodedProvider: string,
+  encodedCredentialId: string
+) {
+  if (request.method !== "POST") {
+    writeApiError(response, 405, "invalid_method", "This endpoint only supports POST.", access);
+    return;
+  }
+
+  const workspaceId = decodeURIComponent(encodedWorkspaceId);
+  const credentialId = decodeURIComponent(encodedCredentialId);
+
+  try {
+    const provider = parseIntegrationProviderPath(encodedProvider);
+    requirePermission(access, "integration:manage", workspaceId);
+
+    if (!integrationStore) {
+      throw new ApiRequestError(
+        "not_configured",
+        503,
+        "OpenRoad integration metadata store is not configured."
+      );
+    }
+
+    const current = await store.load();
+    const workspace = current.state.workspaces.find((item) => item.id === workspaceId);
+
+    if (!workspace) {
+      throw new ApiRequestError("not_found", 404, "Workspace was not found.");
+    }
+
+    const integrationResult = await integrationStore.load();
+    const credential = integrationResult.state.credentials.find(
+      (item) =>
+        item.id === credentialId &&
+        item.provider === provider &&
+        item.workspaceId === workspaceId
+    );
+
+    if (!credential) {
+      throw new ApiRequestError("not_found", 404, "Integration credential was not found.");
+    }
+
+    const revoked =
+      credential.status === "revoked"
+        ? credential
+        : revokeIntegrationCredential(credential, new Date().toISOString());
+
+    if (revoked !== credential) {
+      await integrationStore.replaceState(
+        parseIntegrationState({
+          ...integrationResult.state,
+          credentials: upsertById(integrationResult.state.credentials, revoked)
+        })
+      );
+      await recordAuditEvent(teamStore, current.state, access, {
+        summary: `Revoked ${provider} credential for installation ${credential.installationId}.`,
+        type: "integration.credentials.revoke",
+        workspaceId
+      });
+    }
+
+    writeJson(
+      response,
+      200,
+      {
+        credential: sanitizeIntegrationCredentialMetadata(revoked),
+        provider,
+        status: "revoked"
+      },
+      access
+    );
+  } catch (error) {
+    writeKnownApiError(response, error, access);
+  }
+}
+
+function createIntegrationCredentialFromPayload({
+  integrationState,
+  now,
+  payload,
+  provider,
+  tokenVault,
+  workspaceId
+}: {
+  integrationState: IntegrationState;
+  now: string;
+  payload: unknown;
+  provider: IntegrationProvider;
+  tokenVault: Extract<IntegrationTokenVault, { status: "ready" }>;
+  workspaceId: string;
+}) {
+  if (!isRecord(payload)) {
+    throw new ApiRequestError("invalid_request", 400, "Integration credential payload must be an object.");
+  }
+
+  const installationId = getBoundedIdentifier(payload.installationId, 160);
+
+  if (!installationId) {
+    throw new ApiRequestError("invalid_request", 400, "Integration installation id is required.");
+  }
+
+  const installation = integrationState.installations.find(
+    (item) =>
+      item.provider === provider &&
+      item.workspaceId === workspaceId &&
+      doesProviderInstallationIdMatch(provider, item.id, installationId)
+  );
+
+  if (!installation) {
+    throw new ApiRequestError("not_found", 404, "Integration installation was not found.");
+  }
+
+  if (installation.status !== "active") {
+    throw new ApiRequestError(
+      "invalid_state",
+      422,
+      "Integration installation is disconnected or suspended."
+    );
+  }
+
+  const accessToken = getRequiredSecretText(payload.accessToken, "accessToken");
+  const refreshToken = getOptionalSecretText(payload.refreshToken, "refreshToken");
+  const permissions = parseCredentialPermissions(payload.permissions, installation);
+  const providerScopes = parseCredentialProviderScopes(payload.providerScopes);
+  const expiresAt = parseOptionalTimestamp(payload.expiresAt, "expiresAt");
+  const label = getBoundedText(payload.label, 120);
+  const tokenType = getBoundedText(payload.tokenType, 80);
+  const credentialId = createIntegrationCredentialId(provider, installation.id);
+  const credential: IntegrationCredential = {
+    createdAt: now,
+    ...(expiresAt ? { expiresAt } : {}),
+    id: credentialId,
+    installationId: installation.id,
+    ...(label ? { label } : {}),
+    permissions,
+    provider,
+    providerScopes,
+    secretTypes: refreshToken ? ["access-token", "refresh-token"] : ["access-token"],
+    status: "active",
+    ...(tokenType ? { tokenType } : {}),
+    updatedAt: now,
+    workspaceId
+  };
+  credential.encryptedSecret = tokenVault.seal(
+    {
+      accessToken,
+      ...(refreshToken ? { refreshToken } : {})
+    },
+    {
+      associatedData: createIntegrationCredentialSecretContext(credential)
+    }
+  );
+
+  return { credential, installation };
+}
+
+function parseIntegrationProviderPath(encodedProvider: string): IntegrationProvider {
+  const provider = decodeURIComponent(encodedProvider);
+  if (integrationProviders.includes(provider as IntegrationProvider)) {
+    return provider as IntegrationProvider;
+  }
+
+  throw new ApiRequestError("invalid_request", 400, "Integration provider is not supported.");
+}
+
+function parseCredentialPermissions(
+  value: unknown,
+  installation: IntegrationInstallation
+): IntegrationPermission[] {
+  if (value === undefined) return [...installation.permissions];
+
+  if (!Array.isArray(value)) {
+    throw new ApiRequestError("invalid_request", 400, "Credential permissions must be an array.");
+  }
+
+  const permissions = value.map((item) => {
+    const permission = getBoundedText(item, 80);
+    if (!permission || !integrationPermissions.includes(permission as IntegrationPermission)) {
+      throw new ApiRequestError("invalid_request", 400, "Credential permission is not supported.");
+    }
+
+    if (!installation.permissions.includes(permission as IntegrationPermission)) {
+      throw new ApiRequestError(
+        "invalid_request",
+        400,
+        "Credential permissions must stay within the installation permissions."
+      );
+    }
+
+    return permission as IntegrationPermission;
+  });
+
+  return [...new Set(permissions)];
+}
+
+function parseCredentialProviderScopes(value: unknown) {
+  if (value === undefined) return [];
+
+  if (!Array.isArray(value)) {
+    throw new ApiRequestError("invalid_request", 400, "Credential provider scopes must be an array.");
+  }
+
+  const scopes = value.map((item) => {
+    const scope = getBoundedText(item, 160);
+    if (!scope) {
+      throw new ApiRequestError("invalid_request", 400, "Credential provider scope is invalid.");
+    }
+    return scope;
+  });
+
+  return [...new Set(scopes)];
+}
+
+function parseOptionalTimestamp(value: unknown, field: string) {
+  const text = getBoundedText(value, 80);
+  if (!text) return undefined;
+  const timestamp = Date.parse(text);
+
+  if (!Number.isFinite(timestamp)) {
+    throw new ApiRequestError("invalid_request", 400, `${field} must be a valid timestamp.`);
+  }
+
+  return new Date(timestamp).toISOString();
+}
+
+function getRequiredSecretText(value: unknown, field: string) {
+  const text = getOptionalSecretText(value, field);
+  if (!text) {
+    throw new ApiRequestError("invalid_request", 400, `${field} is required.`);
+  }
+  return text;
+}
+
+function getOptionalSecretText(value: unknown, field: string) {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string") {
+    throw new ApiRequestError("invalid_request", 400, `${field} must be a string.`);
+  }
+
+  const text = value.trim();
+  if (!text) return undefined;
+
+  if (text.length > 20_000) {
+    throw new ApiRequestError("invalid_request", 400, `${field} is too long.`);
+  }
+
+  return text;
+}
+
+function createIntegrationCredentialId(provider: IntegrationProvider, installationId: string) {
+  return `credential-${provider}-${normalizeIdentifier(installationId)}-${randomUUID()}`;
+}
+
+function doesProviderInstallationIdMatch(
+  provider: IntegrationProvider,
+  storedId: string,
+  candidateId: string
+) {
+  if (provider === "github") return doesGitHubInstallationIdMatch(storedId, candidateId);
+  return storedId === candidateId;
+}
+
 async function handleGitHubAppSetupRequest(
   request: IncomingMessage,
   response: ServerResponse,
@@ -2383,8 +2810,10 @@ async function handleGitHubInstallationDisconnectRequest(
         disconnectedMappings: disconnected.disconnectedMappings,
         installation: sanitizeInstallation(disconnected.installation),
         revision: auditEvent?.id ?? `github-disconnect-${Date.now()}`,
+        revokedCredentials: disconnected.revokedCredentials,
         status: "disconnected",
         totals: {
+          credentials: integrationState.credentials.length,
           installations: integrationState.installations.length,
           mappings: integrationState.mappings.length,
           syncEvents: integrationState.syncEvents.length
@@ -2651,6 +3080,14 @@ function processGitHubInstallationWebhook(
             : mapping
         )
       : integrationState.mappings;
+  const credentialRevocation =
+    nextStatus === "disconnected"
+      ? revokeCredentialsForInstallations(
+          integrationState.credentials,
+          affectedInstallations,
+          now
+        )
+      : { credentials: integrationState.credentials, revokedCredentials: [] };
   const workspaceIds = [...new Set(affectedInstallations.map((installation) => installation.workspaceId))];
   const disconnectedMappings =
     nextStatus === "disconnected"
@@ -2688,6 +3125,7 @@ function processGitHubInstallationWebhook(
     integrationState: appendIntegrationSyncEvent(
       parseIntegrationState({
         ...integrationState,
+        credentials: credentialRevocation.credentials,
         installations: nextInstallations,
         mappings: nextMappings
       }),
@@ -2729,15 +3167,45 @@ function disconnectGitHubInstallationState(
     return mapping;
   });
 
+  const credentialRevocation = revokeIntegrationCredentialsForInstallation(
+    integrationState.credentials,
+    installation,
+    now
+  );
+
   return {
     disconnectedMappings,
     installation: nextInstallation,
     integrationState: parseIntegrationState({
       ...integrationState,
+      credentials: credentialRevocation.credentials,
       installations: replaceInstallationByScope(integrationState.installations, nextInstallation),
       mappings
-    })
+    }),
+    revokedCredentials: credentialRevocation.revokedCredentials.length
   };
+}
+
+function revokeCredentialsForInstallations(
+  credentials: IntegrationCredential[],
+  installations: IntegrationInstallation[],
+  revokedAt: string
+) {
+  return installations.reduce(
+    (result, installation) => {
+      const nextResult = revokeIntegrationCredentialsForInstallation(
+        result.credentials,
+        installation,
+        revokedAt
+      );
+
+      return {
+        credentials: nextResult.credentials,
+        revokedCredentials: [...result.revokedCredentials, ...nextResult.revokedCredentials]
+      };
+    },
+    { credentials, revokedCredentials: [] as IntegrationCredential[] }
+  );
 }
 
 function shouldApplyGitHubInstallationWebhookStatus(
@@ -2898,6 +3366,7 @@ async function handleOpsStatusRequest(
         },
         totals: {
           auditEvents: team?.state.auditEvents.length ?? 0,
+          integrationCredentials: integrations?.state.credentials.length ?? 0,
           integrationInstallations: integrations?.state.installations.length ?? 0,
           integrationMappings: integrations?.state.mappings.length ?? 0,
           integrationSyncEvents: integrations?.state.syncEvents.length ?? 0,

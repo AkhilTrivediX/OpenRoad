@@ -1,6 +1,6 @@
 # OpenRoad GitHub App Installation
 
-OpenRoad now has a server-only GitHub App installation foundation, live issue fetch path, signed webhook ingestion, and safe disconnect handling. It does not run background polling yet; webhooks update already-linked issues and installation state.
+OpenRoad now has a server-only GitHub App installation foundation, live issue fetch path, signed webhook ingestion, safe disconnect handling, and encrypted provider credential storage primitives. It does not run background polling yet; webhooks update already-linked issues and installation state.
 
 Official GitHub references used for this slice:
 
@@ -92,6 +92,18 @@ Webhook delivery IDs are stored as sanitized `syncEvents` in `OPENROAD_INTEGRATI
 `POST /api/openroad/workspaces/:workspaceId/integrations/github/app/installations/:installationId/disconnect`
 
 The endpoint requires `integration:manage`, marks the installation and all active mappings in that workspace as `disconnected`, records an audit event, and preserves all OpenRoad requests.
+
+Matching active provider credentials are revoked and have encrypted secret material removed from their credential records.
+
+## Provider Credentials
+
+Credential storage is managed through the provider-neutral routes:
+
+- `GET /api/openroad/workspaces/:workspaceId/integrations/github/credentials`
+- `POST /api/openroad/workspaces/:workspaceId/integrations/github/credentials`
+- `POST /api/openroad/workspaces/:workspaceId/integrations/github/credentials/:credentialId/revoke`
+
+These routes require `integration:manage` and `OPENROAD_TOKEN_ENCRYPTION_KEY`. Responses return only credential metadata. GitHub installation access tokens generated for live issue fetch remain short-lived and are still not persisted.
 
 ## Deferred Work
 

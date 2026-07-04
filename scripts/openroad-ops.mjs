@@ -27,26 +27,19 @@ export async function createBackup(options = {}) {
     readJsonFile(teamFile, "OpenRoad team metadata file"),
     readPackageJson()
   ]);
-  const integrationJson = integrationSource.json;
+  const integrationJson = sanitizeIntegrationState(integrationSource.json);
 
   validateOpenRoadState(dataJson);
-  validateIntegrationState(integrationJson);
   validateTeamState(teamJson);
 
   await mkdir(outputDir, { recursive: true });
   await mkdir(backupDir, { recursive: false });
   await copyFile(dataFile, join(backupDir, dataArchiveName));
-  if (integrationSource.exists) {
-    await copyFile(integrationFile, join(backupDir, integrationArchiveName));
-  } else {
-    await writeJsonFile(join(backupDir, integrationArchiveName), integrationJson);
-  }
+  await writeJsonFile(join(backupDir, integrationArchiveName), integrationJson);
   await copyFile(teamFile, join(backupDir, teamArchiveName));
 
   const [dataStats, teamStats] = await Promise.all([stat(dataFile), stat(teamFile)]);
-  const integrationStats = integrationSource.exists
-    ? await stat(integrationFile)
-    : { size: Buffer.byteLength(`${JSON.stringify(integrationJson, null, 2)}\n`) };
+  const integrationSize = Buffer.byteLength(`${JSON.stringify(integrationJson, null, 2)}\n`);
   const manifest = {
     app: {
       name: stringOrFallback(packageJson.name, "openroad"),
@@ -63,7 +56,7 @@ export async function createBackup(options = {}) {
       integration: {
         archiveName: integrationArchiveName,
         schemaVersion: integrationJson.schemaVersion,
-        sizeBytes: integrationStats.size,
+        sizeBytes: integrationSize,
         sourcePath: integrationFile,
         sourceStatus: integrationSource.exists ? "file" : "default-empty"
       },
@@ -112,7 +105,7 @@ export async function restoreBackup(options = {}) {
       readJsonFile(teamSource, "backup OpenRoad team metadata file")
     ]);
     validateOpenRoadState(dataJson);
-    validateIntegrationState(integrationJson);
+    sanitizeIntegrationState(integrationJson);
     validateTeamState(teamJson);
   } else {
     await assertReadable(dataSource, "backup OpenRoad state file");
@@ -130,11 +123,18 @@ export async function restoreBackup(options = {}) {
     mkdir(dirname(integrationFile), { recursive: true }),
     mkdir(dirname(teamFile), { recursive: true })
   ]);
-  await Promise.all([
-    copyFile(dataSource, dataFile),
-    copyFile(integrationSource, integrationFile),
-    copyFile(teamSource, teamFile)
-  ]);
+  await copyFile(dataSource, dataFile);
+  if (options.force) {
+    await copyFile(integrationSource, integrationFile);
+  } else {
+    await writeJsonFile(
+      integrationFile,
+      sanitizeIntegrationState(
+        await readJsonFile(integrationSource, "backup OpenRoad integration metadata file")
+      )
+    );
+  }
+  await copyFile(teamSource, teamFile);
 
   return {
     restored: {
@@ -335,6 +335,7 @@ function validateIntegrationState(value) {
     typeof value.schemaVersion !== "number" ||
     !Array.isArray(value.installations) ||
     !Array.isArray(value.mappings) ||
+    (value.schemaVersion >= 2 && !Array.isArray(value.credentials)) ||
     (value.syncEvents !== undefined && !Array.isArray(value.syncEvents))
   ) {
     throw new OpsError(
@@ -344,11 +345,120 @@ function validateIntegrationState(value) {
   }
 }
 
+function sanitizeIntegrationState(value) {
+  validateIntegrationState(value);
+
+  return {
+    ...(value.schemaVersion >= 2
+      ? { credentials: value.credentials.map(sanitizeIntegrationCredential) }
+      : {}),
+    installations: value.installations.map(sanitizeIntegrationInstallation),
+    mappings: value.mappings.map(sanitizeExternalObjectMapping),
+    schemaVersion: value.schemaVersion,
+    syncEvents: (value.syncEvents ?? []).map(sanitizeIntegrationSyncEvent)
+  };
+}
+
+function sanitizeIntegrationCredential(credential) {
+  if (!isRecord(credential)) return credential;
+
+  return {
+    createdAt: credential.createdAt,
+    ...(credential.status === "active" && isRecord(credential.encryptedSecret)
+      ? { encryptedSecret: sanitizeEncryptedSecret(credential.encryptedSecret) }
+      : {}),
+    ...(credential.expiresAt ? { expiresAt: credential.expiresAt } : {}),
+    id: credential.id,
+    installationId: credential.installationId,
+    ...(credential.label ? { label: credential.label } : {}),
+    permissions: Array.isArray(credential.permissions) ? credential.permissions : [],
+    provider: credential.provider,
+    providerScopes: Array.isArray(credential.providerScopes) ? credential.providerScopes : [],
+    ...(credential.revokedAt ? { revokedAt: credential.revokedAt } : {}),
+    secretTypes: Array.isArray(credential.secretTypes) ? credential.secretTypes : [],
+    status: credential.status,
+    ...(credential.tokenType ? { tokenType: credential.tokenType } : {}),
+    updatedAt: credential.updatedAt,
+    workspaceId: credential.workspaceId
+  };
+}
+
+function sanitizeEncryptedSecret(secret) {
+  return {
+    alg: secret.alg,
+    ciphertext: secret.ciphertext,
+    iv: secret.iv,
+    ...(secret.keyId ? { keyId: secret.keyId } : {}),
+    tag: secret.tag
+  };
+}
+
+function sanitizeIntegrationInstallation(installation) {
+  if (!isRecord(installation)) return installation;
+
+  return {
+    createdAt: installation.createdAt,
+    id: installation.id,
+    permissions: Array.isArray(installation.permissions) ? installation.permissions : [],
+    provider: installation.provider,
+    providerAccountId: installation.providerAccountId,
+    providerAccountName: installation.providerAccountName,
+    status: installation.status,
+    workspaceId: installation.workspaceId
+  };
+}
+
+function sanitizeExternalObjectMapping(mapping) {
+  if (!isRecord(mapping)) return mapping;
+
+  return {
+    connectedAt: mapping.connectedAt,
+    ...(mapping.disconnectedAt ? { disconnectedAt: mapping.disconnectedAt } : {}),
+    external: isRecord(mapping.external)
+      ? {
+          id: mapping.external.id,
+          ...(mapping.external.key ? { key: mapping.external.key } : {}),
+          provider: mapping.external.provider,
+          type: mapping.external.type,
+          ...(mapping.external.url ? { url: mapping.external.url } : {})
+        }
+      : mapping.external,
+    id: mapping.id,
+    installationId: mapping.installationId,
+    ...(mapping.lastSyncedAt ? { lastSyncedAt: mapping.lastSyncedAt } : {}),
+    openRoad: isRecord(mapping.openRoad)
+      ? {
+          id: mapping.openRoad.id,
+          type: mapping.openRoad.type,
+          workspaceId: mapping.openRoad.workspaceId
+        }
+      : mapping.openRoad,
+    status: mapping.status
+  };
+}
+
+function sanitizeIntegrationSyncEvent(event) {
+  if (!isRecord(event)) return event;
+
+  return {
+    createdAt: event.createdAt,
+    deliveryId: event.deliveryId,
+    event: event.event,
+    id: event.id,
+    ...(event.installationId ? { installationId: event.installationId } : {}),
+    provider: event.provider,
+    result: event.result,
+    summary: event.summary,
+    ...(event.workspaceId ? { workspaceId: event.workspaceId } : {})
+  };
+}
+
 function createEmptyIntegrationState() {
   return {
+    credentials: [],
     installations: [],
     mappings: [],
-    schemaVersion: 1,
+    schemaVersion: 2,
     syncEvents: []
   };
 }

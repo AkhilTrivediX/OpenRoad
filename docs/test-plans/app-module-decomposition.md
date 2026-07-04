@@ -93,7 +93,7 @@ As a maintainer building OpenRoad toward public portal, integrations, and AI ass
 ## Evidence
 
 - Branch: `feat/app-module-decomposition`
-- Commit SHA: pending.
+- Commit SHA: `7d6b2a6`.
 - Date: 2026-07-04.
 - Acceptance criteria status: Passed for helper/module extraction without intended UX or schema changes.
 - Commands run:

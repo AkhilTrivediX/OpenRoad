@@ -102,7 +102,7 @@ As a future OpenRoad team owner, I need server-side workspace membership, tenant
 ## Evidence
 
 - Branch: `feat/team-saas-foundation`
-- Commit SHA: Pending.
+- Commit SHA: `7035f98`.
 - Date: 2026-07-04.
 - Commands run:
   - `pnpm vitest run server/team.test.ts server/access.test.ts server/http.test.ts server/store.test.ts`: 33 tests passed.

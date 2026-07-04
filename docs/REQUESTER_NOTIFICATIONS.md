@@ -25,6 +25,8 @@ Notification events are internal outbox records in this slice. They must not con
 
 Public portal snapshots do not expose notification preferences or outbox events.
 
+The server workspace action API does not accept broad notification settings replacement in this slice. Until a narrower preference endpoint exists, outbox events should be treated as reducer-generated internal records.
+
 ## Current Behavior
 
 Status updates queue when:

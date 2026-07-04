@@ -78,6 +78,7 @@ As a maintainer, I can see whether requesters want updates, queue useful notific
 - Keep notification events workspace-scoped.
 - Bound event and preference arrays to avoid unbounded growth.
 - Keep public APIs projection-only.
+- Keep broad notification settings replacement out of the server workspace action API until a narrower preferences endpoint exists.
 
 ## Migration And Rollback
 
@@ -96,14 +97,14 @@ As a maintainer, I can see whether requesters want updates, queue useful notific
 ## Evidence
 
 - Branch: `feat/requester-notifications`
-- Commit SHAs: `9d06bd6` implementation, `0b7c8f0` evidence record.
+- Commit SHAs: `9d06bd6` implementation, `0b7c8f0` and `e3d82e3` evidence records, `2432258` audit hardening.
 - Date: 2026-07-04.
-- Acceptance criteria status: passed on branch before commit.
+- Acceptance criteria status: passed on branch after audit hardening.
 - Commands run:
-  - `pnpm vitest run src/domain/openroad.test.ts server/store.test.ts server/http.test.ts` - 85 tests passed.
-  - `pnpm vitest run src/App.test.tsx` - 44 tests passed.
+  - `pnpm vitest run src/domain/openroad.test.ts server/store.test.ts server/http.test.ts` - 88 tests passed.
+  - `pnpm vitest run src/App.test.tsx` - 45 tests passed.
   - `node C:\Users\PC\.agents\skills\impeccable\scripts\detect.mjs --json src\App.tsx src\styles.css` - no findings.
-  - `pnpm check` - 17 test files, 206 tests passed; production client and server builds passed.
+  - `pnpm check` - 17 test files, 210 tests passed; production client and server builds passed.
   - Built-server smoke with all provider integration env unset - passed health, workspace contract, public portal, private denied, and private token checks.
 - Browser/viewports tested:
   - Desktop 1280x720: requester notification panel rendered, status update queued, no horizontal overflow across app shell, operations deck, board, inspector, triage controls, or notification panel.
@@ -115,6 +116,7 @@ As a maintainer, I can see whether requesters want updates, queue useful notific
   - The slice is intentionally outbox-only; it queues internal events but sends no external provider, email, web push, or chat messages.
   - Notification bodies use public request/changelog fields and tests assert private changelog notes and internal comments are not present.
   - Public portal projection was checked to exclude notification settings and outbox records.
+  - Read-only subagent audit found no P0/P1 issues. P2 feedback was resolved by discriminator-bearing event ids, selected-request-only outbox counts, rejecting broad notification settings replacement over workspace actions, and adding explicit draft/private changelog no-queue tests.
   - Impeccable detector reported no UI findings for the edited app/CSS files.
 - Known unresolved risks: Real delivery channels, verified requester identities, unsubscribe links, background delivery workers, and notification analytics remain later production slices.
 - Rollback notes: Restore a pre-upgrade backup or migrate notification fields out before downgrading to an older schema.

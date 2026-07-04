@@ -98,7 +98,7 @@ As a workspace owner, I can trust OpenRoad to accept GitHub webhooks only from G
 ## Evidence
 
 - Branch: `feat/github-webhook-disconnect`
-- Commit SHAs: pending.
+- Commit SHAs: `1005e1f`.
 - Date: 2026-07-04.
 - Acceptance criteria status: Passed for signed GitHub webhook ingestion, idempotent linked issue sync, installation webhook state changes, and manual disconnect without OpenRoad request deletion.
 - Commands run:

@@ -1,0 +1,35 @@
+services:
+  openroad:
+    build:
+      context: .
+    image: openroad:local
+    restart: unless-stopped
+    ports:
+      - "${OPENROAD_PORT:-4173}:4173"
+    environment:
+      OPENROAD_ADMIN_TOKEN: "${OPENROAD_ADMIN_TOKEN:?Set OPENROAD_ADMIN_TOKEN before starting OpenRoad}"
+      OPENROAD_DATA_FILE: /data/openroad-state.json
+      OPENROAD_TEAM_FILE: /data/openroad-team.json
+      OPENROAD_DIST_DIR: /app/dist
+      OPENROAD_OWNER_EMAIL: "${OPENROAD_OWNER_EMAIL:-owner@openroad.local}"
+      OPENROAD_OWNER_NAME: "${OPENROAD_OWNER_NAME:-Local owner}"
+      OPENROAD_SINGLE_USER_MODE: "false"
+      OPENROAD_TRUST_PROXY_HEADERS: "${OPENROAD_TRUST_PROXY_HEADERS:-false}"
+      PORT: "4173"
+    volumes:
+      - openroad-data:/data
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:4173/api/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  openroad-data:

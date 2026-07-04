@@ -1,0 +1,12 @@
+node_modules
+dist
+server-dist
+.openroad
+.git
+.gitignore
+design/qa
+*.log
+.env
+.env.*
+!.env.example
+!.env.selfhost.example

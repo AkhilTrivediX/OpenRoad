@@ -91,7 +91,7 @@ As a workspace owner or contributor with delivery responsibility, I can fetch is
 ## Evidence
 
 - Branch: `feat/github-live-issue-fetch`
-- Commit SHAs: pending commit.
+- Commit SHAs: `a4d1200`.
 - Date: 2026-07-04.
 - Acceptance criteria status: Passed for live issue fetch without persisted token scope.
 - Commands run:

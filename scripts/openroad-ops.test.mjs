@@ -32,7 +32,7 @@ describe("openroad ops", () => {
     const manifest = JSON.parse(await readFile(join(result.backupDir, "manifest.json"), "utf8"));
     expect(manifest.type).toBe("openroad-file-snapshot");
     expect(manifest.files.data.schemaVersion).toBe(2);
-    expect(manifest.files.integration.schemaVersion).toBe(2);
+    expect(manifest.files.integration.schemaVersion).toBe(3);
     expect(manifest.files.team.schemaVersion).toBe(1);
     await expect(readFile(join(result.backupDir, "openroad-state.json"), "utf8")).resolves.toContain("acme");
     await expect(readFile(join(result.backupDir, "openroad-integrations.json"), "utf8")).resolves.toContain(
@@ -111,7 +111,25 @@ describe("openroad ops", () => {
               workspaceId: "acme"
             }
           ],
-          schemaVersion: 2
+          schemaVersion: 3,
+          syncJobs: [
+            {
+              attempt: 0,
+              createdAt: "2026-07-04T00:00:00.000Z",
+              dedupeKey: "github:acme:github-install:manual:installation",
+              error: "Provider failed token=raw-sync-error-token",
+              id: "sync-job-github-acme",
+              installationId: "github-install",
+              leaseExpiresAt: "2026-07-04T00:15:00.000Z",
+              provider: "github",
+              rawPayload: { token: "raw-sync-token" },
+              reason: "manual",
+              resultSummary: "Retried with Bearer raw-sync-summary-token",
+              status: "queued",
+              updatedAt: "2026-07-04T00:00:00.000Z",
+              workspaceId: "acme"
+            }
+          ]
         },
         null,
         2
@@ -142,10 +160,17 @@ describe("openroad ops", () => {
     expect(archivedIntegration).not.toContain("raw-access-token");
     expect(archivedIntegration).not.toContain("raw-refresh-token");
     expect(archivedIntegration).not.toContain("raw-installation-token");
+    expect(archivedIntegration).not.toContain("raw-sync-token");
+    expect(archivedIntegration).not.toContain("raw-sync-error-token");
+    expect(archivedIntegration).not.toContain("raw-sync-summary-token");
+    expect(archivedIntegration).toContain("leaseExpiresAt");
     expect(restoredIntegration).toContain("ciphertext");
     expect(restoredIntegration).not.toContain("raw-access-token");
     expect(restoredIntegration).not.toContain("raw-refresh-token");
     expect(restoredIntegration).not.toContain("raw-token");
+    expect(restoredIntegration).not.toContain("raw-sync-token");
+    expect(restoredIntegration).not.toContain("raw-sync-error-token");
+    expect(restoredIntegration).not.toContain("raw-sync-summary-token");
   });
 
   it("fails backup when a required source file is missing", async ({ task }) => {
@@ -291,7 +316,7 @@ async function writeOpenRoadPair(root, workspaceId = "acme") {
         installations: [],
         credentials: [],
         mappings: [],
-        schemaVersion: 2,
+        schemaVersion: 3,
         syncEvents: [
           {
             createdAt: "2026-07-04T00:00:00.000Z",
@@ -303,7 +328,8 @@ async function writeOpenRoadPair(root, workspaceId = "acme") {
             summary: "Synced one issue.",
             workspaceId
           }
-        ]
+        ],
+        syncJobs: []
       },
       null,
       2

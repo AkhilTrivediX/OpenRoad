@@ -92,6 +92,8 @@ import {
   type IntegrationCredential,
   type IntegrationState,
   type IntegrationStore,
+  type IntegrationSyncJob,
+  type IntegrationSyncJobReason,
   type IntegrationSyncEvent
 } from "./integrations.js";
 import {
@@ -106,6 +108,15 @@ import {
   type NotificationDeliveryRunner,
   type NotificationDeliveryAdapter
 } from "./notifications.js";
+import {
+  IntegrationSyncJobError,
+  claimDueIntegrationSyncJobs,
+  completeIntegrationSyncJob,
+  enqueueIntegrationSyncJob,
+  failIntegrationSyncJob,
+  mergeIntegrationSyncJobUpdates,
+  type IntegrationSyncWorker
+} from "./sync-jobs.js";
 import {
   FetchGitHubAppClient,
   GitHubAppClientError,
@@ -134,6 +145,7 @@ type CreateOpenRoadServerOptions = {
   githubAppClient?: GitHubAppClient;
   githubAppConfig?: GitHubAppConfig;
   integrationStore?: IntegrationStore;
+  integrationSyncWorker?: IntegrationSyncWorker;
   jiraOAuthConfig?: JiraOAuthConfig;
   linearOAuthConfig?: LinearOAuthConfig;
   logger?: Pick<Console, "error" | "log">;
@@ -155,6 +167,7 @@ type ApiErrorCode =
   | "not_configured"
   | "not_found"
   | "payload_too_large"
+  | "queue_full"
   | "rate_limited"
   | "server_error"
   | "upstream_error";
@@ -259,6 +272,7 @@ export function createOpenRoadServer({
   githubAppConfig = githubAppConfigFromEnv(),
   githubAppClient = new FetchGitHubAppClient(githubAppConfig),
   integrationStore,
+  integrationSyncWorker,
   jiraOAuthConfig = jiraOAuthConfigFromEnv(),
   linearOAuthConfig = linearOAuthConfigFromEnv(),
   logger = console,
@@ -271,6 +285,8 @@ export function createOpenRoadServer({
   const resolvedDistDir = resolve(distDir);
   const activeGitHubWebhookDeliveries = new Set<string>();
   const runNotificationDeliveryExclusive = createExclusiveRunner();
+  const runIntegrationMutationExclusive = createExclusiveRunner();
+  const runIntegrationSyncExclusive = createExclusiveRunner();
 
   return createServer(async (request, response) => {
     const access = createAccessContext(request, auth);
@@ -289,10 +305,13 @@ export function createOpenRoadServer({
           githubAppClient,
           githubAppConfig,
           integrationStore,
+          integrationSyncWorker,
           jiraOAuthConfig,
           linearOAuthConfig,
           notificationDeliveryAdapter,
           runNotificationDeliveryExclusive,
+          runIntegrationMutationExclusive,
+          runIntegrationSyncExclusive,
           teamStore,
           portalRateLimiter,
           activeGitHubWebhookDeliveries,
@@ -325,10 +344,13 @@ async function handleApiRequest(
   githubAppClient: GitHubAppClient,
   githubAppConfig: GitHubAppConfig,
   integrationStore: IntegrationStore | undefined,
+  integrationSyncWorker: IntegrationSyncWorker | undefined,
   jiraOAuthConfig: JiraOAuthConfig,
   linearOAuthConfig: LinearOAuthConfig,
   notificationDeliveryAdapter: NotificationDeliveryAdapter | undefined,
   runNotificationDeliveryExclusive: NotificationDeliveryRunner,
+  runIntegrationMutationExclusive: NotificationDeliveryRunner,
+  runIntegrationSyncExclusive: NotificationDeliveryRunner,
   teamStore: TeamStore | undefined,
   portalRateLimiter: PortalRateLimiter,
   activeGitHubWebhookDeliveries: Set<string>,
@@ -404,6 +426,21 @@ async function handleApiRequest(
     return;
   }
 
+  if (requestUrl.pathname === "/api/openroad/integrations/sync/run") {
+    await handleIntegrationSyncRunRequest(
+      request,
+      response,
+      access,
+      teamStore,
+      store,
+      integrationStore,
+      integrationSyncWorker,
+      runIntegrationMutationExclusive,
+      runIntegrationSyncExclusive
+    );
+    return;
+  }
+
   if (requestUrl.pathname === "/api/openroad/ops/status") {
     await handleOpsStatusRequest(request, response, store, access, teamStore, integrationStore);
     return;
@@ -466,6 +503,7 @@ async function handleApiRequest(
       access,
       teamStore,
       integrationStore,
+      runIntegrationMutationExclusive,
       githubIssueImportMatch[1]
     );
     return;
@@ -483,6 +521,7 @@ async function handleApiRequest(
       access,
       teamStore,
       integrationStore,
+      runIntegrationMutationExclusive,
       linearIssueImportMatch[1]
     );
     return;
@@ -500,6 +539,7 @@ async function handleApiRequest(
       access,
       teamStore,
       integrationStore,
+      runIntegrationMutationExclusive,
       jiraIssueImportMatch[1]
     );
     return;
@@ -566,6 +606,7 @@ async function handleApiRequest(
       teamStore,
       integrationStore,
       githubAppClient,
+      runIntegrationMutationExclusive,
       githubAppVerifyMatch[1]
     );
     return;
@@ -598,6 +639,7 @@ async function handleApiRequest(
       teamStore,
       integrationStore,
       githubAppConfig,
+      runIntegrationMutationExclusive,
       activeGitHubWebhookDeliveries
     );
     return;
@@ -615,6 +657,7 @@ async function handleApiRequest(
       access,
       teamStore,
       integrationStore,
+      runIntegrationMutationExclusive,
       githubInstallationDisconnectMatch[1],
       githubInstallationDisconnectMatch[2]
     );
@@ -633,6 +676,7 @@ async function handleApiRequest(
       access,
       teamStore,
       integrationStore,
+      runIntegrationMutationExclusive,
       tokenVault,
       integrationCredentialsMatch[1],
       integrationCredentialsMatch[2]
@@ -652,9 +696,29 @@ async function handleApiRequest(
       access,
       teamStore,
       integrationStore,
+      runIntegrationMutationExclusive,
       integrationCredentialRevokeMatch[1],
       integrationCredentialRevokeMatch[2],
       integrationCredentialRevokeMatch[3]
+    );
+    return;
+  }
+
+  const integrationSyncJobMatch = requestUrl.pathname.match(
+    /^\/api\/openroad\/workspaces\/([^/]+)\/integrations\/([^/]+)\/sync\/jobs$/
+  );
+
+  if (integrationSyncJobMatch) {
+    await handleIntegrationSyncJobEnqueueRequest(
+      request,
+      response,
+      store,
+      access,
+      teamStore,
+      integrationStore,
+      runIntegrationMutationExclusive,
+      integrationSyncJobMatch[1],
+      integrationSyncJobMatch[2]
     );
     return;
   }
@@ -964,6 +1028,7 @@ async function handleGitHubIssueImportRequest(
   access: AccessContext,
   teamStore: TeamStore | undefined,
   integrationStore: IntegrationStore | undefined,
+  runIntegrationMutationExclusive: NotificationDeliveryRunner,
   encodedWorkspaceId: string
 ) {
   if (request.method !== "POST") {
@@ -994,30 +1059,43 @@ async function handleGitHubIssueImportRequest(
       throw new ApiRequestError("not_found", 404, "Workspace was not found.");
     }
 
-    const integrationResult = await integrationStore.load();
-    const importResult = createGitHubIssueImportState(
-      workspace,
-      integrationResult.state,
-      gitHubPayload,
-      new Date().toISOString()
-    );
+    const { auditEvent, importResult, integrationState } = await runIntegrationMutationExclusive(
+      async () => {
+        const latest = await store.load();
+        const latestWorkspace = latest.state.workspaces.find((item) => item.id === workspaceId);
 
-    const nextState = parseOpenRoadState(
-      openRoadReducer(current.state, {
-        request: importResult.request,
-        type: importResult.created ? "create-request" : "replace-request",
-        workspaceId
-      })
+        if (!latestWorkspace) {
+          throw new ApiRequestError("not_found", 404, "Workspace was not found.");
+        }
+
+        const integrationResult = await integrationStore.load();
+        const importResult = createGitHubIssueImportState(
+          latestWorkspace,
+          integrationResult.state,
+          gitHubPayload,
+          new Date().toISOString()
+        );
+
+        const nextState = parseOpenRoadState(
+          openRoadReducer(latest.state, {
+            request: importResult.request,
+            type: importResult.created ? "create-request" : "replace-request",
+            workspaceId
+          })
+        );
+        const state = await store.replaceState(nextState);
+        const integrationState = await integrationStore.replaceState(importResult.integrationState);
+        const auditEvent = await recordAuditEvent(teamStore, state, access, {
+          summary: `${importResult.created ? "Imported" : "Updated"} GitHub issue ${
+            gitHubPayload.issue.repository.fullName
+          }#${gitHubPayload.issue.number}.`,
+          type: importResult.created ? "integration.github.issue.import" : "integration.github.issue.sync",
+          workspaceId
+        });
+
+        return { auditEvent, importResult, integrationState };
+      }
     );
-    const state = await store.replaceState(nextState);
-    const integrationState = await integrationStore.replaceState(importResult.integrationState);
-    const auditEvent = await recordAuditEvent(teamStore, state, access, {
-      summary: `${importResult.created ? "Imported" : "Updated"} GitHub issue ${
-        gitHubPayload.issue.repository.fullName
-      }#${gitHubPayload.issue.number}.`,
-      type: importResult.created ? "integration.github.issue.import" : "integration.github.issue.sync",
-      workspaceId
-    });
 
     writeJson(
       response,
@@ -1093,6 +1171,7 @@ async function handleLinearIssueImportRequest(
   access: AccessContext,
   teamStore: TeamStore | undefined,
   integrationStore: IntegrationStore | undefined,
+  runIntegrationMutationExclusive: NotificationDeliveryRunner,
   encodedWorkspaceId: string
 ) {
   if (request.method !== "POST") {
@@ -1123,29 +1202,42 @@ async function handleLinearIssueImportRequest(
       throw new ApiRequestError("not_found", 404, "Workspace was not found.");
     }
 
-    const integrationResult = await integrationStore.load();
-    const importResult = createLinearIssueImportState(
-      workspace,
-      integrationResult.state,
-      linearPayload,
-      new Date().toISOString()
+    const { auditEvent, importResult, integrationState } = await runIntegrationMutationExclusive(
+      async () => {
+        const latest = await store.load();
+        const latestWorkspace = latest.state.workspaces.find((item) => item.id === workspaceId);
+
+        if (!latestWorkspace) {
+          throw new ApiRequestError("not_found", 404, "Workspace was not found.");
+        }
+
+        const integrationResult = await integrationStore.load();
+        const importResult = createLinearIssueImportState(
+          latestWorkspace,
+          integrationResult.state,
+          linearPayload,
+          new Date().toISOString()
+        );
+        const nextState = parseOpenRoadState(
+          openRoadReducer(latest.state, {
+            request: importResult.request,
+            type: importResult.created ? "create-request" : "replace-request",
+            workspaceId
+          })
+        );
+        const state = await store.replaceState(nextState);
+        const integrationState = await integrationStore.replaceState(importResult.integrationState);
+        const auditEvent = await recordAuditEvent(teamStore, state, access, {
+          summary: `${importResult.created ? "Imported" : "Updated"} Linear issue ${
+            linearPayload.issue.identifier
+          }.`,
+          type: importResult.created ? "integration.linear.issue.import" : "integration.linear.issue.sync",
+          workspaceId
+        });
+
+        return { auditEvent, importResult, integrationState };
+      }
     );
-    const nextState = parseOpenRoadState(
-      openRoadReducer(current.state, {
-        request: importResult.request,
-        type: importResult.created ? "create-request" : "replace-request",
-        workspaceId
-      })
-    );
-    const state = await store.replaceState(nextState);
-    const integrationState = await integrationStore.replaceState(importResult.integrationState);
-    const auditEvent = await recordAuditEvent(teamStore, state, access, {
-      summary: `${importResult.created ? "Imported" : "Updated"} Linear issue ${
-        linearPayload.issue.identifier
-      }.`,
-      type: importResult.created ? "integration.linear.issue.import" : "integration.linear.issue.sync",
-      workspaceId
-    });
 
     writeJson(
       response,
@@ -1175,6 +1267,7 @@ async function handleJiraIssueImportRequest(
   access: AccessContext,
   teamStore: TeamStore | undefined,
   integrationStore: IntegrationStore | undefined,
+  runIntegrationMutationExclusive: NotificationDeliveryRunner,
   encodedWorkspaceId: string
 ) {
   if (request.method !== "POST") {
@@ -1205,29 +1298,42 @@ async function handleJiraIssueImportRequest(
       throw new ApiRequestError("not_found", 404, "Workspace was not found.");
     }
 
-    const integrationResult = await integrationStore.load();
-    const importResult = createJiraIssueImportState(
-      workspace,
-      integrationResult.state,
-      jiraPayload,
-      new Date().toISOString()
+    const { auditEvent, importResult, integrationState } = await runIntegrationMutationExclusive(
+      async () => {
+        const latest = await store.load();
+        const latestWorkspace = latest.state.workspaces.find((item) => item.id === workspaceId);
+
+        if (!latestWorkspace) {
+          throw new ApiRequestError("not_found", 404, "Workspace was not found.");
+        }
+
+        const integrationResult = await integrationStore.load();
+        const importResult = createJiraIssueImportState(
+          latestWorkspace,
+          integrationResult.state,
+          jiraPayload,
+          new Date().toISOString()
+        );
+        const nextState = parseOpenRoadState(
+          openRoadReducer(latest.state, {
+            request: importResult.request,
+            type: importResult.created ? "create-request" : "replace-request",
+            workspaceId
+          })
+        );
+        const state = await store.replaceState(nextState);
+        const integrationState = await integrationStore.replaceState(importResult.integrationState);
+        const auditEvent = await recordAuditEvent(teamStore, state, access, {
+          summary: `${importResult.created ? "Imported" : "Updated"} Jira issue ${
+            jiraPayload.issue.key
+          }.`,
+          type: importResult.created ? "integration.jira.issue.import" : "integration.jira.issue.sync",
+          workspaceId
+        });
+
+        return { auditEvent, importResult, integrationState };
+      }
     );
-    const nextState = parseOpenRoadState(
-      openRoadReducer(current.state, {
-        request: importResult.request,
-        type: importResult.created ? "create-request" : "replace-request",
-        workspaceId
-      })
-    );
-    const state = await store.replaceState(nextState);
-    const integrationState = await integrationStore.replaceState(importResult.integrationState);
-    const auditEvent = await recordAuditEvent(teamStore, state, access, {
-      summary: `${importResult.created ? "Imported" : "Updated"} Jira issue ${
-        jiraPayload.issue.key
-      }.`,
-      type: importResult.created ? "integration.jira.issue.import" : "integration.jira.issue.sync",
-      workspaceId
-    });
 
     writeJson(
       response,
@@ -1892,6 +1998,7 @@ async function handleIntegrationCredentialCollectionRequest(
   access: AccessContext,
   teamStore: TeamStore | undefined,
   integrationStore: IntegrationStore | undefined,
+  runIntegrationMutationExclusive: NotificationDeliveryRunner,
   tokenVault: IntegrationTokenVault,
   encodedWorkspaceId: string,
   encodedProvider: string
@@ -1922,9 +2029,8 @@ async function handleIntegrationCredentialCollectionRequest(
       throw new ApiRequestError("not_found", 404, "Workspace was not found.");
     }
 
-    const integrationResult = await integrationStore.load();
-
     if (request.method === "GET") {
+      const integrationResult = await integrationStore.load();
       writeJson(
         response,
         200,
@@ -1952,24 +2058,29 @@ async function handleIntegrationCredentialCollectionRequest(
     }
 
     const payload = await readJsonBody(request, 50_000);
-    const now = new Date().toISOString();
-    const { credential, installation } = createIntegrationCredentialFromPayload({
-      integrationState: integrationResult.state,
-      now,
-      payload,
-      provider,
-      tokenVault,
-      workspaceId
-    });
-    const nextIntegrationState = parseIntegrationState({
-      ...integrationResult.state,
-      credentials: upsertById(integrationResult.state.credentials, credential)
-    });
-    await integrationStore.replaceState(nextIntegrationState);
-    const auditEvent = await recordAuditEvent(teamStore, current.state, access, {
-      summary: `Stored ${provider} credential for installation ${installation.id}.`,
-      type: "integration.credentials.create",
-      workspaceId
+    const { auditEvent, credential } = await runIntegrationMutationExclusive(async () => {
+      const integrationResult = await integrationStore.load();
+      const now = new Date().toISOString();
+      const { credential, installation } = createIntegrationCredentialFromPayload({
+        integrationState: integrationResult.state,
+        now,
+        payload,
+        provider,
+        tokenVault,
+        workspaceId
+      });
+      const nextIntegrationState = parseIntegrationState({
+        ...integrationResult.state,
+        credentials: upsertById(integrationResult.state.credentials, credential)
+      });
+      await integrationStore.replaceState(nextIntegrationState);
+      const auditEvent = await recordAuditEvent(teamStore, current.state, access, {
+        summary: `Stored ${provider} credential for installation ${installation.id}.`,
+        type: "integration.credentials.create",
+        workspaceId
+      });
+
+      return { auditEvent, credential };
     });
 
     writeJson(
@@ -1988,6 +2099,203 @@ async function handleIntegrationCredentialCollectionRequest(
   }
 }
 
+async function handleIntegrationSyncJobEnqueueRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  store: OpenRoadStore,
+  access: AccessContext,
+  teamStore: TeamStore | undefined,
+  integrationStore: IntegrationStore | undefined,
+  runIntegrationMutationExclusive: NotificationDeliveryRunner,
+  encodedWorkspaceId: string,
+  encodedProvider: string
+) {
+  if (request.method !== "POST") {
+    writeApiError(response, 405, "invalid_method", "This endpoint only supports POST.", access);
+    return;
+  }
+
+  const workspaceId = decodeURIComponent(encodedWorkspaceId);
+
+  try {
+    const provider = parseIntegrationProviderPath(encodedProvider);
+    requirePermission(access, "integration:manage", workspaceId);
+
+    if (!integrationStore) {
+      throw new ApiRequestError(
+        "not_configured",
+        503,
+        "OpenRoad integration metadata store is not configured."
+      );
+    }
+
+    const current = await store.load();
+    const workspace = current.state.workspaces.find((item) => item.id === workspaceId);
+
+    if (!workspace) {
+      throw new ApiRequestError("not_found", 404, "Workspace was not found.");
+    }
+
+    const payload = await readJsonBody(request, 20_000);
+    const enqueue = await runIntegrationMutationExclusive(async () => {
+      const integrationResult = await integrationStore.load();
+      const enqueue = enqueueIntegrationSyncJob(
+        integrationResult.state,
+        parseIntegrationSyncJobPayload(payload, provider, workspaceId),
+        new Date().toISOString()
+      );
+
+      if (enqueue.enqueued) {
+        await integrationStore.replaceState(enqueue.state);
+        await recordAuditEvent(teamStore, current.state, access, {
+          summary: `Queued ${provider} sync job for installation ${enqueue.job.installationId}.`,
+          type: "integration.sync.job.enqueue",
+          workspaceId
+        });
+      }
+
+      return enqueue;
+    });
+
+    writeJson(
+      response,
+      enqueue.enqueued ? 201 : 200,
+      {
+        job: sanitizeSyncJobForApi(enqueue.job),
+        provider,
+        status: enqueue.enqueued ? "queued" : "deduped"
+      },
+      access
+    );
+  } catch (error) {
+    writeKnownApiError(response, error, access);
+  }
+}
+
+async function handleIntegrationSyncRunRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  access: AccessContext,
+  teamStore: TeamStore | undefined,
+  store: OpenRoadStore,
+  integrationStore: IntegrationStore | undefined,
+  integrationSyncWorker: IntegrationSyncWorker | undefined,
+  runIntegrationMutationExclusive: NotificationDeliveryRunner,
+  runIntegrationSyncExclusive: NotificationDeliveryRunner
+) {
+  if (request.method !== "POST") {
+    writeApiError(response, 405, "invalid_method", "This endpoint only supports POST.", access);
+    return;
+  }
+
+  try {
+    requirePermission(access, "state:write");
+
+    if (!integrationStore) {
+      throw new ApiRequestError(
+        "not_configured",
+        503,
+        "OpenRoad integration metadata store is not configured."
+      );
+    }
+
+    if (!integrationSyncWorker) {
+      throw new ApiRequestError("not_configured", 503, "OpenRoad integration sync worker is not configured.");
+    }
+
+    const payload = await readJsonBody(request, 20_000);
+    const runOptions = parseIntegrationSyncRunPayload(payload);
+    const openRoadResult = await store.load();
+    const runResult = await runIntegrationSyncExclusive(async () => {
+      const claimed = await runIntegrationMutationExclusive(async () => {
+        const integrationResult = await integrationStore.load();
+        const now = new Date().toISOString();
+        const claimed = claimDueIntegrationSyncJobs(integrationResult.state, {
+          limit: runOptions.limit,
+          now,
+          provider: runOptions.provider,
+          workspaceId: runOptions.workspaceId
+        });
+        const state =
+          claimed.jobs.length > 0
+            ? await integrationStore.replaceState(claimed.state)
+            : claimed.state;
+
+        return { jobs: claimed.jobs, state };
+      });
+      let state = claimed.state;
+
+      const processed: Array<{ id: string; kind: string; status: IntegrationSyncJob["status"] }> = [];
+
+      for (const job of claimed.jobs) {
+        try {
+          const result = await integrationSyncWorker.process(job);
+
+          if (result.kind === "success") {
+            state = completeIntegrationSyncJob(state, {
+              jobId: job.id,
+              now: new Date().toISOString(),
+              resultSummary: sanitizeIntegrationWorkerSummary(result.summary)
+            });
+          } else {
+            state = failIntegrationSyncJob(state, {
+              error: sanitizeIntegrationWorkerFailure(result.error ?? result.summary, result.kind),
+              jobId: job.id,
+              now: new Date().toISOString(),
+              retryAfterSeconds: result.retryAfterSeconds,
+              retryable: result.kind === "retryable-error"
+            });
+          }
+        } catch {
+          state = failIntegrationSyncJob(state, {
+            error: "Integration sync worker failed.",
+            jobId: job.id,
+            now: new Date().toISOString(),
+            retryable: true
+          });
+        }
+
+        const updatedJob = state.syncJobs.find((item) => item.id === job.id);
+        if (updatedJob) {
+          processed.push({
+            id: updatedJob.id,
+            kind: updatedJob.status === "succeeded" ? "success" : updatedJob.status,
+            status: updatedJob.status
+          });
+        }
+      }
+
+      if (claimed.jobs.length > 0) {
+        const updatedJobs = claimed.jobs
+          .map((job) => state.syncJobs.find((item) => item.id === job.id))
+          .filter((job): job is IntegrationSyncJob => Boolean(job));
+        state = await runIntegrationMutationExclusive(async () => {
+          const latest = await integrationStore.load();
+          const merged = mergeIntegrationSyncJobUpdates(latest.state, updatedJobs);
+          return integrationStore.replaceState(merged);
+        });
+      }
+
+      await recordAuditEvent(teamStore, openRoadResult.state, access, {
+        summary: `Integration sync worker processed ${claimed.jobs.length} job(s).`,
+        type: "integration.sync.run",
+        workspaceId: runOptions.workspaceId
+      });
+
+      return {
+        claimed: claimed.jobs.length,
+        processed,
+        remainingQueued: countQueuedSyncJobs(state, runOptions),
+        status: "processed"
+      };
+    });
+
+    writeJson(response, 200, runResult, access);
+  } catch (error) {
+    writeKnownApiError(response, error, access);
+  }
+}
+
 async function handleIntegrationCredentialRevokeRequest(
   request: IncomingMessage,
   response: ServerResponse,
@@ -1995,6 +2303,7 @@ async function handleIntegrationCredentialRevokeRequest(
   access: AccessContext,
   teamStore: TeamStore | undefined,
   integrationStore: IntegrationStore | undefined,
+  runIntegrationMutationExclusive: NotificationDeliveryRunner,
   encodedWorkspaceId: string,
   encodedProvider: string,
   encodedCredentialId: string
@@ -2026,36 +2335,40 @@ async function handleIntegrationCredentialRevokeRequest(
       throw new ApiRequestError("not_found", 404, "Workspace was not found.");
     }
 
-    const integrationResult = await integrationStore.load();
-    const credential = integrationResult.state.credentials.find(
-      (item) =>
-        item.id === credentialId &&
-        item.provider === provider &&
-        item.workspaceId === workspaceId
-    );
-
-    if (!credential) {
-      throw new ApiRequestError("not_found", 404, "Integration credential was not found.");
-    }
-
-    const revoked =
-      credential.status === "revoked"
-        ? credential
-        : revokeIntegrationCredential(credential, new Date().toISOString());
-
-    if (revoked !== credential) {
-      await integrationStore.replaceState(
-        parseIntegrationState({
-          ...integrationResult.state,
-          credentials: upsertById(integrationResult.state.credentials, revoked)
-        })
+    const revoked = await runIntegrationMutationExclusive(async () => {
+      const integrationResult = await integrationStore.load();
+      const credential = integrationResult.state.credentials.find(
+        (item) =>
+          item.id === credentialId &&
+          item.provider === provider &&
+          item.workspaceId === workspaceId
       );
-      await recordAuditEvent(teamStore, current.state, access, {
-        summary: `Revoked ${provider} credential for installation ${credential.installationId}.`,
-        type: "integration.credentials.revoke",
-        workspaceId
-      });
-    }
+
+      if (!credential) {
+        throw new ApiRequestError("not_found", 404, "Integration credential was not found.");
+      }
+
+      const revoked =
+        credential.status === "revoked"
+          ? credential
+          : revokeIntegrationCredential(credential, new Date().toISOString());
+
+      if (revoked !== credential) {
+        await integrationStore.replaceState(
+          parseIntegrationState({
+            ...integrationResult.state,
+            credentials: upsertById(integrationResult.state.credentials, revoked)
+          })
+        );
+        await recordAuditEvent(teamStore, current.state, access, {
+          summary: `Revoked ${provider} credential for installation ${credential.installationId}.`,
+          type: "integration.credentials.revoke",
+          workspaceId
+        });
+      }
+
+      return revoked;
+    });
 
     writeJson(
       response,
@@ -2150,6 +2463,131 @@ function createIntegrationCredentialFromPayload({
   );
 
   return { credential, installation };
+}
+
+function parseIntegrationSyncJobPayload(
+  payload: unknown,
+  provider: IntegrationProvider,
+  workspaceId: string
+) {
+  if (!isRecord(payload)) {
+    throw new ApiRequestError("invalid_request", 400, "Integration sync job payload must be an object.");
+  }
+
+  const installationId = getBoundedIdentifier(payload.installationId, 160);
+
+  if (!installationId) {
+    throw new ApiRequestError("invalid_request", 400, "Integration installation id is required.");
+  }
+
+  return {
+    installationId,
+    mappingId: getBoundedText(payload.mappingId, 300),
+    provider,
+    reason: parseIntegrationSyncReason(payload.reason),
+    runAfter: parseOptionalTimestamp(payload.runAfter, "runAfter"),
+    workspaceId
+  };
+}
+
+function parseIntegrationSyncRunPayload(payload: unknown) {
+  if (payload === undefined || payload === null) {
+    return {};
+  }
+
+  if (!isRecord(payload)) {
+    throw new ApiRequestError("invalid_request", 400, "Integration sync run payload must be an object.");
+  }
+
+  return {
+    limit: getPositiveInteger(payload.limit, 10),
+    provider: payload.provider === undefined ? undefined : parseIntegrationProviderValue(payload.provider),
+    workspaceId: getBoundedText(payload.workspaceId, 120)
+  };
+}
+
+function parseIntegrationSyncReason(value: unknown): IntegrationSyncJobReason {
+  const reason = getBoundedText(value, 40) ?? "manual";
+
+  if (reason === "manual" || reason === "scheduled" || reason === "webhook" || reason === "retry") {
+    return reason;
+  }
+
+  throw new ApiRequestError("invalid_request", 400, "Integration sync job reason is not supported.");
+}
+
+function parseIntegrationProviderValue(value: unknown): IntegrationProvider {
+  const provider = getBoundedText(value, 40);
+  if (provider && integrationProviders.includes(provider as IntegrationProvider)) {
+    return provider as IntegrationProvider;
+  }
+
+  throw new ApiRequestError("invalid_request", 400, "Integration provider is not supported.");
+}
+
+function sanitizeSyncJobForApi(job: IntegrationSyncJob) {
+  return {
+    attempt: job.attempt,
+    ...(job.claimedAt ? { claimedAt: job.claimedAt } : {}),
+    ...(job.completedAt ? { completedAt: job.completedAt } : {}),
+    createdAt: job.createdAt,
+    dedupeKey: job.dedupeKey,
+    ...(job.error ? { error: job.error } : {}),
+    id: job.id,
+    installationId: job.installationId,
+    ...(job.lastRunAt ? { lastRunAt: job.lastRunAt } : {}),
+    ...(job.mappingId ? { mappingId: job.mappingId } : {}),
+    ...(job.nextRunAt ? { nextRunAt: job.nextRunAt } : {}),
+    provider: job.provider,
+    reason: job.reason,
+    ...(job.resultSummary ? { resultSummary: job.resultSummary } : {}),
+    status: job.status,
+    updatedAt: job.updatedAt,
+    workspaceId: job.workspaceId
+  };
+}
+
+function countQueuedSyncJobs(
+  state: IntegrationState,
+  filters: { provider?: IntegrationProvider; workspaceId?: string }
+) {
+  return state.syncJobs.filter(
+    (job) =>
+      job.status === "queued" &&
+      (!filters.provider || job.provider === filters.provider) &&
+      (!filters.workspaceId || job.workspaceId === filters.workspaceId)
+  ).length;
+}
+
+function sanitizeIntegrationWorkerSummary(value: unknown) {
+  const text = getBoundedText(value, 500);
+  return text ? redactSensitiveText(text) : undefined;
+}
+
+function sanitizeIntegrationWorkerFailure(
+  value: unknown,
+  kind: "retryable-error" | "fatal-error"
+) {
+  const fallback =
+    kind === "retryable-error"
+      ? "Integration sync worker reported a retryable error."
+      : "Integration sync worker reported a fatal error.";
+  return redactSensitiveText(getBoundedText(value, 500) ?? fallback);
+}
+
+function redactSensitiveText(value: string) {
+  return value
+    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [redacted]")
+    .replace(
+      /([?&](?:access_token|refresh_token|token|jwt|secret|client_secret|authorization)=)[^&\s]+/gi,
+      "$1[redacted]"
+    )
+    .replace(
+      /((?:access[_-]?token|refresh[_-]?token|secret|client[_-]?secret|password|authorization)\s*[:=]\s*)[^\s,;]+/gi,
+      "$1[redacted]"
+    )
+    .replace(/\b[\w.-]*(?:token|secret|password|credential|authorization)[\w.-]*\b/gi, "[redacted]")
+    .slice(0, 500);
 }
 
 function parseIntegrationProviderPath(encodedProvider: string): IntegrationProvider {
@@ -2307,6 +2745,7 @@ async function handleGitHubAppInstallationVerifyRequest(
   teamStore: TeamStore | undefined,
   integrationStore: IntegrationStore | undefined,
   githubAppClient: GitHubAppClient,
+  runIntegrationMutationExclusive: NotificationDeliveryRunner,
   encodedWorkspaceId: string
 ) {
   if (request.method !== "POST") {
@@ -2349,11 +2788,19 @@ async function handleGitHubAppInstallationVerifyRequest(
       );
     }
 
-    await integrationStore.upsertInstallation(installation);
-    const auditEvent = await recordAuditEvent(teamStore, current.state, access, {
-      summary: `Verified GitHub App installation ${installation.providerAccountName}.`,
-      type: "integration.github.app.verify",
-      workspaceId
+    const auditEvent = await runIntegrationMutationExclusive(async () => {
+      const integrationResult = await integrationStore.load();
+      await integrationStore.replaceState(
+        parseIntegrationState({
+          ...integrationResult.state,
+          installations: upsertInstallationByScope(integrationResult.state.installations, installation)
+        })
+      );
+      return recordAuditEvent(teamStore, current.state, access, {
+        summary: `Verified GitHub App installation ${installation.providerAccountName}.`,
+        type: "integration.github.app.verify",
+        workspaceId
+      });
     });
 
     writeJson(
@@ -2615,6 +3062,7 @@ async function handleGitHubWebhookRequest(
   teamStore: TeamStore | undefined,
   integrationStore: IntegrationStore | undefined,
   githubAppConfig: GitHubAppConfig,
+  runIntegrationMutationExclusive: NotificationDeliveryRunner,
   activeGitHubWebhookDeliveries: Set<string>
 ) {
   if (request.method !== "POST") {
@@ -2685,66 +3133,65 @@ async function handleGitHubWebhookRequest(
 
     try {
       const payload = parseJsonBuffer(rawBody);
-      const current = await store.load();
-      const integrationResult = await integrationStore.load();
-      const duplicateEvent = integrationResult.state.syncEvents.find(
-        (item) => item.provider === "github" && item.deliveryId === deliveryId
-      );
+      const webhookResponse = await runIntegrationMutationExclusive(async () => {
+        const current = await store.load();
+        const integrationResult = await integrationStore.load();
+        const duplicateEvent = integrationResult.state.syncEvents.find(
+          (item) => item.provider === "github" && item.deliveryId === deliveryId
+        );
 
-      if (duplicateEvent) {
-        writeJson(
-          response,
-          200,
-          {
-            event: sanitizeIntegrationSyncEvent({
-              ...duplicateEvent,
-              result: "duplicate",
-              summary: `Duplicate GitHub delivery ${deliveryId} ignored.`
-            }),
-            status: "duplicate"
+        if (duplicateEvent) {
+          return {
+            body: {
+              event: sanitizeIntegrationSyncEvent({
+                ...duplicateEvent,
+                result: "duplicate",
+                summary: `Duplicate GitHub delivery ${deliveryId} ignored.`
+              }),
+              status: "duplicate"
+            },
+            statusCode: 200
+          };
+        }
+
+        const result = processGitHubWebhookDelivery({
+          deliveryId,
+          eventName,
+          integrationState: integrationResult.state,
+          now: new Date().toISOString(),
+          openRoadState: current.state,
+          payload
+        });
+        const state =
+          result.openRoadState === current.state
+            ? current.state
+            : await store.replaceState(result.openRoadState);
+        const integrationState = await integrationStore.replaceState(result.integrationState);
+
+        if (result.audit && result.audit.workspaceId) {
+          await recordAuditEvent(
+            teamStore,
+            state,
+            createIntegrationAccess(access, result.audit.workspaceId, result.audit.installationId),
+            result.audit
+          );
+        }
+
+        return {
+          body: {
+            event: sanitizeIntegrationSyncEvent(result.event),
+            status: result.event.result,
+            totals: {
+              installations: integrationState.installations.length,
+              mappings: integrationState.mappings.length,
+              syncEvents: integrationState.syncEvents.length
+            }
           },
-          access
-        );
-        return;
-      }
-
-      const result = processGitHubWebhookDelivery({
-        deliveryId,
-        eventName,
-        integrationState: integrationResult.state,
-        now: new Date().toISOString(),
-        openRoadState: current.state,
-        payload
+          statusCode: 202
+        };
       });
-      const state =
-        result.openRoadState === current.state
-          ? current.state
-          : await store.replaceState(result.openRoadState);
-      const integrationState = await integrationStore.replaceState(result.integrationState);
 
-      if (result.audit && result.audit.workspaceId) {
-        await recordAuditEvent(
-          teamStore,
-          state,
-          createIntegrationAccess(access, result.audit.workspaceId, result.audit.installationId),
-          result.audit
-        );
-      }
-
-      writeJson(
-        response,
-        202,
-        {
-          event: sanitizeIntegrationSyncEvent(result.event),
-          status: result.event.result,
-          totals: {
-            installations: integrationState.installations.length,
-            mappings: integrationState.mappings.length,
-            syncEvents: integrationState.syncEvents.length
-          }
-        },
-        access
-      );
+      writeJson(response, webhookResponse.statusCode, webhookResponse.body, access);
     } finally {
       activeGitHubWebhookDeliveries.delete(deliveryId);
     }
@@ -2760,6 +3207,7 @@ async function handleGitHubInstallationDisconnectRequest(
   access: AccessContext,
   teamStore: TeamStore | undefined,
   integrationStore: IntegrationStore | undefined,
+  runIntegrationMutationExclusive: NotificationDeliveryRunner,
   encodedWorkspaceId: string,
   encodedInstallationId: string
 ) {
@@ -2789,19 +3237,25 @@ async function handleGitHubInstallationDisconnectRequest(
       throw new ApiRequestError("not_found", 404, "Workspace was not found.");
     }
 
-    const integrationResult = await integrationStore.load();
-    const disconnected = disconnectGitHubInstallationState(
-      integrationResult.state,
-      workspaceId,
-      installationId,
-      new Date().toISOString()
+    const { auditEvent, disconnected, integrationState } = await runIntegrationMutationExclusive(
+      async () => {
+        const integrationResult = await integrationStore.load();
+        const disconnected = disconnectGitHubInstallationState(
+          integrationResult.state,
+          workspaceId,
+          installationId,
+          new Date().toISOString()
+        );
+        const integrationState = await integrationStore.replaceState(disconnected.integrationState);
+        const auditEvent = await recordAuditEvent(teamStore, current.state, access, {
+          summary: `Disconnected GitHub installation ${disconnected.installation.providerAccountName}.`,
+          type: "integration.github.app.disconnect",
+          workspaceId
+        });
+
+        return { auditEvent, disconnected, integrationState };
+      }
     );
-    const integrationState = await integrationStore.replaceState(disconnected.integrationState);
-    const auditEvent = await recordAuditEvent(teamStore, current.state, access, {
-      summary: `Disconnected GitHub installation ${disconnected.installation.providerAccountName}.`,
-      type: "integration.github.app.disconnect",
-      workspaceId
-    });
 
     writeJson(
       response,
@@ -3370,6 +3824,7 @@ async function handleOpsStatusRequest(
           integrationInstallations: integrations?.state.installations.length ?? 0,
           integrationMappings: integrations?.state.mappings.length ?? 0,
           integrationSyncEvents: integrations?.state.syncEvents.length ?? 0,
+          integrationSyncJobs: integrations?.state.syncJobs.length ?? 0,
           memberships: team?.state.memberships.length ?? 0,
           users: team?.state.users.length ?? 0,
           workspaces: result.state.workspaces.length
@@ -4032,6 +4487,12 @@ function writeKnownApiError(
 
   if (error instanceof ApiRequestError) {
     writeApiError(response, error.status, error.code, error.message, access);
+    return;
+  }
+
+  if (error instanceof IntegrationSyncJobError) {
+    const status = error.code === "not_found" ? 404 : error.code === "queue_full" ? 429 : 422;
+    writeApiError(response, status, error.code, error.message, access);
     return;
   }
 

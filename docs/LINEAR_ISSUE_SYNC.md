@@ -17,6 +17,7 @@ Official Linear references used for this slice:
 - Re-import the same Linear issue and update the mapped request instead of creating duplicates.
 - Store Linear installation metadata and mappings in `OPENROAD_INTEGRATION_FILE`, outside OpenRoad core workspace state.
 - Store encrypted server-only credential records through the provider-neutral credential API when `OPENROAD_TOKEN_ENCRYPTION_KEY` is configured.
+- Queue provider-neutral background sync jobs for active Linear installations.
 - Record audit events for Linear imports and syncs.
 
 ## Environment
@@ -44,6 +45,12 @@ This endpoint does not exchange OAuth codes. Encrypted credential storage now ex
 `POST /api/openroad/workspaces/:workspaceId/integrations/linear/credentials`
 
 Credential storage requires `integration:manage`, an active Linear installation in the workspace, and `OPENROAD_TOKEN_ENCRYPTION_KEY`. API responses return only metadata and never return access tokens, refresh tokens, ciphertext, IVs, tags, or key material.
+
+## Background Sync Jobs
+
+`POST /api/openroad/workspaces/:workspaceId/integrations/linear/sync/jobs`
+
+The endpoint queues provider-neutral sync jobs for active Linear installations. The private runner is `POST /api/openroad/integrations/sync/run`, but live Linear GraphQL workers remain deferred.
 
 ## Import Endpoint
 

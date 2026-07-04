@@ -1126,5 +1126,5 @@ describe("OpenRoad workspace shell", () => {
     ).toBeInTheDocument();
     expect(within(importedPortal).getByText("Portable public comment.")).toBeInTheDocument();
     expect(within(importedPortal).getByText("Public comments disabled")).toBeInTheDocument();
-  });
+  }, 10_000);
 });

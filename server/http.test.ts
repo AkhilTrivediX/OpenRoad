@@ -30,6 +30,7 @@ import type { LinearOAuthConfig } from "./linear";
 import type { JiraOAuthConfig } from "./jira";
 import type { NotificationDeliveryAdapter } from "./notifications";
 import { createIntegrationTokenVault, type IntegrationTokenVault } from "./token-vault";
+import type { IntegrationSyncWorker } from "./sync-jobs";
 
 const openServers: Server[] = [];
 
@@ -1282,6 +1283,358 @@ describe("OpenRoad production server", () => {
       workspaceId: "maintainer"
     });
     expect(maintainerStoredCredential?.encryptedSecret).toBeTruthy();
+  });
+
+  it("queues integration sync jobs with owner-only management and dedupe", async () => {
+    const { integrationStore, url } = await startTestServer({
+      auth: { adminToken: "secret", singleUserMode: false, trustProxyHeaders: true },
+      tokenVault: testTokenVault()
+    });
+
+    await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/github/issues/import`, {
+      body: JSON.stringify(gitHubImportPayload()),
+      headers: {
+        Authorization: "Bearer secret",
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+
+    const publicEnqueue = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/github/sync/jobs`,
+      {
+        body: JSON.stringify({ installationId: "github-install" }),
+        headers: { "Content-Type": "application/json" },
+        method: "POST"
+      }
+    );
+    const viewerEnqueue = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/github/sync/jobs`,
+      {
+        body: JSON.stringify({ installationId: "github-install" }),
+        headers: {
+          ...workspaceActorHeaders("acme", "Viewer"),
+          "Content-Type": "application/json"
+        },
+        method: "POST"
+      }
+    );
+    const ownerEnqueue = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/github/sync/jobs`,
+      {
+        body: JSON.stringify({ installationId: "github-install", reason: "manual" }),
+        headers: {
+          ...workspaceActorHeaders("acme", "Owner"),
+          "Content-Type": "application/json"
+        },
+        method: "POST"
+      }
+    );
+    const duplicate = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/github/sync/jobs`,
+      {
+        body: JSON.stringify({ installationId: "github-install", reason: "manual" }),
+        headers: {
+          ...workspaceActorHeaders("acme", "Owner"),
+          "Content-Type": "application/json"
+        },
+        method: "POST"
+      }
+    );
+    const integrations = await integrationStore.load();
+    const responseText = JSON.stringify(ownerEnqueue.body);
+
+    expect(publicEnqueue.status).toBe(403);
+    expect(viewerEnqueue.status).toBe(403);
+    expect(ownerEnqueue.status).toBe(201);
+    expect(ownerEnqueue.body).toMatchObject({
+      job: {
+        attempt: 0,
+        installationId: "github-install",
+        provider: "github",
+        reason: "manual",
+        status: "queued",
+        workspaceId: "acme"
+      },
+      status: "queued"
+    });
+    expect(duplicate.status).toBe(200);
+    expect(duplicate.body).toMatchObject({
+      job: {
+        id: ownerEnqueue.body.job.id,
+        status: "queued"
+      },
+      status: "deduped"
+    });
+    expect(integrations.state.syncJobs).toHaveLength(1);
+    expect(responseText).not.toContain("ciphertext");
+    expect(responseText).not.toContain("github-access-secret");
+  });
+
+  it("serializes concurrent integration sync job enqueues without dropping jobs", async () => {
+    const { integrationStore, url } = await startTestServer({
+      auth: { adminToken: "secret", singleUserMode: false, trustProxyHeaders: true }
+    });
+
+    await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/github/issues/import`, {
+      body: JSON.stringify(gitHubImportPayload()),
+      headers: {
+        Authorization: "Bearer secret",
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+
+    const [manual, scheduled] = await Promise.all([
+      fetchJson(`${url}/api/openroad/workspaces/acme/integrations/github/sync/jobs`, {
+        body: JSON.stringify({ installationId: "github-install", reason: "manual" }),
+        headers: {
+          Authorization: "Bearer secret",
+          "Content-Type": "application/json"
+        },
+        method: "POST"
+      }),
+      fetchJson(`${url}/api/openroad/workspaces/acme/integrations/github/sync/jobs`, {
+        body: JSON.stringify({ installationId: "github-install", reason: "scheduled" }),
+        headers: {
+          Authorization: "Bearer secret",
+          "Content-Type": "application/json"
+        },
+        method: "POST"
+      })
+    ]);
+    const integrations = await integrationStore.load();
+
+    expect([manual.status, scheduled.status].sort()).toEqual([201, 201]);
+    expect(integrations.state.syncJobs).toHaveLength(2);
+    expect(integrations.state.syncJobs.map((job) => job.reason).sort()).toEqual(["manual", "scheduled"]);
+  });
+
+  it("runs integration sync jobs through a private configured worker", async () => {
+    const noWorker = await startTestServer({
+      auth: { adminToken: "secret", singleUserMode: false, trustProxyHeaders: true }
+    });
+    const notConfigured = await fetchJson(`${noWorker.url}/api/openroad/integrations/sync/run`, {
+      body: JSON.stringify({}),
+      headers: {
+        Authorization: "Bearer secret",
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    const workerResults: IntegrationSyncWorker["process"][] = [];
+    const processedJobIds: string[] = [];
+    const worker: IntegrationSyncWorker = {
+      async process(job) {
+        processedJobIds.push(job.id);
+        const next = workerResults.shift();
+        if (next) return next(job);
+        return { kind: "success", summary: "Worker synced installation." };
+      }
+    };
+    const { integrationStore, url } = await startTestServer({
+      auth: { adminToken: "secret", singleUserMode: false, trustProxyHeaders: true },
+      integrationSyncWorker: worker
+    });
+
+    await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/github/issues/import`, {
+      body: JSON.stringify(gitHubImportPayload()),
+      headers: {
+        Authorization: "Bearer secret",
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    const queued = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/github/sync/jobs`, {
+      body: JSON.stringify({ installationId: "github-install" }),
+      headers: {
+        Authorization: "Bearer secret",
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    const publicRun = await fetchJson(`${url}/api/openroad/integrations/sync/run`, {
+      body: JSON.stringify({}),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const firstRun = await fetchJson(`${url}/api/openroad/integrations/sync/run`, {
+      body: JSON.stringify({ limit: 5, workspaceId: "acme" }),
+      headers: {
+        Authorization: "Bearer secret",
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    const repeated = await fetchJson(`${url}/api/openroad/integrations/sync/run`, {
+      body: JSON.stringify({ limit: 5, workspaceId: "acme" }),
+      headers: {
+        Authorization: "Bearer secret",
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    workerResults.push(async () => ({
+      error: "Provider rate limit token=github-access-secret",
+      kind: "retryable-error",
+      retryAfterSeconds: 60
+    }));
+    const retryQueued = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/github/sync/jobs`, {
+      body: JSON.stringify({ installationId: "github-install", reason: "scheduled" }),
+      headers: {
+        Authorization: "Bearer secret",
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    const retryRun = await fetchJson(`${url}/api/openroad/integrations/sync/run`, {
+      body: JSON.stringify({ limit: 5, workspaceId: "acme" }),
+      headers: {
+        Authorization: "Bearer secret",
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    workerResults.push(async () => {
+      throw new Error("github-access-secret leaked from provider client");
+    });
+    const thrownQueued = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/github/sync/jobs`, {
+      body: JSON.stringify({ installationId: "github-install", reason: "webhook" }),
+      headers: {
+        Authorization: "Bearer secret",
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    const thrownRun = await fetchJson(`${url}/api/openroad/integrations/sync/run`, {
+      body: JSON.stringify({ limit: 5, workspaceId: "acme" }),
+      headers: {
+        Authorization: "Bearer secret",
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    const integrations = await integrationStore.load();
+    const succeeded = integrations.state.syncJobs.find((job) => job.id === queued.body.job.id);
+    const retryable = integrations.state.syncJobs.find((job) => job.id === retryQueued.body.job.id);
+    const thrown = integrations.state.syncJobs.find((job) => job.id === thrownQueued.body.job.id);
+
+    expect(notConfigured.status).toBe(503);
+    expect(publicRun.status).toBe(403);
+    expect(firstRun.status).toBe(200);
+    expect(firstRun.body).toMatchObject({
+      claimed: 1,
+      processed: [{ id: queued.body.job.id, kind: "success", status: "succeeded" }],
+      status: "processed"
+    });
+    expect(repeated.body).toMatchObject({ claimed: 0, remainingQueued: 0 });
+    expect(retryRun.body).toMatchObject({
+      claimed: 1,
+      remainingQueued: 1,
+      status: "processed"
+    });
+    expect(thrownRun.body).toMatchObject({
+      claimed: 1,
+      status: "processed"
+    });
+    expect(processedJobIds).toEqual([queued.body.job.id, retryQueued.body.job.id, thrownQueued.body.job.id]);
+    expect(succeeded).toMatchObject({ status: "succeeded" });
+    expect(retryable).toMatchObject({
+      attempt: 1,
+      reason: "retry",
+      status: "queued"
+    });
+    expect(retryable?.error).toContain("[redacted]");
+    expect(thrown).toMatchObject({
+      error: "Integration sync worker failed.",
+      reason: "retry",
+      status: "queued"
+    });
+    expect(retryable?.nextRunAt).toBeTruthy();
+    expect(JSON.stringify(retryRun.body)).not.toContain("ciphertext");
+    expect(JSON.stringify(retryable)).not.toContain("github-access-secret");
+    expect(JSON.stringify(thrownRun.body)).not.toContain("github-access-secret");
+    expect(JSON.stringify(thrown)).not.toContain("github-access-secret");
+  });
+
+  it("serializes concurrent integration sync runs without double-processing jobs", async () => {
+    const processedJobIds: string[] = [];
+    let releaseFirstSync: () => void = () => undefined;
+    let markFirstSyncStarted: () => void = () => undefined;
+    const firstSyncStarted = new Promise<void>((resolve) => {
+      markFirstSyncStarted = resolve;
+    });
+    const worker: IntegrationSyncWorker = {
+      async process(job) {
+        processedJobIds.push(job.id);
+
+        if (processedJobIds.length === 1) {
+          markFirstSyncStarted();
+          await new Promise<void>((release) => {
+            releaseFirstSync = release;
+          });
+        }
+
+        return { kind: "success", summary: "Worker synced installation." };
+      }
+    };
+    const { integrationStore, url } = await startTestServer({
+      auth: { adminToken: "secret", singleUserMode: false, trustProxyHeaders: true },
+      integrationSyncWorker: worker
+    });
+
+    await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/github/issues/import`, {
+      body: JSON.stringify(gitHubImportPayload()),
+      headers: {
+        Authorization: "Bearer secret",
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    const [manual, scheduled] = await Promise.all([
+      fetchJson(`${url}/api/openroad/workspaces/acme/integrations/github/sync/jobs`, {
+        body: JSON.stringify({ installationId: "github-install", reason: "manual" }),
+        headers: {
+          Authorization: "Bearer secret",
+          "Content-Type": "application/json"
+        },
+        method: "POST"
+      }),
+      fetchJson(`${url}/api/openroad/workspaces/acme/integrations/github/sync/jobs`, {
+        body: JSON.stringify({ installationId: "github-install", reason: "scheduled" }),
+        headers: {
+          Authorization: "Bearer secret",
+          "Content-Type": "application/json"
+        },
+        method: "POST"
+      })
+    ]);
+
+    const first = fetchJson(`${url}/api/openroad/integrations/sync/run`, {
+      body: JSON.stringify({ limit: 1, workspaceId: "acme" }),
+      headers: {
+        Authorization: "Bearer secret",
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    await firstSyncStarted;
+    const second = fetchJson(`${url}/api/openroad/integrations/sync/run`, {
+      body: JSON.stringify({ limit: 1, workspaceId: "acme" }),
+      headers: {
+        Authorization: "Bearer secret",
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+
+    releaseFirstSync();
+    const results = await Promise.all([first, second]);
+    const integrations = await integrationStore.load();
+
+    expect(results.reduce((count, result) => count + result.body.claimed, 0)).toBe(2);
+    expect(new Set(processedJobIds)).toEqual(new Set([manual.body.job.id, scheduled.body.job.id]));
+    expect(integrations.state.syncJobs.every((job) => job.status === "succeeded")).toBe(true);
   });
 
   it("imports Linear issues into requests and persists mappings outside core state", async () => {
@@ -2959,6 +3312,7 @@ async function startTestServer(
     auth?: AuthOptions;
     githubAppClient?: GitHubAppClient;
     githubAppConfig?: GitHubAppConfig;
+    integrationSyncWorker?: IntegrationSyncWorker;
     jiraOAuthConfig?: JiraOAuthConfig;
     linearOAuthConfig?: LinearOAuthConfig;
     notificationDeliveryAdapter?: NotificationDeliveryAdapter;
@@ -2986,6 +3340,7 @@ async function startTestServer(
     githubAppClient: options.githubAppClient,
     githubAppConfig: options.githubAppConfig,
     integrationStore,
+    integrationSyncWorker: options.integrationSyncWorker,
     jiraOAuthConfig: options.jiraOAuthConfig,
     linearOAuthConfig: options.linearOAuthConfig,
     logger: { error: vi.fn(), log: vi.fn() },

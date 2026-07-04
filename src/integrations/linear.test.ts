@@ -52,6 +52,21 @@ describe("Linear issue integration", () => {
     );
   });
 
+  it("drops sensitive URL query strings before creating OpenRoad records", () => {
+    const issue = parseLinearIssuePayload(
+      linearIssuePayload({
+        url: "https://linear.app/openroad/issue/OPEN-42/import-linear-issues?access_token=raw-secret#activity"
+      })
+    );
+    const request = createOpenRoadRequestFromLinearIssue(issue);
+    const issueMapping = createLinearIssueExternalRef(issue);
+
+    expect(issue.url).toBe("https://linear.app/openroad/issue/OPEN-42/import-linear-issues");
+    expect(issueMapping.url).toBe(issue.url);
+    expect(JSON.stringify(request)).not.toContain("raw-secret");
+    expect(JSON.stringify(request)).not.toContain("access_token");
+  });
+
   it("maps Linear workflow state into OpenRoad request status conservatively", () => {
     expect(mapLinearIssueToRequestStatus(parseLinearIssuePayload(linearIssuePayload()))).toBe(
       "Needs decision"

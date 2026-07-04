@@ -29,6 +29,7 @@ export type IntegrationStatusAccountSummary = {
 
 export type IntegrationProviderStatus = {
   accounts: IntegrationStatusAccountSummary[];
+  activeCredentials: number;
   activeInstallations: number;
   capabilities: {
     disconnect: boolean;
@@ -67,7 +68,7 @@ export type WorkspaceIntegrationStatus = {
   workspaceId: string;
 };
 
-export type GitHubManualSyncResult = {
+export type ProviderManualSyncResult = {
   jobStatus?: IntegrationStatusJobSummary["status"];
   message: string;
   status: "deduped" | "failed" | "forbidden" | "queued" | "succeeded" | "unavailable";
@@ -87,6 +88,7 @@ export function createStandaloneIntegrationStatus(
     message,
     providers: (Object.keys(providerLabels) as IntegrationProvider[]).map((provider) => ({
       accounts: [],
+      activeCredentials: 0,
       activeInstallations: 0,
       capabilities: {
         disconnect: false,
@@ -156,13 +158,15 @@ function createUnavailableIntegrationStatus(
   };
 }
 
-export async function runGitHubManualSync(
+export async function runProviderManualSync(
+  provider: Extract<IntegrationProvider, "github" | "linear">,
   workspaceId: string,
   installationId: string,
   fetchImpl: typeof fetch = fetch
-): Promise<GitHubManualSyncResult> {
+): Promise<ProviderManualSyncResult> {
+  const providerLabel = providerLabels[provider];
   const enqueue = await postJsonSafely(
-    `/api/openroad/workspaces/${encodeURIComponent(workspaceId)}/integrations/github/sync/jobs`,
+    `/api/openroad/workspaces/${encodeURIComponent(workspaceId)}/integrations/${provider}/sync/jobs`,
     { installationId, reason: "manual" },
     fetchImpl
   );
@@ -177,7 +181,7 @@ export async function runGitHubManualSync(
   const enqueueStatus = getRecordText(enqueue.payload, "status");
   const runner = await postJsonSafely(
     "/api/openroad/integrations/sync/run",
-    { limit: 5, provider: "github", workspaceId },
+    { limit: 5, provider, workspaceId },
     fetchImpl
   );
 
@@ -185,8 +189,8 @@ export async function runGitHubManualSync(
     return {
       message:
         enqueueStatus === "deduped"
-          ? "A GitHub sync job is already queued. The private runner is unavailable in this session."
-          : "GitHub sync was queued. The private runner is unavailable in this session.",
+          ? `A ${providerLabel} sync job is already queued. The private runner is unavailable in this session.`
+          : `${providerLabel} sync was queued. The private runner is unavailable in this session.`,
       status: enqueueStatus === "deduped" ? "deduped" : "queued"
     };
   }
@@ -194,12 +198,12 @@ export async function runGitHubManualSync(
   const processed = Array.isArray((runner.payload as { processed?: unknown }).processed)
     ? ((runner.payload as { processed: unknown[] }).processed[0] as Record<string, unknown> | undefined)
     : undefined;
-  const processedStatus = getRecordText(processed, "status") as GitHubManualSyncResult["jobStatus"];
+  const processedStatus = getRecordText(processed, "status") as ProviderManualSyncResult["jobStatus"];
 
   if (processedStatus === "succeeded") {
     return {
       jobStatus: processedStatus,
-      message: "GitHub linked issue sync completed.",
+      message: `${providerLabel} linked issue sync completed.`,
       status: "succeeded"
     };
   }
@@ -207,7 +211,7 @@ export async function runGitHubManualSync(
   if (processedStatus === "queued" || processedStatus === "running") {
     return {
       jobStatus: processedStatus,
-      message: "GitHub sync is queued for retry.",
+      message: `${providerLabel} sync is queued for retry.`,
       status: "queued"
     };
   }
@@ -215,7 +219,7 @@ export async function runGitHubManualSync(
   if (processedStatus === "failed") {
     return {
       jobStatus: processedStatus,
-      message: "GitHub sync ran and needs attention.",
+      message: `${providerLabel} sync ran and needs attention.`,
       status: "failed"
     };
   }
@@ -223,10 +227,18 @@ export async function runGitHubManualSync(
   return {
     message:
       enqueueStatus === "deduped"
-        ? "A GitHub sync job is already queued."
-        : "GitHub sync was queued.",
+        ? `A ${providerLabel} sync job is already queued.`
+        : `${providerLabel} sync was queued.`,
     status: enqueueStatus === "deduped" ? "deduped" : "queued"
   };
+}
+
+export function runGitHubManualSync(
+  workspaceId: string,
+  installationId: string,
+  fetchImpl: typeof fetch = fetch
+) {
+  return runProviderManualSync("github", workspaceId, installationId, fetchImpl);
 }
 
 function parseWorkspaceIntegrationStatus(
@@ -295,6 +307,7 @@ function parseProviderStatus(value: unknown): IntegrationProviderStatus | undefi
           .map(parseAccountSummary)
           .filter((account): account is IntegrationStatusAccountSummary => Boolean(account))
       : [],
+    activeCredentials: getRecordNumber(value, "activeCredentials"),
     activeInstallations: getRecordNumber(value, "activeInstallations"),
     capabilities: parseCapabilities(value.capabilities),
     connection: getConnection(value.connection),

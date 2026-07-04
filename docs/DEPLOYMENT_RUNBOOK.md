@@ -42,6 +42,7 @@ $env:OPENROAD_GITHUB_APP_WEBHOOK_SECRET=""
 $env:OPENROAD_LINEAR_CLIENT_ID=""
 $env:OPENROAD_LINEAR_CLIENT_SECRET=""
 $env:OPENROAD_LINEAR_REDIRECT_URI=""
+$env:OPENROAD_LINEAR_API_URL="https://api.linear.app/graphql"
 $env:OPENROAD_JIRA_AUTH_BASE_URL="https://auth.atlassian.com"
 $env:OPENROAD_JIRA_CLIENT_ID=""
 $env:OPENROAD_JIRA_CLIENT_SECRET=""
@@ -74,6 +75,7 @@ $env:OPENROAD_GITHUB_APP_WEBHOOK_SECRET=""
 $env:OPENROAD_LINEAR_CLIENT_ID=""
 $env:OPENROAD_LINEAR_CLIENT_SECRET=""
 $env:OPENROAD_LINEAR_REDIRECT_URI=""
+$env:OPENROAD_LINEAR_API_URL="https://api.linear.app/graphql"
 $env:OPENROAD_JIRA_AUTH_BASE_URL="https://auth.atlassian.com"
 $env:OPENROAD_JIRA_CLIENT_ID=""
 $env:OPENROAD_JIRA_CLIENT_SECRET=""
@@ -294,7 +296,7 @@ For local single-user mode without `OPENROAD_ADMIN_TOKEN`, omit `--admin-token`;
 - OAuth/session auth is not implemented.
 - Team metadata is file-backed, not managed SQL.
 - Trusted proxy headers are disabled by default.
-- Payload-backed GitHub issue import, GitHub App installation verification, live issue fetch, signed webhooks, safe disconnect APIs, encrypted server-only provider credential storage, provider-neutral background sync job metadata, a GitHub worker for already-linked issue mappings, payload-backed Linear issue import, payload-backed Jira issue import, requester notification outbox/preferences, and a server-side JSONL notification delivery handoff exist; OAuth callback exchange, Linear/Jira live sync/webhooks, provider write-back, direct email/provider notification delivery, conflict UI, and billing are not implemented.
+- Payload-backed GitHub issue import, GitHub App installation verification, live issue fetch, signed webhooks, safe disconnect APIs, encrypted server-only provider credential storage, provider-neutral background sync job metadata, GitHub and Linear workers for already-linked issue mappings, payload-backed Linear issue import, payload-backed Jira issue import, requester notification outbox/preferences, and a server-side JSONL notification delivery handoff exist; OAuth callback exchange, Jira live sync, Linear/Jira webhooks, provider write-back, direct email/provider notification delivery, conflict UI, and billing are not implemented.
 - Docker images are build-local by default; release manifests can record publishing metadata, but registry publishing infrastructure is not bundled yet.
 - Signed artifact infrastructure is not bundled yet; release manifests record signing as not configured unless an operator supplies signing metadata.
 - Named Docker volume backup requires an operator copy step or a future packaged volume helper.

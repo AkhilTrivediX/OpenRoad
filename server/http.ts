@@ -132,6 +132,18 @@ import {
   createGitHubIntegrationSyncWorker
 } from "./github-sync-worker.js";
 import {
+  FetchLinearApiClient,
+  type LinearApiClient
+} from "./linear-api.js";
+import {
+  canConfigureLinearIntegrationSyncWorker,
+  createLinearIntegrationSyncWorker
+} from "./linear-sync-worker.js";
+import {
+  createProviderIntegrationSyncWorker,
+  type ProviderIntegrationSyncWorkers
+} from "./provider-sync-worker.js";
+import {
   createSafeLinearOAuthSetup,
   linearOAuthConfigFromEnv,
   type LinearOAuthConfig
@@ -151,6 +163,7 @@ type CreateOpenRoadServerOptions = {
   integrationStore?: IntegrationStore;
   integrationSyncWorker?: IntegrationSyncWorker;
   jiraOAuthConfig?: JiraOAuthConfig;
+  linearApiClient?: LinearApiClient;
   linearOAuthConfig?: LinearOAuthConfig;
   logger?: Pick<Console, "error" | "log">;
   notificationDeliveryAdapter?: NotificationDeliveryAdapter;
@@ -278,6 +291,7 @@ export function createOpenRoadServer({
   integrationStore,
   integrationSyncWorker,
   jiraOAuthConfig = jiraOAuthConfigFromEnv(),
+  linearApiClient = new FetchLinearApiClient(),
   linearOAuthConfig = linearOAuthConfigFromEnv(),
   logger = console,
   notificationDeliveryAdapter = createNotificationDeliveryAdapterFromEnv(),
@@ -291,16 +305,22 @@ export function createOpenRoadServer({
   const runNotificationDeliveryExclusive = createExclusiveRunner();
   const runIntegrationMutationExclusive = createExclusiveRunner();
   const runIntegrationSyncExclusive = createExclusiveRunner();
+  const configuredIntegrationSyncWorkers = createConfiguredIntegrationSyncWorkers({
+    githubAppClient,
+    githubAppConfig,
+    integrationStore,
+    linearApiClient,
+    runIntegrationMutationExclusive,
+    store,
+    tokenVault
+  });
   const resolvedIntegrationSyncWorker =
-    integrationSyncWorker ??
-    (integrationStore && canConfigureGitHubIntegrationSyncWorker(githubAppConfig)
-      ? createGitHubIntegrationSyncWorker({
-          githubAppClient,
-          integrationStore,
-          runIntegrationMutationExclusive,
-          store
-        })
-      : undefined);
+    integrationSyncWorker ?? createProviderIntegrationSyncWorker(configuredIntegrationSyncWorkers);
+  const configuredIntegrationSyncProviders = new Set<IntegrationProvider>(
+    integrationSyncWorker
+      ? ["github"]
+      : (Object.keys(configuredIntegrationSyncWorkers) as IntegrationProvider[])
+  );
 
   return createServer(async (request, response) => {
     const access = createAccessContext(request, auth);
@@ -320,6 +340,7 @@ export function createOpenRoadServer({
           githubAppConfig,
           integrationStore,
           resolvedIntegrationSyncWorker,
+          configuredIntegrationSyncProviders,
           jiraOAuthConfig,
           linearOAuthConfig,
           notificationDeliveryAdapter,
@@ -348,6 +369,50 @@ export function createOpenRoadServer({
   });
 }
 
+function createConfiguredIntegrationSyncWorkers({
+  githubAppClient,
+  githubAppConfig,
+  integrationStore,
+  linearApiClient,
+  runIntegrationMutationExclusive,
+  store,
+  tokenVault
+}: {
+  githubAppClient: GitHubAppClient;
+  githubAppConfig: GitHubAppConfig;
+  integrationStore: IntegrationStore | undefined;
+  linearApiClient: LinearApiClient;
+  runIntegrationMutationExclusive: NotificationDeliveryRunner;
+  store: OpenRoadStore;
+  tokenVault: IntegrationTokenVault;
+}): ProviderIntegrationSyncWorkers {
+  if (!integrationStore) return {};
+
+  return {
+    ...(canConfigureGitHubIntegrationSyncWorker(githubAppConfig)
+      ? {
+          github: createGitHubIntegrationSyncWorker({
+            githubAppClient,
+            integrationStore,
+            runIntegrationMutationExclusive,
+            store
+          })
+        }
+      : {}),
+    ...(canConfigureLinearIntegrationSyncWorker(tokenVault)
+      ? {
+          linear: createLinearIntegrationSyncWorker({
+            integrationStore,
+            linearApiClient,
+            runIntegrationMutationExclusive,
+            store,
+            tokenVault
+          })
+        }
+      : {})
+  };
+}
+
 async function handleApiRequest(
   request: IncomingMessage,
   response: ServerResponse,
@@ -359,6 +424,7 @@ async function handleApiRequest(
   githubAppConfig: GitHubAppConfig,
   integrationStore: IntegrationStore | undefined,
   integrationSyncWorker: IntegrationSyncWorker | undefined,
+  configuredIntegrationSyncProviders: Set<IntegrationProvider>,
   jiraOAuthConfig: JiraOAuthConfig,
   linearOAuthConfig: LinearOAuthConfig,
   notificationDeliveryAdapter: NotificationDeliveryAdapter | undefined,
@@ -690,6 +756,7 @@ async function handleApiRequest(
       access,
       integrationStore,
       integrationSyncWorker,
+      configuredIntegrationSyncProviders,
       githubAppConfig,
       linearOAuthConfig,
       jiraOAuthConfig,
@@ -2213,6 +2280,7 @@ async function handleIntegrationStatusRequest(
   access: AccessContext,
   integrationStore: IntegrationStore | undefined,
   integrationSyncWorker: IntegrationSyncWorker | undefined,
+  configuredIntegrationSyncProviders: Set<IntegrationProvider>,
   githubAppConfig: GitHubAppConfig,
   linearOAuthConfig: LinearOAuthConfig,
   jiraOAuthConfig: JiraOAuthConfig,
@@ -2259,7 +2327,7 @@ async function handleIntegrationStatusRequest(
           createIntegrationStatusProviderSummary({
             githubAppConfig,
             integrationState: integrationResult.state,
-            integrationSyncWorker,
+            syncWorkerConfigured: configuredIntegrationSyncProviders.has(provider),
             jiraOAuthConfig,
             linearOAuthConfig,
             provider,
@@ -2279,7 +2347,7 @@ async function handleIntegrationStatusRequest(
 function createIntegrationStatusProviderSummary({
   githubAppConfig,
   integrationState,
-  integrationSyncWorker,
+  syncWorkerConfigured,
   jiraOAuthConfig,
   linearOAuthConfig,
   provider,
@@ -2287,7 +2355,7 @@ function createIntegrationStatusProviderSummary({
 }: {
   githubAppConfig: GitHubAppConfig;
   integrationState: IntegrationState;
-  integrationSyncWorker: IntegrationSyncWorker | undefined;
+  syncWorkerConfigured: boolean;
   jiraOAuthConfig: JiraOAuthConfig;
   linearOAuthConfig: LinearOAuthConfig;
   provider: IntegrationProvider;
@@ -2302,6 +2370,15 @@ function createIntegrationStatusProviderSummary({
   );
   const activeMappings = mappings.filter((mapping) => mapping.status === "active");
   const linkedIssueMappings = activeMappings.filter((mapping) => mapping.external.type === "issue");
+  const activeCredentials = integrationState.credentials.filter(
+    (credential) =>
+      credential.provider === provider &&
+      credential.workspaceId === workspaceId &&
+      credential.status === "active" &&
+      credential.permissions.includes("read:external") &&
+      activeInstallations.some((installation) => installation.id === credential.installationId) &&
+      !isExpiredTimestamp(credential.expiresAt)
+  );
   const jobs = integrationState.syncJobs
     .filter((job) => job.workspaceId === workspaceId && job.provider === provider)
     .sort((left, right) => timestampMs(right.updatedAt) - timestampMs(left.updatedAt));
@@ -2312,12 +2389,15 @@ function createIntegrationStatusProviderSummary({
     provider,
     workspaceId
   });
-  const syncWorkerConfigured = provider === "github" && Boolean(integrationSyncWorker);
   const canManualSync =
-    provider === "github" &&
-    syncWorkerConfigured &&
-    activeInstallations.length > 0 &&
-    linkedIssueMappings.length > 0;
+    canProviderManualSync({
+      activeCredentials: activeCredentials.length,
+      activeInstallations: activeInstallations.length,
+      linkedIssueMappings: linkedIssueMappings.length,
+      provider,
+      setupConfigured,
+      syncWorkerConfigured
+    });
   const connection = getIntegrationConnectionState({
     activeInstallations: activeInstallations.length,
     setupConfigured,
@@ -2326,11 +2406,18 @@ function createIntegrationStatusProviderSummary({
 
   return {
     accounts: activeInstallations.slice(0, 5).map(sanitizeIntegrationStatusAccount),
+    activeCredentials: activeCredentials.length,
     activeInstallations: activeInstallations.length,
     capabilities: {
       disconnect: activeInstallations.length > 0,
       import: activeInstallations.length > 0,
-      liveSync: provider === "github" && activeInstallations.length > 0 && setupConfigured,
+      liveSync: canProviderLiveSync({
+        activeCredentials: activeCredentials.length,
+        activeInstallations: activeInstallations.length,
+        provider,
+        setupConfigured,
+        syncWorkerConfigured
+      }),
       manualSync: canManualSync,
       setup: setupConfigured,
       webhooks: provider === "github" && activeInstallations.length > 0
@@ -2349,6 +2436,7 @@ function createIntegrationStatusProviderSummary({
     setupConfigured,
     statusText: getIntegrationStatusText({
       activeInstallations: activeInstallations.length,
+      activeCredentials: activeCredentials.length,
       canManualSync,
       connection,
       linkedIssueMappings: linkedIssueMappings.length,
@@ -2434,7 +2522,58 @@ function getIntegrationConnectionState({
   return "optional";
 }
 
+function canProviderLiveSync({
+  activeCredentials,
+  activeInstallations,
+  provider,
+  setupConfigured,
+  syncWorkerConfigured
+}: {
+  activeCredentials: number;
+  activeInstallations: number;
+  provider: IntegrationProvider;
+  setupConfigured: boolean;
+  syncWorkerConfigured: boolean;
+}) {
+  if (provider === "github") {
+    return syncWorkerConfigured && activeInstallations > 0 && setupConfigured;
+  }
+
+  if (provider === "linear") {
+    return syncWorkerConfigured && activeInstallations > 0 && activeCredentials > 0;
+  }
+
+  return false;
+}
+
+function canProviderManualSync({
+  activeCredentials,
+  activeInstallations,
+  linkedIssueMappings,
+  provider,
+  setupConfigured,
+  syncWorkerConfigured
+}: {
+  activeCredentials: number;
+  activeInstallations: number;
+  linkedIssueMappings: number;
+  provider: IntegrationProvider;
+  setupConfigured: boolean;
+  syncWorkerConfigured: boolean;
+}) {
+  if (provider === "github") {
+    return syncWorkerConfigured && activeInstallations > 0 && setupConfigured && linkedIssueMappings > 0;
+  }
+
+  if (provider === "linear") {
+    return syncWorkerConfigured && activeInstallations > 0 && activeCredentials > 0 && linkedIssueMappings > 0;
+  }
+
+  return false;
+}
+
 function getIntegrationStatusText({
+  activeCredentials,
   activeInstallations,
   canManualSync,
   connection,
@@ -2443,6 +2582,7 @@ function getIntegrationStatusText({
   setupConfigured,
   syncWorkerConfigured
 }: {
+  activeCredentials: number;
   activeInstallations: number;
   canManualSync: boolean;
   connection: string;
@@ -2463,7 +2603,23 @@ function getIntegrationStatusText({
     return "Connected. Link a GitHub issue before running manual sync.";
   }
 
-  if ((provider === "linear" || provider === "jira") && activeInstallations > 0) {
+  if (provider === "linear" && canManualSync) {
+    return `Connected. ${linkedIssueMappings} linked issue mapping${linkedIssueMappings === 1 ? "" : "s"} ready for manual sync.`;
+  }
+
+  if (provider === "linear" && activeInstallations > 0 && !syncWorkerConfigured) {
+    return "Connected. The Linear sync worker is not configured for this deployment.";
+  }
+
+  if (provider === "linear" && activeInstallations > 0 && activeCredentials === 0) {
+    return "Connected. Store a Linear credential before running live sync.";
+  }
+
+  if (provider === "linear" && activeInstallations > 0) {
+    return "Connected. Link a Linear issue before running manual sync.";
+  }
+
+  if (provider === "jira" && activeInstallations > 0) {
     return "Connected for import and linking. Live background sync is planned for a later slice.";
   }
 
@@ -2487,6 +2643,12 @@ function newestTimestamp(values: Array<string | undefined>) {
 function timestampMs(value: string | undefined) {
   const parsed = Date.parse(value ?? "");
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function isExpiredTimestamp(value: string | undefined) {
+  if (!value) return false;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) && parsed <= Date.now();
 }
 
 async function handleIntegrationSyncRunRequest(

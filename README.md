@@ -25,7 +25,7 @@ External providers attach through external links and sync state. Provider-specif
 
 OpenRoad now has a working standalone product loop, production server foundation, and first self-host operations path:
 
-- React app shell for requests, work, roadmap, changelog, portal, and settings, including progressive integration status and GitHub manual sync controls.
+- React app shell for requests, work, roadmap, changelog, portal, and settings, including progressive integration status and GitHub/Linear manual sync controls.
 - Versioned OpenRoad domain state with local persistence, import/export, and recovery.
 - Public/private visibility for requests, comments, roadmap items, and changelog entries.
 - Production Node server that serves the built app and same-origin OpenRoad APIs.
@@ -37,7 +37,7 @@ OpenRoad now has a working standalone product loop, production server foundation
 - Live GitHub issue fetch through verified installations without persisted tokens.
 - Signed GitHub App webhook ingestion, idempotent linked issue sync, and safe disconnect handling.
 - Encrypted server-only provider credential storage primitives for GitHub, Linear, and Jira.
-- Provider-neutral background sync job foundation with private runner boundary and GitHub linked-issue worker.
+- Provider-neutral background sync job foundation with private runner boundary and GitHub/Linear linked-issue workers.
 - Safe Linear OAuth setup plus payload-backed Linear issue import/link.
 - Safe Jira OAuth setup plus payload-backed Jira issue import/link with explicit field mapping.
 - Requester notification preferences plus an internal outbox for status and changelog updates.
@@ -45,7 +45,7 @@ OpenRoad now has a working standalone product loop, production server foundation
 - Release candidate manifest tooling for version, checksum, support-window, and dry-run publishing verification.
 - Docker Compose, backup/restore, and smoke-check commands for self-host operators.
 
-Current production limits are explicit: OAuth/session auth, invitation flows, managed database migrations, hosted release promotion, deeper observability, full integration connect/disconnect Settings flows, OAuth callback exchange, Linear/Jira live fetch/webhooks, provider write-back, direct email/provider notification delivery, real model-backed AI adapters with consent/prompt redaction/audit logs, and conflict UI are planned next-stage work.
+Current production limits are explicit: OAuth/session auth, invitation flows, managed database migrations, hosted release promotion, deeper observability, full integration connect/disconnect Settings flows, OAuth callback exchange, Jira live fetch, Linear/Jira webhooks, provider write-back, direct email/provider notification delivery, real model-backed AI adapters with consent/prompt redaction/audit logs, and conflict UI are planned next-stage work.
 
 Current docs:
 

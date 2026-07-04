@@ -117,7 +117,7 @@ import {
 import {
   createStandaloneIntegrationStatus,
   loadWorkspaceIntegrationStatus,
-  runGitHubManualSync,
+  runProviderManualSync,
   type IntegrationProviderStatus,
   type WorkspaceIntegrationStatus
 } from "./persistence/openroadIntegrations";
@@ -137,6 +137,14 @@ const baseNavItems: NavItem[] = [
 ];
 
 const workNavItem: NavItem = { label: "Work", icon: ListChecks };
+const navTargets = new Set(["inbox", "work", "roadmap", "changelog", "portal", "settings"]);
+
+function getActiveNavTarget() {
+  if (typeof window === "undefined") return "inbox";
+
+  const target = window.location.hash.replace(/^#/, "").toLowerCase();
+  return navTargets.has(target) ? target : "inbox";
+}
 
 export function App() {
   const [serverPersistenceEnabled] = useState(() => isServerPersistenceEnabled());
@@ -161,7 +169,7 @@ export function App() {
     createStandaloneIntegrationStatus(resolveInitialWorkspaceId(loadResult.state, loadSelectedWorkspaceId()))
   );
   const [integrationActionMessage, setIntegrationActionMessage] = useState("");
-  const [syncingProvider, setSyncingProvider] = useState<"github" | undefined>();
+  const [syncingProvider, setSyncingProvider] = useState<"github" | "linear" | undefined>();
   const [exportPreview, setExportPreview] = useState("");
   const [importDraft, setImportDraft] = useState("");
   const [isCreatingWorkspace, setIsCreatingWorkspace] = useState(false);
@@ -186,6 +194,7 @@ export function App() {
     useState<PortalCommentDraft>(emptyPortalCommentDraft);
   const [workCommentDraft, setWorkCommentDraft] = useState("");
   const [isAssistantEnabled, setIsAssistantEnabled] = useState(true);
+  const [activeNavTarget, setActiveNavTarget] = useState(() => getActiveNavTarget());
   const [duplicateMergeTargetId, setDuplicateMergeTargetId] = useState("");
   const [selectedRequestIdByWorkspace, setSelectedRequestIdByWorkspace] = useState<
     Record<string, string | undefined>
@@ -292,6 +301,26 @@ export function App() {
   useEffect(() => {
     saveSelectedWorkspaceId(workspaceId);
   }, [workspaceId]);
+
+  useEffect(() => {
+    function syncActiveNavTarget() {
+      setActiveNavTarget(getActiveNavTarget());
+    }
+
+    window.addEventListener("hashchange", syncActiveNavTarget);
+    syncActiveNavTarget();
+
+    return () => {
+      window.removeEventListener("hashchange", syncActiveNavTarget);
+    };
+  }, []);
+
+  useEffect(() => {
+    document
+      .getElementById(activeNavTarget)
+      ?.scrollIntoView?.({ block: "start", inline: "nearest" });
+  }, [activeNavTarget]);
+
   const activeRequestCount = useMemo(
     () => workspace.requests.filter((request) => !request.archived).length,
     [workspace.requests]
@@ -541,15 +570,16 @@ export function App() {
     });
   }
 
-  async function syncGitHubLinkedIssues(provider: IntegrationProviderStatus) {
+  async function syncProviderLinkedIssues(provider: IntegrationProviderStatus) {
+    if (provider.provider !== "github" && provider.provider !== "linear") return;
     const installationId = provider.accounts[0]?.id;
     if (!installationId || syncingProvider) return;
 
-    setSyncingProvider("github");
-    setIntegrationActionMessage("Queueing GitHub linked issue sync...");
+    setSyncingProvider(provider.provider);
+    setIntegrationActionMessage(`Queueing ${provider.label} linked issue sync...`);
 
     try {
-      const result = await runGitHubManualSync(workspace.id, installationId);
+      const result = await runProviderManualSync(provider.provider, workspace.id, installationId);
       setIntegrationActionMessage(result.message);
 
       if (serverPersistenceEnabled) {
@@ -1263,11 +1293,13 @@ export function App() {
         <nav className="nav-list">
           {navItems.map((item) => {
             const Icon = item.icon;
+            const target = item.label.toLowerCase();
+            const isActive = activeNavTarget === target;
             return (
               <a
-                aria-current={item.label === "Inbox" ? "page" : undefined}
-                className={item.label === "Inbox" ? "nav-item active" : "nav-item"}
-                href={`#${item.label.toLowerCase()}`}
+                aria-current={isActive ? "page" : undefined}
+                className={isActive ? "nav-item active" : "nav-item"}
+                href={`#${target}`}
                 key={item.label}
               >
                 <Icon aria-hidden="true" size={17} strokeWidth={1.75} />
@@ -3666,15 +3698,18 @@ export function App() {
                         <span className={`status-badge ${getProviderTone(provider)}`}>
                           {getProviderConnectionLabel(provider)}
                         </span>
-                        {provider.provider === "github" ? (
+                        {provider.provider === "github" || provider.provider === "linear" ? (
                           <button
+                            aria-label={`${provider.label} sync linked issues`}
                             className="secondary-action compact provider-action"
-                            disabled={!provider.capabilities.manualSync || syncingProvider === "github"}
-                            onClick={() => void syncGitHubLinkedIssues(provider)}
+                            disabled={
+                              !provider.capabilities.manualSync || syncingProvider === provider.provider
+                            }
+                            onClick={() => void syncProviderLinkedIssues(provider)}
                             type="button"
                           >
                             <RotateCcw aria-hidden="true" size={14} />
-                            {syncingProvider === "github" ? "Syncing..." : "Sync linked issues"}
+                            {syncingProvider === provider.provider ? "Syncing..." : "Sync linked issues"}
                           </button>
                         ) : (
                           <span className="provider-action-note">Live sync later</span>

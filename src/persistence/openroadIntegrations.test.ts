@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   loadWorkspaceIntegrationStatus,
-  runGitHubManualSync
+  runGitHubManualSync,
+  runProviderManualSync
 } from "./openroadIntegrations";
 
 describe("OpenRoad integration status client", () => {
@@ -144,6 +145,44 @@ describe("OpenRoad integration status client", () => {
       2,
       "/api/openroad/integrations/sync/run",
       expect.objectContaining({ method: "POST" })
+    );
+  });
+
+  it("queues and runs Linear manual sync", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ status: "queued" }, 201))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          processed: [{ id: "sync-job-1", kind: "success", status: "succeeded" }],
+          status: "processed"
+        })
+      );
+
+    const result = await runProviderManualSync(
+      "linear",
+      "acme",
+      "linear-install",
+      fetchImpl as unknown as typeof fetch
+    );
+
+    expect(result).toEqual({
+      jobStatus: "succeeded",
+      message: "Linear linked issue sync completed.",
+      status: "succeeded"
+    });
+    expect(fetchImpl).toHaveBeenNthCalledWith(
+      1,
+      "/api/openroad/workspaces/acme/integrations/linear/sync/jobs",
+      expect.objectContaining({ method: "POST" })
+    );
+    expect(fetchImpl).toHaveBeenNthCalledWith(
+      2,
+      "/api/openroad/integrations/sync/run",
+      expect.objectContaining({
+        body: JSON.stringify({ limit: 5, provider: "linear", workspaceId: "acme" }),
+        method: "POST"
+      })
     );
   });
 

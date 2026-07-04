@@ -1,6 +1,6 @@
 # Provider Token Storage
 
-OpenRoad now has server-only encrypted credential storage primitives for GitHub, Linear, and Jira integrations. This enables later OAuth callback, live fetch, background sync, and provider write-back work without putting provider tokens in browser state or core OpenRoad workspace data.
+OpenRoad now has server-only encrypted credential storage primitives for GitHub, Linear, and Jira integrations. This enables OAuth callback, live fetch, background sync, and provider write-back work without putting provider tokens in browser state or core OpenRoad workspace data. Linear live sync now uses these encrypted credentials for already-linked issue mappings.
 
 ## Environment
 
@@ -71,9 +71,10 @@ Changing `OPENROAD_TOKEN_ENCRYPTION_KEY` without re-encrypting existing credenti
 ## Deferred Work
 
 - OAuth callback token exchange.
-- Live Linear/Jira fetch.
+- Jira live fetch.
 - Provider write-back.
-- Background sync workers.
+- Linear/Jira webhook ingestion.
+- Jira background sync worker.
 - Browser Settings UI for credential management.
 - External KMS or multi-key rotation.
 - Multi-process mutation locking.

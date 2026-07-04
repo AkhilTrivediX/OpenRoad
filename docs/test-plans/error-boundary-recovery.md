@@ -88,12 +88,16 @@ As a maintainer using OpenRoad, if the app shell crashes, I can see that OpenRoa
 ## Evidence
 
 - Branch: `feat/error-boundary-recovery`
-- Commit SHAs: pending.
+- Commit SHAs: `1a26929` test plan, `d968bef` implementation.
 - Date: 2026-07-04.
-- Acceptance criteria status: pending.
-- Commands run: pending.
-- Browser/viewports tested: pending.
-- Accessibility checks: pending.
-- Reviewer notes: pending.
+- Acceptance criteria status: passed on branch before merge.
+- Commands run:
+  - `pnpm vitest run src/app/OpenRoadErrorBoundary.test.tsx src/App.test.tsx` passed 2 files and 50 tests.
+  - `node C:\Users\PC\.agents\skills\impeccable\scripts\detect.mjs --json src\app\OpenRoadErrorBoundary.tsx src\main.tsx src\styles.css` returned no findings.
+  - `pnpm check; pnpm release:verify` passed 20 test files and 226 tests; production client/server builds passed; release dry-run manifest generated from real build artifacts.
+  - Built-server smoke with integration environment variables unset and admin-token mode passed `health`, `contract`, `portal`, `private-denied`, and `private-token`.
+- Browser/viewports tested: No production crash trigger was added, so fallback behavior is covered by automated component tests. Healthy app rendering is covered by existing App workflow tests and production smoke.
+- Accessibility checks: Recovery fallback uses `aria-label="OpenRoad recovery"`, direct button names `Try again` and `Reset local data`, and a status message after local reset. Design detector returned no findings for touched UI/CSS files.
+- Reviewer notes: The boundary wraps the root React tree in `src/main.tsx`, does not send errors externally, does not expose thrown error messages by default, and clears only the two OpenRoad browser-local persistence keys through the existing `clearOpenRoadState` function.
 - Known unresolved risks: External observability, structured error telemetry, hosted support workflow, and automated browser E2E CI remain future slices.
 - Rollback notes: No data migration expected; rollback by reverting the branch.

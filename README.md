@@ -31,6 +31,7 @@ OpenRoad now has a working standalone product loop, production server foundation
 - Production Node server that serves the built app and same-origin OpenRoad APIs.
 - File-backed server persistence for a single-tenant self-host or evaluation install.
 - Team metadata, workspace membership, audit events, and private ops status APIs.
+- App-level crash recovery boundary with retry and local browser-data reset actions.
 - Provider-neutral integration mappings plus a payload-backed GitHub issue import/link API.
 - Server-only GitHub App setup and installation verification foundation.
 - Live GitHub issue fetch through verified installations without persisted tokens.

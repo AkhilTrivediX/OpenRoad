@@ -69,6 +69,47 @@ describe("OpenRoad integration metadata store", () => {
     });
   });
 
+  it("keeps installation records scoped by provider, workspace, and installation id", async () => {
+    const store = new FileIntegrationStore(await temporaryIntegrationFile());
+    const installation = createInstallation();
+
+    await store.upsertInstallation(installation);
+    await store.upsertInstallation({ ...installation, workspaceId: "maintainer" });
+
+    const result = await store.load();
+    expect(result.state.installations).toHaveLength(2);
+    expect(new Set(result.state.installations.map((item) => item.workspaceId))).toEqual(
+      new Set(["acme", "maintainer"])
+    );
+  });
+
+  it("drops unknown secret-like fields from integration metadata", () => {
+    const state = parseIntegrationState({
+      installations: [
+        {
+          ...createInstallation(),
+          privateKey: "secret",
+          token: "secret",
+          webhookSecret: "secret"
+        }
+      ],
+      mappings: [],
+      schemaVersion: openRoadIntegrationSchemaVersion
+    });
+
+    expect(JSON.stringify(state)).not.toContain("secret");
+    expect(Object.keys(state.installations[0])).toEqual([
+      "createdAt",
+      "id",
+      "permissions",
+      "provider",
+      "providerAccountId",
+      "providerAccountName",
+      "status",
+      "workspaceId"
+    ]);
+  });
+
   it("recovers corrupt metadata and rejects future schemas", async () => {
     const corruptFile = await temporaryIntegrationFile();
     await mkdir(dirname(corruptFile), { recursive: true });

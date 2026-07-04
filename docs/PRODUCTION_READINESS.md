@@ -168,7 +168,7 @@ OpenRoad releases must eventually include:
 
 ## Current Readiness Debt
 
-These are known production gaps after the GitHub Issue Sync foundation.
+These are known production gaps after the GitHub App Installation foundation.
 
 - App-level error boundary is still pending.
 - Some UI orchestration still lives inside `App.tsx`; the first helper/module extraction is complete, but component-level splitting remains future work.
@@ -178,19 +178,19 @@ These are known production gaps after the GitHub Issue Sync foundation.
 - Backup/restore and local self-host smoke commands exist, but published Docker images and hosted release promotion are not implemented.
 - Observability is limited to process logs; structured operational events and dashboards are pending.
 - Public portal write controls and process-local rate limits exist, but persistent requester identity, notification preferences, and distributed abuse controls are pending.
-- Payload-backed GitHub issue import/link exists, but live GitHub App installation, token handling, webhooks, background sync, and disconnect UI are not implemented yet.
+- Payload-backed GitHub issue import/link and GitHub App installation verification exist, but live issue fetch, webhook handling, background sync, conflict UI, and disconnect UI are not implemented yet.
 - Linear and Jira adapters are not implemented yet.
 - Browser QA is manual rather than automated end-to-end CI.
 
 ## Next Production Move
 
-Next branch: `feat/github-app-installation`
+Next branch: `feat/github-live-issue-fetch`
 
 Purpose:
 
-- Add GitHub App installation and callback flow.
-- Keep GitHub credentials server-only and out of browser bundles.
-- Verify installation permissions before enabling live issue import.
+- Generate short-lived GitHub installation access tokens server-side without persistence.
+- Fetch live GitHub issues for verified installations.
+- Feed selected live issues through the existing import/link mapper.
 - Preserve the payload-backed import route for tests and self-host operators.
 - Keep disconnect behavior non-destructive.
 - Keep standalone OpenRoad workflows working with zero integrations.

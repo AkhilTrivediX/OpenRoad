@@ -20,6 +20,7 @@ import { FileIntegrationStore } from "./integrations";
 import { FileOpenRoadStore } from "./store";
 import { FileTeamStore } from "./team";
 import type { AuthOptions } from "./access";
+import type { GitHubAppClient, GitHubAppConfig } from "./github-app";
 
 const openServers: Server[] = [];
 
@@ -526,6 +527,236 @@ describe("OpenRoad production server", () => {
     expect(await readFile(integrationFile, "utf8")).toBe(beforeIntegrations);
   });
 
+  it("returns safe GitHub App setup state without exposing secrets", async () => {
+    const { url } = await startTestServer({
+      githubAppConfig: {
+        apiBaseUrl: "https://api.github.com",
+        appBaseUrl: "https://github.com",
+        appId: "12345",
+        privateKey: "-----BEGIN PRIVATE KEY-----\nsecret\n-----END PRIVATE KEY-----",
+        slug: "openroad-test",
+        webhookSecretConfigured: true
+      }
+    });
+
+    const response = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/github/app/setup`);
+    const text = JSON.stringify(response.body);
+
+    expect(response.status).toBe(200);
+    expect(response.body.githubApp).toMatchObject({
+      configured: true,
+      missing: [],
+      requiredEvents: ["issues", "pull_request"]
+    });
+    expect(response.body.githubApp.installUrl).toContain(
+      "https://github.com/apps/openroad-test/installations/new"
+    );
+    expect(text).not.toContain("secret");
+    expect(text).not.toContain("PRIVATE KEY");
+  });
+
+  it("reports missing GitHub App setup without blocking standalone mode", async () => {
+    const { url } = await startTestServer();
+
+    const response = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/github/app/setup`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.githubApp).toMatchObject({
+      configured: false,
+      missing: [
+        "OPENROAD_GITHUB_APP_SLUG",
+        "OPENROAD_GITHUB_APP_ID",
+        "OPENROAD_GITHUB_APP_PRIVATE_KEY or OPENROAD_GITHUB_APP_PRIVATE_KEY_FILE"
+      ]
+    });
+  });
+
+  it("verifies GitHub App installations into integration metadata", async () => {
+    const { integrationStore, teamFile, url } = await startTestServer({
+      githubAppClient: fakeGitHubAppClient()
+    });
+
+    const response = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/github/app/installations/verify`,
+      {
+        body: JSON.stringify({ installationId: "98765" }),
+        headers: { "Content-Type": "application/json" },
+        method: "POST"
+      }
+    );
+    const integrations = await integrationStore.load();
+    const teamState = JSON.parse(await readFile(teamFile, "utf8")) as {
+      auditEvents: Array<{ summary: string; type: string; workspaceId: string }>;
+    };
+    const text = JSON.stringify(response.body);
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      installation: {
+        id: "github-installation-98765",
+        provider: "github",
+        providerAccountName: "AkhilTrivediX",
+        workspaceId: "acme"
+      },
+      status: "verified"
+    });
+    expect(integrations.state.installations).toHaveLength(1);
+    expect(teamState.auditEvents[0]).toMatchObject({
+      type: "integration.github.app.verify",
+      workspaceId: "acme"
+    });
+    expect(text).not.toContain("token");
+    expect(text).not.toContain("PRIVATE KEY");
+  });
+
+  it("keeps verified GitHub App installations scoped to each OpenRoad workspace", async () => {
+    const { integrationStore, url } = await startTestServer({
+      githubAppClient: fakeGitHubAppClient()
+    });
+
+    const acme = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/github/app/installations/verify`,
+      {
+        body: JSON.stringify({ installationId: "98765" }),
+        headers: { "Content-Type": "application/json" },
+        method: "POST"
+      }
+    );
+    const maintainer = await fetchJson(
+      `${url}/api/openroad/workspaces/maintainer/integrations/github/app/installations/verify`,
+      {
+        body: JSON.stringify({ installationId: "98765" }),
+        headers: { "Content-Type": "application/json" },
+        method: "POST"
+      }
+    );
+    const integrations = await integrationStore.load();
+
+    expect(acme.status).toBe(200);
+    expect(maintainer.status).toBe(200);
+    expect(integrations.state.installations).toHaveLength(2);
+    expect(new Set(integrations.state.installations.map((item) => item.workspaceId))).toEqual(
+      new Set(["acme", "maintainer"])
+    );
+  });
+
+  it("protects GitHub App setup and verification with owner-only integration management", async () => {
+    const { url } = await startTestServer({
+      auth: { adminToken: "secret", singleUserMode: false, trustProxyHeaders: true },
+      githubAppClient: fakeGitHubAppClient()
+    });
+
+    const publicSetup = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/github/app/setup`
+    );
+    const contributorSetup = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/github/app/setup`,
+      {
+        headers: workspaceActorHeaders("acme", "Contributor")
+      }
+    );
+    const ownerSetup = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/github/app/setup`,
+      {
+        headers: workspaceActorHeaders("acme", "Owner")
+      }
+    );
+    const publicWrite = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/github/app/installations/verify`,
+      {
+        body: JSON.stringify({ installationId: "98765" }),
+        headers: { "Content-Type": "application/json" },
+        method: "POST"
+      }
+    );
+    const viewerWrite = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/github/app/installations/verify`,
+      {
+        body: JSON.stringify({ installationId: "98765" }),
+        headers: {
+          ...workspaceActorHeaders("acme", "Viewer"),
+          "Content-Type": "application/json"
+        },
+        method: "POST"
+      }
+    );
+    const contributorWrite = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/github/app/installations/verify`,
+      {
+        body: JSON.stringify({ installationId: "98765" }),
+        headers: {
+          ...workspaceActorHeaders("acme", "Contributor"),
+          "Content-Type": "application/json"
+        },
+        method: "POST"
+      }
+    );
+    const integrationWrite = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/github/app/installations/verify`,
+      {
+        body: JSON.stringify({ installationId: "98765" }),
+        headers: {
+          ...integrationActorHeaders("acme", "github-installation-98765"),
+          "Content-Type": "application/json"
+        },
+        method: "POST"
+      }
+    );
+    const ownerWrite = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/github/app/installations/verify`,
+      {
+        body: JSON.stringify({ installationId: "98765" }),
+        headers: {
+          ...workspaceActorHeaders("acme", "Owner"),
+          "Content-Type": "application/json"
+        },
+        method: "POST"
+      }
+    );
+    const integrationCrossWorkspace = await fetchJson(
+      `${url}/api/openroad/workspaces/maintainer/integrations/github/app/installations/verify`,
+      {
+        body: JSON.stringify({ installationId: "98765" }),
+        headers: {
+          ...integrationActorHeaders("acme", "github-installation-98765"),
+          "Content-Type": "application/json"
+        },
+        method: "POST"
+      }
+    );
+
+    expect(publicSetup.status).toBe(403);
+    expect(contributorSetup.status).toBe(403);
+    expect(ownerSetup.status).toBe(200);
+    expect(publicWrite.status).toBe(403);
+    expect(viewerWrite.status).toBe(403);
+    expect(contributorWrite.status).toBe(403);
+    expect(integrationWrite.status).toBe(403);
+    expect(ownerWrite.status).toBe(200);
+    expect(integrationCrossWorkspace.status).toBe(403);
+  });
+
+  it("rejects invalid GitHub App verification requests", async () => {
+    const { integrationStore, url } = await startTestServer({
+      githubAppClient: fakeGitHubAppClient()
+    });
+    await integrationStore.load();
+
+    const response = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/github/app/installations/verify`,
+      {
+        body: JSON.stringify({ installationId: "" }),
+        headers: { "Content-Type": "application/json" },
+        method: "POST"
+      }
+    );
+    const integrations = await integrationStore.load();
+
+    expect(response.status).toBe(400);
+    expect(response.body.error.code).toBe("invalid_request");
+    expect(integrations.state.installations).toHaveLength(0);
+  });
+
   it("returns public portal data without private workspace details", async () => {
     const { store, url } = await startTestServer();
     const state = createStateWithPrivatePortalData();
@@ -890,7 +1121,12 @@ describe("OpenRoad production server", () => {
 });
 
 async function startTestServer(
-  options: { auth?: AuthOptions; portalRateLimiter?: PortalRateLimiter } = {}
+  options: {
+    auth?: AuthOptions;
+    githubAppClient?: GitHubAppClient;
+    githubAppConfig?: GitHubAppConfig;
+    portalRateLimiter?: PortalRateLimiter;
+  } = {}
 ) {
   const directory = await mkdtemp(join(tmpdir(), "openroad-server-"));
   const distDir = join(directory, "dist");
@@ -909,6 +1145,8 @@ async function startTestServer(
   const server = createOpenRoadServer({
     auth: options.auth,
     distDir,
+    githubAppClient: options.githubAppClient,
+    githubAppConfig: options.githubAppConfig,
     integrationStore,
     logger: { error: vi.fn(), log: vi.fn() },
     portalRateLimiter: options.portalRateLimiter,
@@ -1013,6 +1251,26 @@ function gitHubRepositoryPayload() {
     node_id: "R_kwDOR123",
     owner: { login: "AkhilTrivediX" },
     private: false
+  };
+}
+
+function fakeGitHubAppClient(): GitHubAppClient {
+  return {
+    async getInstallation(installationId: string) {
+      return {
+        account: {
+          id: 118957648,
+          login: "AkhilTrivediX",
+          type: "User"
+        },
+        id: installationId,
+        permissions: {
+          issues: "read",
+          pull_requests: "read"
+        },
+        repository_selection: "selected"
+      };
+    }
   };
 }
 

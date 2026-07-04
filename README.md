@@ -32,6 +32,7 @@ OpenRoad now has a working standalone product loop, production server foundation
 - File-backed server persistence for a single-tenant self-host or evaluation install.
 - Team metadata, workspace membership, audit events, and private ops status APIs.
 - Provider-neutral integration mappings plus a payload-backed GitHub issue import/link API.
+- Server-only GitHub App setup and installation verification foundation.
 - Docker Compose, backup/restore, and smoke-check commands for self-host operators.
 
 Current production limits are explicit: OAuth/session auth, invitation flows, managed database migrations, hosted release promotion, deeper observability, live GitHub App OAuth/webhooks, and Linear/Jira adapters are planned next-stage work.
@@ -45,6 +46,7 @@ Current docs:
 - [Branching and release workflow](docs/BRANCHING_AND_RELEASE.md)
 - [Integration adapter contract](docs/INTEGRATION_ADAPTER_CONTRACT.md)
 - [GitHub issue sync](docs/GITHUB_ISSUE_SYNC.md)
+- [GitHub App installation](docs/GITHUB_APP_INSTALLATION.md)
 - [UI concepts](docs/UI_CONCEPTS.md)
 
 ## Working Rule
@@ -101,6 +103,8 @@ The server exposes:
 - `GET /api/openroad/workspaces/:workspaceId`
 - `POST /api/openroad/workspaces/:workspaceId/actions`
 - `POST /api/openroad/workspaces/:workspaceId/integrations/github/issues/import`
+- `GET /api/openroad/workspaces/:workspaceId/integrations/github/app/setup`
+- `POST /api/openroad/workspaces/:workspaceId/integrations/github/app/installations/verify`
 - `GET /api/openroad/audit-events`
 - `GET /api/openroad/ops/status`
 - `GET /api/openroad/workspaces/:workspaceId/portal`

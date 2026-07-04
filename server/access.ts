@@ -16,6 +16,7 @@ export const workspaceRoles = ["Owner", "Maintainer", "Contributor", "Viewer"] a
 
 export const permissions = [
   "contract:read",
+  "integration:manage",
   "integration:sync",
   "portal:interact",
   "portal:read",
@@ -150,6 +151,18 @@ export const routeProtections: RouteProtection[] = [
     path: "/api/openroad/workspaces/:workspaceId/integrations/github/issues/import",
     permission: "workspace:write",
     scope: "workspace"
+  },
+  {
+    methods: ["GET"],
+    path: "/api/openroad/workspaces/:workspaceId/integrations/github/app/setup",
+    permission: "integration:manage",
+    scope: "workspace"
+  },
+  {
+    methods: ["POST"],
+    path: "/api/openroad/workspaces/:workspaceId/integrations/github/app/installations/verify",
+    permission: "integration:manage",
+    scope: "workspace"
   }
 ];
 
@@ -260,6 +273,7 @@ function permissionsForRole(role: WorkspaceRole) {
   if (role === "Owner") {
     return new Set<Permission>([
       "contract:read",
+      "integration:manage",
       "portal:read",
       "workspace:read",
       "workspace:write"

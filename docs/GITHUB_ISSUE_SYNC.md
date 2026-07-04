@@ -59,8 +59,6 @@ The endpoint does not accept or store GitHub tokens, App private keys, webhook s
 
 The next GitHub slices should add:
 
-- GitHub App installation and callback flow.
-- Server-only token/private-key handling.
 - Live REST/GraphQL issue fetch.
 - Webhook signature verification.
 - Idempotent webhook processing.

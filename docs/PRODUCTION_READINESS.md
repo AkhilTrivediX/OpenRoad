@@ -178,19 +178,17 @@ These are known production gaps after the GitHub Webhook And Disconnect Hardenin
 - Backup/restore and local self-host smoke commands exist, but published Docker images and hosted release promotion are not implemented.
 - Observability is limited to process logs; structured operational events and dashboards are pending.
 - Public portal write controls and process-local rate limits exist, but persistent requester identity, notification preferences, and distributed abuse controls are pending.
-- Payload-backed GitHub issue import/link, GitHub App installation verification, live issue fetch, signed webhook handling, safe disconnect APIs, and payload-backed Linear issue import/link exist, but background sync jobs, conflict UI, and browser Settings UI are not implemented yet.
-- Jira adapter work is not implemented yet.
+- Payload-backed GitHub issue import/link, GitHub App installation verification, live issue fetch, signed webhook handling, safe disconnect APIs, payload-backed Linear issue import/link, and payload-backed Jira issue import/link exist, but background sync jobs, provider token storage, conflict UI, and browser Settings UI are not implemented yet.
 - Browser QA is manual rather than automated end-to-end CI.
 
 ## Next Production Move
 
-Next branch: `feat/jira-issue-sync`
+Next branch: `feat/requester-notifications`
 
 Purpose:
 
-- Add the first Jira adapter slice using the provider-neutral contract.
-- Import/link Jira issues without leaking Jira field complexity into core screens.
-- Reuse installation, mapping, and workspace scoping patterns proven by GitHub and Linear.
-- Preserve standalone OpenRoad workflows with zero integrations.
+- Close the loop with requester notification preferences and safe status/changelog updates.
+- Keep notification controls explicit and anti-spam aware.
+- Preserve standalone OpenRoad workflows and public/private visibility boundaries.
 
-Notifications and AI work should follow after Jira proves the adapter boundary can handle the most complex tracker shape.
+Provider token storage, live Linear/Jira fetch, Jira webhooks, and conflict UI remain integration hardening work that should stay behind server-only secret management.

@@ -122,10 +122,12 @@ export type ProviderAdapter = {
 };
 
 export function createExternalObjectKey(ref: ExternalObjectRef) {
+  const normalizedRef = normalizeExternalObjectRef(ref);
+
   return [
-    normalizeSegment(ref.provider),
-    normalizeSegment(ref.type),
-    normalizeSegment(ref.key ?? ref.id)
+    encodeSegment(normalizedRef.provider),
+    encodeSegment(normalizedRef.type),
+    `id=${encodeSegment(normalizedRef.id)}`
   ].join(":");
 }
 
@@ -134,27 +136,46 @@ export function createMappingKey(
   external: ExternalObjectRef,
   openRoad: OpenRoadObjectRef
 ) {
+  const normalizedExternal = normalizeExternalObjectRef(external);
+  const normalizedOpenRoad = normalizeOpenRoadObjectRef(openRoad);
+
   return [
-    normalizeSegment(installationId),
-    createExternalObjectKey(external),
-    normalizeSegment(openRoad.workspaceId),
-    normalizeSegment(openRoad.type),
-    normalizeSegment(openRoad.id)
+    encodeSegment(installationId),
+    createExternalObjectKey(normalizedExternal),
+    encodeSegment(normalizedOpenRoad.workspaceId),
+    encodeSegment(normalizedOpenRoad.type),
+    encodeSegment(normalizedOpenRoad.id)
   ].join("|");
 }
 
 export function createMapping(
-  installationId: string,
+  installation: IntegrationInstallation,
   external: ExternalObjectRef,
   openRoad: OpenRoadObjectRef,
   connectedAt: string
 ): ExternalObjectMapping {
+  const normalizedInstallation = normalizeInstallation(installation);
+  const normalizedExternal = normalizeExternalObjectRef(external);
+  const normalizedOpenRoad = normalizeOpenRoadObjectRef(openRoad);
+
+  if (normalizedInstallation.status !== "active") {
+    throw new Error("Integration installation must be active before creating mappings.");
+  }
+
+  if (normalizedInstallation.provider !== normalizedExternal.provider) {
+    throw new Error("Integration installation and external object provider must match.");
+  }
+
+  if (normalizedInstallation.workspaceId !== normalizedOpenRoad.workspaceId) {
+    throw new Error("Integration installation and OpenRoad object workspace must match.");
+  }
+
   return {
     connectedAt,
-    external: normalizeExternalObjectRef(external),
-    id: createMappingKey(installationId, external, openRoad),
-    installationId,
-    openRoad,
+    external: normalizedExternal,
+    id: createMappingKey(normalizedInstallation.id, normalizedExternal, normalizedOpenRoad),
+    installationId: normalizedInstallation.id,
+    openRoad: normalizedOpenRoad,
     status: "active"
   };
 }
@@ -174,6 +195,27 @@ export function shouldRetrySync(result: SyncResult) {
   return result.kind === "retryable-error" || result.kind === "rate-limited";
 }
 
+export function assertMappingMatchesInstallation(
+  installation: IntegrationInstallation,
+  mapping: ExternalObjectMapping
+) {
+  const normalizedInstallation = normalizeInstallation(installation);
+
+  if (mapping.installationId.trim() !== normalizedInstallation.id) {
+    throw new Error("External object mapping installation id must match the installation.");
+  }
+
+  if (mapping.external.provider !== normalizedInstallation.provider) {
+    throw new Error("External object mapping provider must match the installation.");
+  }
+
+  if (mapping.openRoad.workspaceId.trim() !== normalizedInstallation.workspaceId) {
+    throw new Error("External object mapping workspace must match the installation.");
+  }
+
+  return mapping;
+}
+
 export function validateProviderFixture(fixture: ProviderFixture) {
   if (fixture.installation.provider !== fixture.external.provider) {
     throw new Error("Provider fixture installation and external object provider must match.");
@@ -191,13 +233,54 @@ export function validateProviderFixture(fixture: ProviderFixture) {
 }
 
 function normalizeExternalObjectRef(ref: ExternalObjectRef): ExternalObjectRef {
+  const key = normalizeOptionalSegment(ref.key);
+
   return {
     ...ref,
-    id: ref.id.trim(),
-    key: ref.key?.trim()
+    id: requireSegment(ref.id, "external object id"),
+    key
   };
 }
 
-function normalizeSegment(value: string) {
-  return value.trim().toLowerCase().replace(/[^a-z0-9_.:@/-]+/g, "-");
+function normalizeOpenRoadObjectRef(ref: OpenRoadObjectRef): OpenRoadObjectRef {
+  return {
+    ...ref,
+    id: requireSegment(ref.id, "OpenRoad object id"),
+    workspaceId: requireSegment(ref.workspaceId, "OpenRoad workspace id")
+  };
+}
+
+function normalizeInstallation(installation: IntegrationInstallation): IntegrationInstallation {
+  return {
+    ...installation,
+    id: requireSegment(installation.id, "integration installation id"),
+    providerAccountId: requireSegment(
+      installation.providerAccountId,
+      "integration provider account id"
+    ),
+    providerAccountName: requireSegment(
+      installation.providerAccountName,
+      "integration provider account name"
+    ),
+    workspaceId: requireSegment(installation.workspaceId, "integration workspace id")
+  };
+}
+
+function normalizeOptionalSegment(value: string | undefined) {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function requireSegment(value: string, label: string) {
+  const trimmed = value.trim();
+
+  if (!trimmed) {
+    throw new Error(`${label} is required.`);
+  }
+
+  return trimmed;
+}
+
+function encodeSegment(value: string) {
+  return encodeURIComponent(requireSegment(value, "identity segment"));
 }

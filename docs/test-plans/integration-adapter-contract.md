@@ -18,7 +18,7 @@ As an OpenRoad maintainer adding GitHub, Linear, or Jira sync, I need a stable a
 - Sync job, sync result, retry, and rate-limit result types.
 - Conflict model for local/external divergence.
 - Disconnect behavior notes that preserve OpenRoad source-of-truth data.
-- Tests for key normalization, mapping identity, retry decisions, and provider fixture shape.
+- Tests for collision-safe identity, mapping validation, retry decisions, and provider fixture shape.
 - Documentation for GitHub, Linear, and Jira adapters to implement later.
 
 ## Not In Scope
@@ -37,6 +37,8 @@ As an OpenRoad maintainer adding GitHub, Linear, or Jira sync, I need a stable a
 - Provider-specific fields stay outside core OpenRoad domain objects.
 - Adapter contract can represent GitHub, Linear, and Jira installations.
 - External object mappings are stable and deterministic.
+- External object mappings use provider ids, not lossy display keys, for identity.
+- Mapping creation validates installation provider, workspace, and active status.
 - Sync conflicts have explicit local/external/base snapshots.
 - Retry decisions distinguish retryable, rate-limited, conflict, and fatal outcomes.
 - Disconnect behavior preserves OpenRoad data and marks mappings disconnected instead of deleting core objects.
@@ -47,7 +49,12 @@ As an OpenRoad maintainer adding GitHub, Linear, or Jira sync, I need a stable a
 ## Automated Test Checklist
 
 - External object keys are stable across equivalent provider refs.
+- External object keys preserve distinct provider ids that would collide under slug normalization.
+- Blank display keys do not block provider-id identity.
+- Blank provider ids are rejected.
 - Mapping keys include installation, external object, and OpenRoad object identity.
+- Mapping creation rejects provider, workspace, and inactive-installation mismatches.
+- Existing mappings can be asserted against their owning installation before sync.
 - Retry helper retries transient failures and rate limits.
 - Retry helper does not retry conflicts or fatal validation failures.
 - Disconnect helper marks mappings disconnected without changing core object refs.
@@ -89,14 +96,15 @@ As an OpenRoad maintainer adding GitHub, Linear, or Jira sync, I need a stable a
 ## Evidence
 
 - Branch: `feat/integration-adapter-contract`
-- Commit SHA: pending commit.
+- Commit SHAs: `ef38275`; post-review hardening commit pending.
 - Date: 2026-07-04.
 - Acceptance criteria status: Passed.
 - Commands run:
   - `pnpm vitest run src/integrations/adapter.test.ts server/access.test.ts` - 12 tests passed.
-  - `pnpm check` - 115 tests passed; production client and server builds passed.
+  - `pnpm vitest run src/integrations/adapter.test.ts server/access.test.ts` - 16 tests passed after post-review hardening.
+  - `pnpm check` - 119 tests passed; production client and server builds passed.
 - Browser/viewports tested: No UI changes planned.
 - Accessibility checks: No UI changes planned.
-- Reviewer notes: Pending branch reviewer before merge.
+- Reviewer notes: Branch reviewer found identity-collision, installation-validation, and docs-scope issues; all were fixed before merge.
 - Known unresolved risks: OAuth flows, provider API clients, token storage, webhook handlers, background job runner, and live GitHub/Linear/Jira sync are intentionally deferred to provider-specific branches.
 - Rollback notes: Revert this branch; no schema migration or persisted data transformation is included.

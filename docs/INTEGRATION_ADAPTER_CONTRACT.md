@@ -46,12 +46,20 @@ Mappings use deterministic keys derived from:
 - Installation id.
 - Provider.
 - External object type.
-- External object key or id.
+- External object provider id.
 - OpenRoad workspace id.
 - OpenRoad object type.
 - OpenRoad object id.
 
-This keeps GitHub, Linear, and Jira objects from colliding even when external issue keys look similar.
+Provider display keys are useful for UI labels, but they are not identity. GitHub issue numbers, Jira keys, and Linear identifiers can collide across accounts, repositories, teams, or moved objects. Adapter mappings therefore use the provider id and encode key segments instead of normalizing human keys into a lossy slug.
+
+`createMapping` also requires the installation object, not only an installation id. Mapping creation must prove:
+
+- The installation is active.
+- The external object provider matches the installation provider.
+- The OpenRoad object workspace matches the installation workspace.
+
+Provider adapters should call `assertMappingMatchesInstallation` before syncing an existing mapping.
 
 ## Retry Rules
 

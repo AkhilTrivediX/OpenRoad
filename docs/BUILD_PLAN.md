@@ -312,16 +312,17 @@ Acceptance:
 
 Branch: `feat/integration-adapter-contract`
 
-Status: merged to `main`.
+Status: implemented and production-checked.
 
 Build:
 
 - Provider adapter interface.
 - External objects and links.
-- Sync state.
+- Sync job/result state.
 - Sync conflict model.
-- Webhook event model.
-- Hidden sync logs in Settings.
+- Deterministic provider object identity.
+- Installation/workspace mapping validation.
+- Provider fixture validation.
 
 Acceptance:
 

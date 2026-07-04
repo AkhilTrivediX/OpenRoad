@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   createInitialOpenRoadState,
+  openRoadReducer,
   openRoadSchemaVersion,
   type ChangelogItem,
   type RequestItem,
@@ -24,6 +25,7 @@ import type { AuthOptions } from "./access";
 import type { GitHubAppClient, GitHubAppConfig } from "./github-app";
 import type { LinearOAuthConfig } from "./linear";
 import type { JiraOAuthConfig } from "./jira";
+import type { NotificationDeliveryAdapter } from "./notifications";
 
 const openServers: Server[] = [];
 
@@ -308,6 +310,7 @@ describe("OpenRoad production server", () => {
                 body: "Untrusted injected delivery body.",
                 createdAt: "2026-07-04T00:00:00.000Z",
                 dedupeKey: "request-status-change:dark-mode-docs:Planned",
+                deliveryAttempts: 0,
                 id: "injected-event",
                 nextStatus: "Planned",
                 previousStatus: "New",
@@ -2411,6 +2414,188 @@ describe("OpenRoad production server", () => {
     expect(JSON.stringify(allowed.body)).not.toContain("secret");
   });
 
+  it("keeps requester notification delivery private and configuration-gated", async () => {
+    const { url } = await startTestServer({
+      auth: { adminToken: "secret", singleUserMode: false }
+    });
+
+    const method = await fetchJson(`${url}/api/openroad/notifications/deliver`, {
+      headers: { Authorization: "Bearer secret" },
+      method: "GET"
+    });
+    const denied = await fetchJson(`${url}/api/openroad/notifications/deliver`, {
+      body: JSON.stringify({}),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const notConfigured = await fetchJson(`${url}/api/openroad/notifications/deliver`, {
+      body: JSON.stringify({}),
+      headers: {
+        Authorization: "Bearer secret",
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+
+    expect(method.status).toBe(405);
+    expect(denied.status).toBe(403);
+    expect(notConfigured.status).toBe(503);
+    expect(notConfigured.body.error.code).toBe("not_configured");
+  });
+
+  it("delivers queued requester notifications through a configured adapter", async () => {
+    const deliveries: string[] = [];
+    const adapter: NotificationDeliveryAdapter = {
+      channel: "test",
+      async deliver(event) {
+        deliveries.push(event.id);
+        return { messageId: `test:${event.id}` };
+      }
+    };
+    const { store, teamStore, url } = await startTestServer({
+      auth: { adminToken: "secret", singleUserMode: false },
+      notificationDeliveryAdapter: adapter
+    });
+    await store.replaceState(createStateWithQueuedNotification());
+
+    const delivered = await fetchJson(`${url}/api/openroad/notifications/deliver`, {
+      body: JSON.stringify({ workspaceId: "acme" }),
+      headers: {
+        Authorization: "Bearer secret",
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    const repeated = await fetchJson(`${url}/api/openroad/notifications/deliver`, {
+      body: JSON.stringify({ workspaceId: "acme" }),
+      headers: {
+        Authorization: "Bearer secret",
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    const persisted = await store.load();
+    const team = await teamStore.load(persisted.state);
+    const event = persisted.state.workspaces[0].notifications.outbox[0];
+
+    expect(delivered.status).toBe(200);
+    expect(delivered.body).toMatchObject({
+      attempted: 1,
+      delivered: 1,
+      failed: 0,
+      remainingQueued: 0,
+      status: "processed",
+      workspaceId: "acme"
+    });
+    expect(JSON.stringify(delivered.body)).not.toContain("Dark mode for docs site moved");
+    expect(repeated.body).toMatchObject({
+      attempted: 0,
+      delivered: 0,
+      skipped: 1
+    });
+    expect(deliveries).toHaveLength(1);
+    expect(event).toMatchObject({
+      deliveryAttempts: 1,
+      deliveryChannel: "test",
+      deliveryMessageId: `test:${event.id}`,
+      status: "delivered"
+    });
+    expect(team.state.auditEvents[0]).toMatchObject({
+      type: "notifications.deliver",
+      workspaceId: "acme"
+    });
+  });
+
+  it("serializes concurrent requester notification delivery requests", async () => {
+    const deliveries: string[] = [];
+    let releaseFirstDelivery: () => void = () => undefined;
+    let markFirstDeliveryStarted: () => void = () => undefined;
+    const firstDeliveryStarted = new Promise<void>((resolve) => {
+      markFirstDeliveryStarted = resolve;
+    });
+    const adapter: NotificationDeliveryAdapter = {
+      channel: "test",
+      async deliver(event) {
+        deliveries.push(event.id);
+        markFirstDeliveryStarted();
+        await new Promise<void>((release) => {
+          releaseFirstDelivery = release;
+        });
+        return { messageId: `test:${event.id}` };
+      }
+    };
+    const { store, url } = await startTestServer({
+      auth: { adminToken: "secret", singleUserMode: false },
+      notificationDeliveryAdapter: adapter
+    });
+    await store.replaceState(createStateWithQueuedNotification());
+
+    const first = fetchJson(`${url}/api/openroad/notifications/deliver`, {
+      body: JSON.stringify({ workspaceId: "acme" }),
+      headers: {
+        Authorization: "Bearer secret",
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    await firstDeliveryStarted;
+    const second = fetchJson(`${url}/api/openroad/notifications/deliver`, {
+      body: JSON.stringify({ workspaceId: "acme" }),
+      headers: {
+        Authorization: "Bearer secret",
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+
+    releaseFirstDelivery();
+    const results = await Promise.all([first, second]);
+    const deliveredCount = results.reduce((count, result) => count + result.body.delivered, 0);
+
+    expect(deliveredCount).toBe(1);
+    expect(deliveries).toHaveLength(1);
+    expect(results.some((result) => result.body.skipped === 1)).toBe(true);
+  });
+
+  it("keeps requester notification delivery failures retryable without dropping events", async () => {
+    const adapter: NotificationDeliveryAdapter = {
+      channel: "failing-test",
+      async deliver() {
+        throw new Error("Delivery provider missing file permissions");
+      }
+    };
+    const { store, url } = await startTestServer({
+      auth: { adminToken: "secret", singleUserMode: false },
+      notificationDeliveryAdapter: adapter
+    });
+    await store.replaceState(createStateWithQueuedNotification());
+
+    const response = await fetchJson(`${url}/api/openroad/notifications/deliver`, {
+      body: JSON.stringify({ workspaceId: "acme" }),
+      headers: {
+        Authorization: "Bearer secret",
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    const persisted = await store.load();
+    const event = persisted.state.workspaces[0].notifications.outbox[0];
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      attempted: 1,
+      delivered: 0,
+      failed: 1,
+      remainingQueued: 1
+    });
+    expect(event).toMatchObject({
+      deliveryAttempts: 1,
+      deliveryChannel: "failing-test",
+      status: "queued"
+    });
+    expect(event.deliveryError).toContain("missing file permissions");
+  });
+
   it("returns 404 for unknown public portal workspaces", async () => {
     const { url } = await startTestServer();
 
@@ -2454,6 +2639,7 @@ async function startTestServer(
     githubAppConfig?: GitHubAppConfig;
     jiraOAuthConfig?: JiraOAuthConfig;
     linearOAuthConfig?: LinearOAuthConfig;
+    notificationDeliveryAdapter?: NotificationDeliveryAdapter;
     portalRateLimiter?: PortalRateLimiter;
   } = {}
 ) {
@@ -2480,6 +2666,7 @@ async function startTestServer(
     jiraOAuthConfig: options.jiraOAuthConfig,
     linearOAuthConfig: options.linearOAuthConfig,
     logger: { error: vi.fn(), log: vi.fn() },
+    notificationDeliveryAdapter: options.notificationDeliveryAdapter,
     portalRateLimiter: options.portalRateLimiter,
     store,
     teamStore
@@ -2825,6 +3012,22 @@ async function verifyGitHubInstallation(
       method: "POST"
     }
   );
+}
+
+function createStateWithQueuedNotification() {
+  const state = createInitialOpenRoadState();
+  const workspace = state.workspaces[0];
+  const request = workspace.requests.find((item) => item.id === "dark-mode-docs");
+  if (!request) throw new Error("Fixture request missing.");
+
+  return openRoadReducer(state, {
+    request: {
+      ...request,
+      status: "Planned"
+    },
+    type: "replace-request",
+    workspaceId: workspace.id
+  });
 }
 
 function createStateWithPrivatePortalData() {

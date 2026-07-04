@@ -9,8 +9,8 @@ export const changelogVisibilities = ["Private", "Public"] as const;
 export const requestVisibilities = ["Private", "Public"] as const;
 export const commentVisibilities = ["Internal", "Public", "Hidden"] as const;
 export const notificationEventTypes = ["request-status-change", "changelog-published"] as const;
-export const notificationEventStatuses = ["queued", "held"] as const;
-export const openRoadSchemaVersion = 6;
+export const notificationEventStatuses = ["queued", "held", "delivered", "failed"] as const;
+export const openRoadSchemaVersion = 7;
 export const openRoadStorageKey = "openroad:state:v1";
 export const openRoadSelectedWorkspaceKey = "openroad:selected-workspace:v1";
 
@@ -168,7 +168,13 @@ export type RequesterNotificationEvent = {
   changelogTitle?: string;
   createdAt: string;
   dedupeKey: string;
+  deliveredAt?: string;
+  deliveryAttempts: number;
+  deliveryChannel?: string;
+  deliveryError?: string;
+  deliveryMessageId?: string;
   id: string;
+  lastDeliveryAttemptAt?: string;
   nextStatus?: RequestStatus;
   previousStatus?: RequestStatus;
   requestId: string;
@@ -941,6 +947,7 @@ function queueStatusChangeNotification(
       body: `${nextRequest.title} moved from ${previousRequest.status} to ${nextRequest.status}.`,
       createdAt: now,
       dedupeKey,
+      deliveryAttempts: 0,
       id: createNotificationEventId("request-status", now, nextRequest.id, dedupeKey),
       nextStatus: nextRequest.status,
       previousStatus: previousRequest.status,
@@ -982,6 +989,7 @@ function queueChangelogPublishNotifications(
         changelogTitle: nextChangelogItem.title,
         createdAt: now,
         dedupeKey,
+        deliveryAttempts: 0,
         id: createNotificationEventId("changelog", now, request.id, dedupeKey),
         requestId: request.id,
         requestTitle: request.title,
@@ -1008,7 +1016,7 @@ function appendNotificationEvent(
     ...workspace,
     notifications: sanitizeNotificationSettings({
       ...workspace.notifications,
-      outbox: [event, ...workspace.notifications.outbox].slice(0, 200)
+      outbox: trimNotificationOutbox([event, ...workspace.notifications.outbox])
     })
   };
 }
@@ -1029,18 +1037,76 @@ function isDuplicateNotificationEvent(
   });
 }
 
-function sanitizeNotificationSettings(
-  settings: RequesterNotificationSettings
-): RequesterNotificationSettings {
+function sanitizeNotificationSettings(settings: unknown): RequesterNotificationSettings {
+  if (!isRecord(settings)) return cloneValue(defaultNotificationSettings);
+
   return {
-    defaultChangelogUpdates: settings.defaultChangelogUpdates,
-    defaultStatusUpdates: settings.defaultStatusUpdates,
-    enabled: settings.enabled,
-    outbox: settings.outbox.filter(isRequesterNotificationEvent).slice(0, 200),
-    preferences: settings.preferences.filter(isRequesterNotificationPreference).slice(0, 500),
+    defaultChangelogUpdates:
+      typeof settings.defaultChangelogUpdates === "boolean"
+        ? settings.defaultChangelogUpdates
+        : defaultNotificationSettings.defaultChangelogUpdates,
+    defaultStatusUpdates:
+      typeof settings.defaultStatusUpdates === "boolean"
+        ? settings.defaultStatusUpdates
+        : defaultNotificationSettings.defaultStatusUpdates,
+    enabled:
+      typeof settings.enabled === "boolean" ? settings.enabled : defaultNotificationSettings.enabled,
+    outbox: Array.isArray(settings.outbox)
+      ? trimNotificationOutbox(settings.outbox.map(sanitizeRequesterNotificationEvent).filter(isDefined))
+      : [],
+    preferences: Array.isArray(settings.preferences)
+      ? settings.preferences.filter(isRequesterNotificationPreference).slice(0, 500)
+      : [],
     quietWindowHours: Number.isFinite(settings.quietWindowHours)
-      ? Math.max(1, Math.min(168, Math.round(settings.quietWindowHours)))
+      ? Math.max(1, Math.min(168, Math.round(settings.quietWindowHours as number)))
       : defaultNotificationSettings.quietWindowHours
+  };
+}
+
+function trimNotificationOutbox(events: RequesterNotificationEvent[]) {
+  if (events.length <= 200) return events;
+
+  const undelivered = events.filter((event) => event.status !== "delivered");
+  const delivered = events.filter((event) => event.status === "delivered");
+  return [...undelivered, ...delivered].slice(0, 200);
+}
+
+function sanitizeRequesterNotificationEvent(value: unknown): RequesterNotificationEvent | undefined {
+  if (!isRecord(value) || !isRequesterNotificationEventCore(value)) return undefined;
+
+  const deliveryAttempts =
+    typeof value.deliveryAttempts === "number" && Number.isFinite(value.deliveryAttempts)
+      ? Math.max(0, Math.min(1_000, Math.round(value.deliveryAttempts)))
+      : 0;
+  const status = notificationEventStatuses.includes(value.status as NotificationEventStatus)
+    ? (value.status as NotificationEventStatus)
+    : "queued";
+
+  return {
+    body: value.body,
+    changelogId: getOptionalString(value.changelogId),
+    changelogTitle: getOptionalString(value.changelogTitle),
+    createdAt: value.createdAt,
+    dedupeKey: value.dedupeKey,
+    deliveredAt: getOptionalString(value.deliveredAt),
+    deliveryAttempts,
+    deliveryChannel: getOptionalString(value.deliveryChannel),
+    deliveryError: getOptionalString(value.deliveryError),
+    deliveryMessageId: getOptionalString(value.deliveryMessageId),
+    id: value.id,
+    lastDeliveryAttemptAt: getOptionalString(value.lastDeliveryAttemptAt),
+    nextStatus: requestStatuses.includes(value.nextStatus as RequestStatus)
+      ? (value.nextStatus as RequestStatus)
+      : undefined,
+    previousStatus: requestStatuses.includes(value.previousStatus as RequestStatus)
+      ? (value.previousStatus as RequestStatus)
+      : undefined,
+    requestId: value.requestId,
+    requestTitle: value.requestTitle,
+    requester: value.requester,
+    status,
+    title: value.title,
+    type: value.type
   };
 }
 
@@ -1305,6 +1371,7 @@ export function migrateOpenRoadState(value: unknown): OpenRoadState {
       value.schemaVersion === 3 ||
       value.schemaVersion === 4 ||
       value.schemaVersion === 5 ||
+      value.schemaVersion === 6 ||
       value.schemaVersion === 0 ||
       value.schemaVersion === undefined) &&
     Array.isArray(value.workspaces)
@@ -1355,7 +1422,7 @@ function migratePortalSettingsFromPreviousSchema(value: unknown): PortalSettings
 function migrateNotificationSettingsFromPreviousSchema(
   value: unknown
 ): RequesterNotificationSettings {
-  if (isNotificationSettings(value)) {
+  if (isRecord(value)) {
     return sanitizeNotificationSettings(cloneValue(value));
   }
 
@@ -1638,9 +1705,38 @@ function isRequesterNotificationPreference(
 function isRequesterNotificationEvent(value: unknown): value is RequesterNotificationEvent {
   return (
     isRecord(value) &&
-    typeof value.body === "string" &&
+    isRequesterNotificationEventCore(value) &&
     (value.changelogId === undefined || typeof value.changelogId === "string") &&
     (value.changelogTitle === undefined || typeof value.changelogTitle === "string") &&
+    (value.deliveredAt === undefined || typeof value.deliveredAt === "string") &&
+    typeof value.deliveryAttempts === "number" &&
+    Number.isFinite(value.deliveryAttempts) &&
+    value.deliveryAttempts >= 0 &&
+    value.deliveryAttempts <= 1_000 &&
+    (value.deliveryChannel === undefined || typeof value.deliveryChannel === "string") &&
+    (value.deliveryError === undefined || typeof value.deliveryError === "string") &&
+    (value.deliveryMessageId === undefined || typeof value.deliveryMessageId === "string") &&
+    (value.lastDeliveryAttemptAt === undefined || typeof value.lastDeliveryAttemptAt === "string") &&
+    notificationEventStatuses.includes(value.status as NotificationEventStatus)
+  );
+}
+
+function isRequesterNotificationEventCore(
+  value: Record<string, unknown>
+): value is Record<string, unknown> & {
+  body: string;
+  createdAt: string;
+  dedupeKey: string;
+  id: string;
+  requestId: string;
+  requestTitle: string;
+  requester: string;
+  status: NotificationEventStatus;
+  title: string;
+  type: NotificationEventType;
+} {
+  return (
+    typeof value.body === "string" &&
     typeof value.createdAt === "string" &&
     typeof value.dedupeKey === "string" &&
     typeof value.id === "string" &&
@@ -1654,6 +1750,14 @@ function isRequesterNotificationEvent(value: unknown): value is RequesterNotific
     typeof value.title === "string" &&
     notificationEventTypes.includes(value.type as NotificationEventType)
   );
+}
+
+function getOptionalString(value: unknown) {
+  return typeof value === "string" ? value.slice(0, 500) : undefined;
+}
+
+function isDefined<T>(value: T | undefined): value is T {
+  return value !== undefined;
 }
 
 function isWorkItem(value: unknown): value is WorkItem {

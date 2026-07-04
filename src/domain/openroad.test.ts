@@ -429,6 +429,69 @@ describe("OpenRoad domain state", () => {
     expect(plannedAgain.workspaces[0].notifications.outbox).toHaveLength(1);
   });
 
+  it("preserves undelivered notification events before delivered history when trimming outbox", () => {
+    const state = createInitialOpenRoadState();
+    const workspace = state.workspaces[0];
+    const request = workspace.requests.find((item) => item.id === "dark-mode-docs");
+    if (!request) throw new Error("Fixture request missing.");
+    const deliveredEvents = Array.from({ length: 199 }, (_, index) => ({
+      body: `Delivered body ${index}.`,
+      createdAt: "2026-07-04T00:00:00.000Z",
+      dedupeKey: `delivered:${index}`,
+      deliveredAt: "2026-07-04T00:01:00.000Z",
+      deliveryAttempts: 1,
+      deliveryChannel: "test",
+      id: `delivered-${index}`,
+      lastDeliveryAttemptAt: "2026-07-04T00:01:00.000Z",
+      requestId: "dark-mode-docs",
+      requestTitle: "Dark mode for docs site",
+      requester: "Docs feedback",
+      status: "delivered" as const,
+      title: `Delivered ${index}`,
+      type: "request-status-change" as const
+    }));
+    const olderQueued = {
+      body: "Older queued body.",
+      createdAt: "2026-07-04T00:00:00.000Z",
+      dedupeKey: "older-queued",
+      deliveryAttempts: 0,
+      id: "older-queued",
+      requestId: "dark-mode-docs",
+      requestTitle: "Dark mode for docs site",
+      requester: "Docs feedback",
+      status: "queued" as const,
+      title: "Older queued",
+      type: "request-status-change" as const
+    };
+    const withFullOutbox = {
+      ...state,
+      workspaces: [
+        {
+          ...workspace,
+          notifications: {
+            ...workspace.notifications,
+            outbox: [...deliveredEvents, olderQueued]
+          }
+        },
+        ...state.workspaces.slice(1)
+      ]
+    };
+
+    const updated = openRoadReducer(withFullOutbox, {
+      request: {
+        ...request,
+        status: "Planned"
+      },
+      type: "replace-request",
+      workspaceId: workspace.id
+    });
+    const outbox = updated.workspaces[0].notifications.outbox;
+
+    expect(outbox).toHaveLength(200);
+    expect(outbox.some((event) => event.id === "older-queued")).toBe(true);
+    expect(outbox.some((event) => event.id === "delivered-198")).toBe(false);
+  });
+
   it("honors request-level notification opt-outs", () => {
     const state = createInitialOpenRoadState();
     const workspace = state.workspaces[0];
@@ -719,6 +782,48 @@ describe("OpenRoad domain state", () => {
     expect(migrated.workspaces[0].requests[0].publicVoterKeys).toEqual([]);
   });
 
+  it("migrates schema version 6 notification events into delivery-ready records", () => {
+    const state = createInitialOpenRoadState();
+    const previous = {
+      schemaVersion: 6,
+      workspaces: state.workspaces.map((workspace, index) =>
+        index === 0
+          ? {
+              ...workspace,
+              notifications: {
+                ...workspace.notifications,
+                outbox: [
+                  {
+                    body: "Public-safe delivery body.",
+                    createdAt: "2026-07-04T00:00:00.000Z",
+                    dedupeKey: "request-status-change:dark-mode-docs:Planned",
+                    id: "legacy-event",
+                    nextStatus: "Planned",
+                    previousStatus: "New",
+                    requestId: "dark-mode-docs",
+                    requestTitle: "Dark mode for docs site",
+                    requester: "Docs feedback",
+                    status: "queued",
+                    title: "Planned: Dark mode for docs site",
+                    type: "request-status-change"
+                  }
+                ]
+              }
+            }
+          : workspace
+      )
+    };
+
+    const migrated = migrateOpenRoadState(previous);
+
+    expect(migrated.schemaVersion).toBe(openRoadSchemaVersion);
+    expect(migrated.workspaces[0].notifications.outbox[0]).toMatchObject({
+      deliveryAttempts: 0,
+      id: "legacy-event",
+      status: "queued"
+    });
+  });
+
   it("creates visitor-aware public portal vote state without leaking local vote state", () => {
     const workspace = createInitialOpenRoadState().workspaces[0];
     const publicRequest = sampleRequest({
@@ -759,6 +864,7 @@ describe("OpenRoad domain state", () => {
               body: "Private notification body.",
               createdAt: "2026-07-04T00:00:00.000Z",
               dedupeKey: "request-status-change:private-alpha:Planned",
+              deliveryAttempts: 0,
               id: "event-private",
               nextStatus: "Planned",
               previousStatus: "New",

@@ -29,6 +29,8 @@ $env:OPENROAD_TEAM_FILE="C:\openroad\openroad-team.json"
 $env:OPENROAD_OWNER_EMAIL="owner@example.com"
 $env:OPENROAD_OWNER_NAME="Workspace Owner"
 $env:OPENROAD_ADMIN_TOKEN="replace-with-long-random-token"
+$env:OPENROAD_NOTIFICATION_DELIVERY_MODE="disabled"
+$env:OPENROAD_NOTIFICATION_DELIVERY_FILE="C:\openroad\openroad-notification-deliveries.jsonl"
 $env:OPENROAD_PORTAL_RATE_LIMIT_MAX="30"
 $env:OPENROAD_PORTAL_RATE_LIMIT_WINDOW_MS="60000"
 $env:OPENROAD_GITHUB_APP_SLUG=""
@@ -57,6 +59,8 @@ $env:OPENROAD_TEAM_FILE="C:\openroad\openroad-team.json"
 $env:OPENROAD_OWNER_EMAIL="owner@example.com"
 $env:OPENROAD_OWNER_NAME="Workspace Owner"
 $env:OPENROAD_ADMIN_TOKEN="replace-with-long-random-token"
+$env:OPENROAD_NOTIFICATION_DELIVERY_MODE="disabled"
+$env:OPENROAD_NOTIFICATION_DELIVERY_FILE="C:\openroad\openroad-notification-deliveries.jsonl"
 $env:OPENROAD_PORTAL_RATE_LIMIT_MAX="30"
 $env:OPENROAD_PORTAL_RATE_LIMIT_WINDOW_MS="60000"
 $env:OPENROAD_GITHUB_APP_SLUG=""
@@ -101,6 +105,7 @@ The Compose service:
 - Stores product, integration, and team data in the `openroad-data` volume.
 - Runs with `OPENROAD_SINGLE_USER_MODE=false`.
 - Requires `OPENROAD_ADMIN_TOKEN` before startup.
+- Keeps requester notification delivery disabled unless `OPENROAD_NOTIFICATION_DELIVERY_MODE=file` is configured.
 - Applies process-local public portal write limits from `OPENROAD_PORTAL_RATE_LIMIT_MAX` and `OPENROAD_PORTAL_RATE_LIMIT_WINDOW_MS`.
 
 ## Admin Bootstrap
@@ -157,7 +162,29 @@ The manifest records creation time, app package version, source paths, file size
 
 ## Data Schema Notes
 
-OpenRoad state schema `6` stores anonymous public portal voter keys inside `openroad-state.json` so repeated public votes remain idempotent after restart and backup/restore. Upgrade from schema `5` is automatic on load and initializes existing requests with empty voter-key lists. Downgrading to a schema `5` build after schema `6` data is written requires restoring a pre-upgrade backup.
+OpenRoad state schema `7` stores anonymous public portal voter keys and requester notification delivery metadata inside `openroad-state.json`. Upgrade from schema `6` is automatic on load and initializes existing notification events with `deliveryAttempts: 0`. Downgrading to a schema `6` or older build after schema `7` data is written requires restoring a pre-upgrade backup.
+
+## Requester Notification Delivery
+
+Requester notification delivery is disabled by default. To hand queued notifications to a local operational worker, configure:
+
+```powershell
+$env:OPENROAD_NOTIFICATION_DELIVERY_MODE="file"
+$env:OPENROAD_NOTIFICATION_DELIVERY_FILE="C:\openroad\openroad-notification-deliveries.jsonl"
+```
+
+Then call the private delivery endpoint with the admin token:
+
+```powershell
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://127.0.0.1:4173/api/openroad/notifications/deliver" `
+  -Headers @{ Authorization = "Bearer $env:OPENROAD_ADMIN_TOKEN" } `
+  -ContentType "application/json" `
+  -Body '{"workspaceId":"acme"}'
+```
+
+The file adapter appends public-safe JSONL records and marks queued events delivered. It does not send email or provider messages by itself.
 
 ## Restore
 
@@ -219,6 +246,7 @@ For local single-user mode without `OPENROAD_ADMIN_TOKEN`, omit `--admin-token`;
 - With `OPENROAD_ADMIN_TOKEN` configured, unauthenticated `GET /api/openroad/state` should return `403`.
 - With `Authorization: Bearer <token>`, `GET /api/openroad/state` should return `200`.
 - `GET /api/openroad/ops/status` should require private read permission.
+- `POST /api/openroad/notifications/deliver` should require private write permission and return `503` unless a delivery adapter is configured.
 
 ## Security Notes
 
@@ -235,7 +263,7 @@ For local single-user mode without `OPENROAD_ADMIN_TOKEN`, omit `--admin-token`;
 - OAuth/session auth is not implemented.
 - Team metadata is file-backed, not managed SQL.
 - Trusted proxy headers are disabled by default.
-- Payload-backed GitHub issue import, GitHub App installation verification, live issue fetch, signed webhooks, safe disconnect APIs, payload-backed Linear issue import, payload-backed Jira issue import, and requester notification outbox/preferences exist; background jobs, persisted provider tokens, Linear/Jira live sync/webhooks, notification delivery adapters, conflict UI, and billing are not implemented.
+- Payload-backed GitHub issue import, GitHub App installation verification, live issue fetch, signed webhooks, safe disconnect APIs, payload-backed Linear issue import, payload-backed Jira issue import, requester notification outbox/preferences, and a server-side JSONL notification delivery handoff exist; background jobs, persisted provider tokens, Linear/Jira live sync/webhooks, direct email/provider notification delivery, conflict UI, and billing are not implemented.
 - Docker images are build-local by default; release manifests can record publishing metadata, but registry publishing infrastructure is not bundled yet.
 - Signed artifact infrastructure is not bundled yet; release manifests record signing as not configured unless an operator supplies signing metadata.
 - Named Docker volume backup requires an operator copy step or a future packaged volume helper.

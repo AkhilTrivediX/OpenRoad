@@ -17,6 +17,7 @@ import {
 } from "../src/domain/openroad";
 import { createOpenRoadServer } from "./http";
 import { FileOpenRoadStore } from "./store";
+import { FileTeamStore } from "./team";
 import type { AuthOptions } from "./access";
 
 const openServers: Server[] = [];
@@ -220,7 +221,7 @@ describe("OpenRoad production server", () => {
     expect(otherWorkspace.body.error.code).toBe("forbidden");
   });
 
-  it("enforces action permissions by role and workspace scope", async () => {
+  it("enforces action permissions by role and workspace scope without full-state leaks", async () => {
     const { store, url } = await startTestServer({
       auth: { singleUserMode: false, trustProxyHeaders: true }
     });
@@ -231,7 +232,17 @@ describe("OpenRoad production server", () => {
       title: "Contract-created request"
     };
 
-    const viewerWrite = await fetchJson(`${url}/api/openroad/actions`, {
+    const globalMemberWrite = await fetchJson(`${url}/api/openroad/actions`, {
+      body: JSON.stringify({
+        action: { request, type: "create-request", workspaceId: "acme" }
+      }),
+      headers: {
+        ...workspaceActorHeaders("acme", "Contributor"),
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    const viewerWrite = await fetchJson(`${url}/api/openroad/workspaces/acme/actions`, {
       body: JSON.stringify({
         action: { request, type: "create-request", workspaceId: "acme" }
       }),
@@ -241,7 +252,7 @@ describe("OpenRoad production server", () => {
       },
       method: "POST"
     });
-    const contributorCrossWorkspace = await fetchJson(`${url}/api/openroad/actions`, {
+    const contributorCrossWorkspace = await fetchJson(`${url}/api/openroad/workspaces/acme/actions`, {
       body: JSON.stringify({
         action: { request, type: "create-request", workspaceId: "maintainer" }
       }),
@@ -251,7 +262,7 @@ describe("OpenRoad production server", () => {
       },
       method: "POST"
     });
-    const contributorWrite = await fetchJson(`${url}/api/openroad/actions`, {
+    const contributorWrite = await fetchJson(`${url}/api/openroad/workspaces/acme/actions`, {
       body: JSON.stringify({
         action: { request, type: "create-request", workspaceId: "acme" }
       }),
@@ -263,9 +274,14 @@ describe("OpenRoad production server", () => {
     });
     const nextState = await store.load();
 
+    expect(globalMemberWrite.status).toBe(403);
     expect(viewerWrite.status).toBe(403);
     expect(contributorCrossWorkspace.status).toBe(403);
     expect(contributorWrite.status).toBe(200);
+    expect(contributorWrite.body.workspace.id).toBe("acme");
+    expect(contributorWrite.body.revision).toBeTruthy();
+    expect(contributorWrite.body.state).toBeUndefined();
+    expect(contributorWrite.body.workspace.name).not.toBe("Maintainer Lab");
     expect(
       nextState.state.workspaces[0].requests.some((item) => item.id === request.id)
     ).toBe(true);
@@ -319,6 +335,115 @@ describe("OpenRoad production server", () => {
     expect(text).not.toContain("Secret private notes");
   });
 
+  it("returns session and workspace lists filtered to the current actor", async () => {
+    const { url } = await startTestServer({
+      auth: { singleUserMode: false, trustProxyHeaders: true }
+    });
+
+    const session = await fetchJson(`${url}/api/openroad/session`, {
+      headers: workspaceActorHeaders("acme", "Viewer")
+    });
+    const workspaces = await fetchJson(`${url}/api/openroad/workspaces`, {
+      headers: workspaceActorHeaders("acme", "Viewer")
+    });
+    const publicVisitor = await fetchJson(`${url}/api/openroad/workspaces`, {
+      headers: { "x-openroad-actor-type": "public-visitor" }
+    });
+
+    expect(session.status).toBe(200);
+    expect(session.body.actor).toMatchObject({
+      type: "workspace-member",
+      workspaceId: "acme"
+    });
+    expect(session.body.memberships.every((item: { workspaceId: string }) => item.workspaceId === "acme")).toBe(true);
+    expect(workspaces.status).toBe(200);
+    expect(workspaces.body.workspaces).toHaveLength(1);
+    expect(workspaces.body.workspaces[0]).toMatchObject({
+      id: "acme",
+      name: "Acme OSS"
+    });
+    expect(JSON.stringify(workspaces.body)).not.toContain("Maintainer Lab");
+    expect(publicVisitor.status).toBe(403);
+  });
+
+  it("records and filters audit events for state and workspace mutations", async () => {
+    const { url } = await startTestServer({
+      auth: { adminToken: "secret", singleUserMode: false, trustProxyHeaders: true }
+    });
+    const state = createInitialOpenRoadState();
+    const request = {
+      ...state.workspaces[0].requests[0],
+      id: "audit-request",
+      title: "Audit request"
+    };
+    await fetchJson(`${url}/api/openroad/state`, {
+      body: JSON.stringify({ state }),
+      headers: {
+        Authorization: "Bearer secret",
+        "Content-Type": "application/json"
+      },
+      method: "PUT"
+    });
+    const workspaceAction = await fetchJson(`${url}/api/openroad/workspaces/acme/actions`, {
+      body: JSON.stringify({
+        action: { request, type: "create-request", workspaceId: "acme" }
+      }),
+      headers: {
+        ...workspaceActorHeaders("acme", "Contributor"),
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    const ownAudit = await fetchJson(`${url}/api/openroad/audit-events?workspaceId=acme`, {
+      headers: workspaceActorHeaders("acme", "Viewer")
+    });
+    const crossWorkspaceAudit = await fetchJson(
+      `${url}/api/openroad/audit-events?workspaceId=maintainer`,
+      {
+        headers: workspaceActorHeaders("acme", "Viewer")
+      }
+    );
+
+    expect(workspaceAction.status).toBe(200);
+    expect(ownAudit.status).toBe(200);
+    expect(ownAudit.body.auditEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          requestId: expect.any(String),
+          type: "action.create-request",
+          workspaceId: "acme"
+        })
+      ])
+    );
+    expect(JSON.stringify(ownAudit.body.auditEvents)).not.toContain("Users cannot tell");
+    expect(crossWorkspaceAudit.status).toBe(403);
+  });
+
+  it("keeps ops status private", async () => {
+    const { url } = await startTestServer({
+      auth: { adminToken: "secret", singleUserMode: false }
+    });
+
+    const denied = await fetchJson(`${url}/api/openroad/ops/status`);
+    const allowed = await fetchJson(`${url}/api/openroad/ops/status`, {
+      headers: { Authorization: "Bearer secret" }
+    });
+
+    expect(denied.status).toBe(403);
+    expect(allowed.status).toBe(200);
+    expect(allowed.body).toMatchObject({
+      status: "ok",
+      stores: {
+        openRoad: expect.any(String),
+        team: expect.any(String)
+      },
+      totals: {
+        workspaces: 2
+      }
+    });
+    expect(JSON.stringify(allowed.body)).not.toContain("secret");
+  });
+
   it("returns 404 for unknown public portal workspaces", async () => {
     const { url } = await startTestServer();
 
@@ -364,18 +489,21 @@ async function startTestServer(options: { auth?: AuthOptions } = {}) {
   await writeFile(join(directory, "secret.txt"), "secret", "utf8");
 
   const dataFile = join(directory, "state.json");
+  const teamFile = join(directory, "team.json");
   const store = new FileOpenRoadStore(dataFile);
+  const teamStore = new FileTeamStore(teamFile);
   await store.load();
   const server = createOpenRoadServer({
     auth: options.auth,
     distDir,
     logger: { error: vi.fn(), log: vi.fn() },
-    store
+    store,
+    teamStore
   });
   const url = await listen(server);
   openServers.push(server);
 
-  return { dataFile, store, url };
+  return { dataFile, store, teamFile, teamStore, url };
 }
 
 function workspaceActorHeaders(workspaceId: string, role: string) {

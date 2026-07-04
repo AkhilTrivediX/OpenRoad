@@ -66,6 +66,7 @@ pnpm dev
 pnpm install --frozen-lockfile
 pnpm build
 $env:OPENROAD_DATA_FILE="C:\openroad\openroad-state.json"
+$env:OPENROAD_TEAM_FILE="C:\openroad\openroad-team.json"
 $env:PORT="4173"
 pnpm start
 ```
@@ -74,10 +75,17 @@ The server exposes:
 
 - `GET /api/health`
 - `GET /api/openroad/contract`
+- `GET /api/openroad/session`
 - `GET /api/openroad/state`
 - `PUT /api/openroad/state`
 - `POST /api/openroad/actions`
+- `GET /api/openroad/workspaces`
 - `GET /api/openroad/workspaces/:workspaceId`
+- `POST /api/openroad/workspaces/:workspaceId/actions`
+- `GET /api/openroad/audit-events`
+- `GET /api/openroad/ops/status`
 - `GET /api/openroad/workspaces/:workspaceId/portal`
 
 When `OPENROAD_ADMIN_TOKEN` is configured, private state APIs require `Authorization: Bearer <token>`. The portal API remains public and returns only the public projection. See [API auth and tenancy contract](docs/API_AUTH_TENANCY_CONTRACT.md).
+
+Deployment details live in [Deployment runbook](docs/DEPLOYMENT_RUNBOOK.md).

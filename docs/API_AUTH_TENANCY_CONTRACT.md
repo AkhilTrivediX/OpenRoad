@@ -81,9 +81,16 @@ Public portal responses use the OpenRoad public projection and must not include 
 - `GET /api/openroad/state`
 - `PUT /api/openroad/state`
 - `POST /api/openroad/actions`
+- `GET /api/openroad/session`
+- `GET /api/openroad/workspaces`
 - `GET /api/openroad/workspaces/:workspaceId`
+- `POST /api/openroad/workspaces/:workspaceId/actions`
+- `GET /api/openroad/audit-events`
+- `GET /api/openroad/ops/status`
 
 Workspace-scoped routes require the actor to be scoped to the requested workspace unless the actor is the local owner/admin.
+
+Workspace-scoped action responses return the updated workspace and a revision marker. They must not return the full multi-workspace state.
 
 ## Environment
 

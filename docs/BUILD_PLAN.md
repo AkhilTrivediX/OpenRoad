@@ -10,7 +10,7 @@ Each feature must also satisfy `docs/PRODUCTION_READINESS.md` before merging to 
 
 Current stage: Stage 2 Team Beta foundation in progress.
 
-The standalone loop now covers workspaces, requests, triage, internal work, roadmap planning, changelog drafts, public portal preview, local durability, production APIs, basic tenancy boundaries, file-backed team metadata, audit events, and self-host operations. The next production work should reduce application-module risk before adding public portal interaction, provider integrations, or AI assistance.
+The standalone loop now covers workspaces, requests, triage, internal work, roadmap planning, changelog drafts, public portal preview, local durability, production APIs, basic tenancy boundaries, file-backed team metadata, audit events, self-host operations, and a first app-module boundary. The next production work should harden the public portal surface before adding provider integrations or AI assistance.
 
 ## Feature 1: Workspace Shell
 
@@ -118,6 +118,8 @@ These foundation branches are part of the product roadmap, not optional cleanup.
 
 Branch: `feat/app-module-decomposition`
 
+Status: merged to `main`.
+
 Build:
 
 - Split the monolithic app into feature modules.
@@ -203,7 +205,7 @@ Acceptance:
 
 Branch: `feat/self-host-ops-foundation`
 
-Status: active.
+Status: merged to `main`.
 
 Build:
 

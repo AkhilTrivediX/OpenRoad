@@ -43,7 +43,6 @@ import {
   createInitialOpenRoadState,
   exportWorkspace,
   importWorkspaceFromJson,
-  initialWorkspaces,
   integrationChips,
   loadOpenRoadState,
   loadSelectedWorkspaceId,
@@ -77,132 +76,44 @@ import {
   type WorkStatus
 } from "./domain/openroad";
 import {
+  changelogSourceLabel,
+  createChangelogSourceChoices,
+  type ChangelogSourceChoice
+} from "./app/openroadChangelog";
+import {
+  emptyChangelogDraft,
+  emptyPortalCommentDraft,
+  emptyRequestDraft,
+  emptyRoadmapDraft,
+  emptyWorkDraft,
+  type ChangelogDraft,
+  type PortalCommentDraft,
+  type RequestDraft,
+  type RoadmapDraft,
+  type WorkDraft
+} from "./app/openroadDrafts";
+import {
+  flattenRoadmap,
+  parseTags,
+  requestMatchesQuery,
+  requestMatchesTriageView,
+  resolveInitialWorkspaceId,
+  statusTone,
+  triageViews,
+  type RequestArchiveFilter,
+  type RequestStatusFilter,
+  type TriageView
+} from "./app/openroadViewModel";
+import {
   isServerPersistenceEnabled,
   loadServerOpenRoadState,
   saveServerOpenRoadState
 } from "./persistence/openroadServer";
 
-const triageViews = [
-  { value: "all", label: "All active" },
-  { value: "unassigned", label: "Unassigned" },
-  { value: "needs-decision", label: "Needs decision" },
-  { value: "high-signal", label: "High signal" }
-] as const;
-
 type NavItem = {
   label: "Inbox" | "Work" | "Roadmap" | "Changelog" | "Portal" | "Settings";
   count?: boolean;
   icon: typeof Inbox;
-};
-
-type RequestStatusFilter = "All" | RequestStatus;
-type RequestArchiveFilter = "active" | "archived";
-type TriageView = (typeof triageViews)[number]["value"];
-
-type RequestDraft = {
-  title: string;
-  description: string;
-  requester: string;
-  source: string;
-  tags: string;
-  visibility: RequestVisibility;
-};
-
-type WorkDraft = {
-  title: string;
-  description: string;
-  owner: RequestOwner;
-  status: WorkStatus;
-  targetDate: string;
-  linkSelectedRequest: boolean;
-};
-
-type RoadmapDraft = {
-  title: string;
-  summary: string;
-  lane: RoadmapLane;
-  visibility: RoadmapVisibility;
-  confidence: RoadmapConfidence;
-  isStale: boolean;
-  requestId: string;
-  workItemId: string;
-};
-
-type ChangelogDraft = {
-  privateNotes: string;
-  publicSummary: string;
-  requestIds: string[];
-  roadmapItemIds: string[];
-  sourceKey: string;
-  sourceType: ChangelogItem["sourceType"];
-  state: ChangelogState;
-  title: string;
-  visibility: ChangelogVisibility;
-  workItemIds: string[];
-};
-
-type ChangelogSourceChoice = {
-  label: string;
-  privateNotes: string;
-  publicSummary: string;
-  requestIds: string[];
-  roadmapItemIds: string[];
-  sourceKey: string;
-  sourceType: ChangelogItem["sourceType"];
-  title: string;
-  workItemIds: string[];
-};
-
-type PortalCommentDraft = {
-  author: string;
-  body: string;
-};
-
-const emptyRequestDraft: RequestDraft = {
-  title: "",
-  description: "",
-  requester: "",
-  source: "Manual",
-  tags: "",
-  visibility: "Private"
-};
-
-const emptyWorkDraft: WorkDraft = {
-  title: "",
-  description: "",
-  owner: "Unassigned",
-  status: "Backlog",
-  targetDate: "",
-  linkSelectedRequest: true
-};
-
-const emptyRoadmapDraft: RoadmapDraft = {
-  confidence: "Medium",
-  isStale: false,
-  lane: "Next",
-  requestId: "",
-  summary: "",
-  title: "",
-  visibility: "Private",
-  workItemId: ""
-};
-
-const emptyChangelogDraft: ChangelogDraft = {
-  privateNotes: "",
-  publicSummary: "",
-  requestIds: [],
-  roadmapItemIds: [],
-  sourceKey: "manual",
-  sourceType: "Manual",
-  state: "Draft",
-  title: "",
-  visibility: "Private",
-  workItemIds: []
-};
-
-const emptyPortalCommentDraft: PortalCommentDraft = {
-  author: "",
-  body: ""
 };
 
 const baseNavItems: NavItem[] = [
@@ -214,62 +125,6 @@ const baseNavItems: NavItem[] = [
 ];
 
 const workNavItem: NavItem = { label: "Work", icon: ListChecks };
-
-function statusTone(status: RequestStatus | WorkStatus | ChangelogItem["state"]) {
-  if (status === "Planned" || status === "Ready" || status === "Done") return "success";
-  if (status === "Shipping soon" || status === "In progress") return "info";
-  if (status === "Needs decision" || status === "Draft") return "warning";
-  return "neutral";
-}
-
-function flattenRoadmap(roadmap: Workspace["roadmap"]) {
-  return roadmapLanes.flatMap((lane) => roadmap[lane]);
-}
-
-function parseTags(value: string) {
-  return Array.from(
-    new Set(
-      value
-        .split(",")
-        .map((tag) => tag.trim().toLowerCase())
-        .filter(Boolean)
-    )
-  );
-}
-
-function requestMatchesQuery(request: RequestItem, query: string) {
-  const normalizedQuery = query.trim().toLowerCase();
-  if (!normalizedQuery) return true;
-
-  return [
-    request.title,
-    request.description,
-    request.requester,
-    request.source,
-    request.status,
-    request.owner,
-    request.tags.join(" "),
-    request.comments.map((comment) => `${comment.author} ${comment.body}`).join(" "),
-    request.mergedSources
-      .map(
-        (source) =>
-          `${source.title} ${source.requester} ${source.source} ${source.tags.join(" ")}`
-      )
-      .join(" ")
-  ]
-    .join(" ")
-    .toLowerCase()
-    .includes(normalizedQuery);
-}
-
-function requestMatchesTriageView(request: RequestItem, view: TriageView) {
-  if (view === "unassigned") return request.owner === "Unassigned";
-  if (view === "needs-decision") return request.status === "Needs decision";
-  if (view === "high-signal") {
-    return request.votes >= 80 || request.comments.length > 0 || request.mergedSources.length > 0;
-  }
-  return true;
-}
 
 export function App() {
   const [serverPersistenceEnabled] = useState(() => isServerPersistenceEnabled());
@@ -283,16 +138,7 @@ export function App() {
   );
   const workspaceList = openRoadState.workspaces as Workspace[];
   const [workspaceId, setWorkspaceId] = useState(() => {
-    const selectedWorkspaceId = loadSelectedWorkspaceId();
-
-    if (
-      selectedWorkspaceId &&
-      loadResult.state.workspaces.some((item) => item.id === selectedWorkspaceId)
-    ) {
-      return selectedWorkspaceId;
-    }
-
-    return loadResult.state.workspaces[0]?.id ?? initialWorkspaces[0].id;
+    return resolveInitialWorkspaceId(loadResult.state, loadSelectedWorkspaceId());
   });
   const [persistenceMessage, setPersistenceMessage] = useState(
     loadResult.status === "recovered"
@@ -549,55 +395,10 @@ export function App() {
         : [],
     [selectedRoadmapItem, workspace.workItems]
   );
-  const changelogSourceChoices = useMemo<ChangelogSourceChoice[]>(() => {
-    const manualChoice: ChangelogSourceChoice = {
-      label: "Manual draft",
-      privateNotes: "",
-      publicSummary: "",
-      requestIds: [],
-      roadmapItemIds: [],
-      sourceKey: "manual",
-      sourceType: "Manual",
-      title: "",
-      workItemIds: []
-    };
-    const workChoices = workspace.workItems
-      .filter((workItem) => workItem.status === "Done")
-      .map((workItem) => ({
-        label: `Done work: ${workItem.title}`,
-        privateNotes: [
-          `Source: ${workItem.title}`,
-          workItem.owner !== "Unassigned" ? `Owner: ${workItem.owner}` : null,
-          workItem.targetDate ? `Target date: ${workItem.targetDate}` : null
-        ]
-          .filter(Boolean)
-          .join(". "),
-        publicSummary: workItem.description || `${workItem.title} is now available.`,
-        requestIds: [...workItem.requestIds],
-        roadmapItemIds: [],
-        sourceKey: `work:${workItem.id}`,
-        sourceType: "Work" as const,
-        title: workItem.title,
-        workItemIds: [workItem.id]
-      }));
-    const roadmapChoices = roadmapItems.map((roadmapItem) => ({
-      label: `Roadmap: ${roadmapItem.title}`,
-      privateNotes: [
-        `Roadmap lane: ${roadmapItem.lane}`,
-        `Visibility: ${roadmapItem.visibility}`,
-        `${roadmapItem.confidence} confidence`
-      ].join(". "),
-      publicSummary: roadmapItem.summary || `${roadmapItem.title} is moving forward.`,
-      requestIds: [...roadmapItem.requestIds],
-      roadmapItemIds: [roadmapItem.id],
-      sourceKey: `roadmap:${roadmapItem.id}`,
-      sourceType: "Roadmap" as const,
-      title: roadmapItem.title,
-      workItemIds: [...roadmapItem.workItemIds]
-    }));
-
-    return [manualChoice, ...workChoices, ...roadmapChoices];
-  }, [roadmapItems, workspace.workItems]);
+  const changelogSourceChoices = useMemo<ChangelogSourceChoice[]>(
+    () => createChangelogSourceChoices(workspace.workItems, roadmapItems),
+    [roadmapItems, workspace.workItems]
+  );
   const selectedChangelogItem = useMemo(() => {
     const selectedChangelogItemId = selectedChangelogItemIdByWorkspace[workspace.id];
     return (
@@ -1242,16 +1043,6 @@ export function App() {
     if (selectedChangelogItem?.id === changelogItemId) {
       selectChangelogItem(nextChangelogItem?.id);
     }
-  }
-
-  function changelogSourceLabel(changelogItem: ChangelogItem) {
-    if (changelogItem.sourceType === "Manual") return "Manual draft";
-    if (changelogItem.sourceType === "Work") {
-      const workItem = workspace.workItems.find((item) => item.id === changelogItem.sourceId);
-      return workItem ? `Work: ${workItem.title}` : "Work source removed";
-    }
-    const roadmapItem = roadmapItems.find((item) => item.id === changelogItem.sourceId);
-    return roadmapItem ? `Roadmap: ${roadmapItem.title}` : "Roadmap source removed";
   }
 
   function exportCurrentWorkspace() {
@@ -2956,7 +2747,7 @@ export function App() {
                         item.title,
                         item.state,
                         item.visibility,
-                        changelogSourceLabel(item),
+                        changelogSourceLabel(item, workspace, roadmapItems),
                         `${item.requestIds.length} linked requests`
                       ].join(". ")}
                       aria-pressed={selectedChangelogItem?.id === item.id}
@@ -3014,7 +2805,7 @@ export function App() {
                         {selectedChangelogItem.visibility}
                       </span>
                       <span className="status-badge info">
-                        {changelogSourceLabel(selectedChangelogItem)}
+                        {changelogSourceLabel(selectedChangelogItem, workspace, roadmapItems)}
                       </span>
                     </div>
 

@@ -168,10 +168,10 @@ OpenRoad releases must eventually include:
 
 ## Current Readiness Debt
 
-These are known production gaps after the Self-Host Operations foundation.
+These are known production gaps after the App Module Decomposition foundation.
 
 - App-level error boundary is still pending.
-- Some UI orchestration still lives inside `App.tsx`; app module decomposition is pending.
+- Some UI orchestration still lives inside `App.tsx`; the first helper/module extraction is complete, but component-level splitting remains future work.
 - Product and team persistence are file-backed, not managed SQL with online migrations.
 - Full-state APIs are protected by single-user/admin-token mode, but browser session auth is not implemented.
 - Persistent workspace membership and audit events exist, but OAuth/session auth and invitation flows are not implemented.
@@ -182,14 +182,14 @@ These are known production gaps after the Self-Host Operations foundation.
 
 ## Next Production Move
 
-Next branch: `feat/app-module-decomposition`
+Next branch: `feat/public-portal-hardening`
 
 Purpose:
 
-- Split the monolithic React application into feature modules.
-- Move domain orchestration out of view components.
-- Add shared UI primitives where existing duplication is creating complexity.
-- Preserve the current UX and fixed-shell behavior.
-- Make future public portal, integration, and AI slices easier to implement safely.
+- Add public portal rate-limit and abuse-control foundations.
+- Add requester identity boundaries for public actions.
+- Ensure moderation and public/private visibility have server-side tests.
+- Keep portal workflows simple and standalone.
+- Prepare notification preferences without sending email yet.
 
-Provider integrations, notifications, and public launch work should build on top of this cleaner application boundary.
+Provider integrations, notifications, and public launch work should build on top of this hardened public surface.

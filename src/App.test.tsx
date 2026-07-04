@@ -783,7 +783,34 @@ describe("OpenRoad workspace shell", () => {
     render(<App />);
 
     const inspector = screen.getByRole("complementary", { name: "API rate limit visibility" });
-    expect(within(inspector).getAllByRole("button")).toHaveLength(4);
+    expect(within(within(inspector).getByLabelText("Request actions")).getAllByRole("button")).toHaveLength(2);
+    expect(within(within(inspector).getByRole("form", { name: "Triage controls" })).getAllByRole("button")).toHaveLength(1);
+    expect(within(within(inspector).getByRole("form", { name: "Add comment" })).getByRole("button", { name: "Add comment" })).toBeInTheDocument();
+  });
+
+  it("shows assistant triage and creates a private changelog draft only after approval", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    const assistant = screen.getByLabelText("Assistant triage");
+    expect(within(assistant).getByText("Triage assist")).toBeInTheDocument();
+    expect(within(assistant).getByText("Possible duplicates")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("complementary", {
+        name: "Selected changelog draft API rate limit visibility"
+      })
+    ).not.toBeInTheDocument();
+
+    await user.click(within(assistant).getByRole("button", { name: "Create private draft" }));
+    const changelogDetail = screen.getByRole("complementary", {
+      name: "Selected changelog draft API rate limit visibility"
+    });
+
+    expect(within(changelogDetail).getByLabelText("State for API rate limit visibility")).toHaveValue("Draft");
+    expect(within(changelogDetail).getByLabelText("Visibility for API rate limit visibility")).toHaveValue("Private");
+    expect(within(changelogDetail).getByLabelText("Public wording for API rate limit visibility")).toHaveValue(
+      "Expose usage thresholds before CLI users hit API limits."
+    );
   });
 
   it("archives requests and shows archived requests through the queue filter", async () => {

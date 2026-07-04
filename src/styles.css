@@ -1141,6 +1141,91 @@ dd {
   padding: 10px;
 }
 
+.assistant-panel {
+  border: 1px solid var(--line);
+  display: grid;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding: 10px;
+}
+
+.assistant-panel .source-history-header small {
+  color: var(--muted);
+  margin-left: auto;
+}
+
+.assistant-summary {
+  display: grid;
+  gap: 8px;
+}
+
+.assistant-summary div {
+  border-left: 2px solid var(--line-strong);
+  display: grid;
+  gap: 3px;
+  padding-left: 8px;
+}
+
+.assistant-summary span,
+.assistant-suggestions > strong,
+.assistant-changelog strong {
+  font-family: var(--label-font);
+}
+
+.assistant-summary span,
+.assistant-suggestion small,
+.assistant-changelog small {
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.assistant-summary p,
+.assistant-suggestion p,
+.assistant-changelog p {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  margin: 0;
+}
+
+.assistant-suggestions {
+  display: grid;
+  gap: 8px;
+}
+
+.assistant-suggestion {
+  border-left: 2px solid var(--route);
+  display: grid;
+  gap: 4px;
+  padding-left: 8px;
+}
+
+.assistant-suggestion span,
+.assistant-changelog span {
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.assistant-suggestion strong,
+.assistant-changelog strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.assistant-changelog {
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 7px;
+  padding-top: 9px;
+}
+
+.assistant-changelog .secondary-action {
+  justify-self: start;
+}
+
 .notification-panel .source-history-header small {
   color: var(--muted);
   margin-left: auto;

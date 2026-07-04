@@ -98,7 +98,7 @@ As a workspace owner, I can trust OpenRoad to accept GitHub webhooks only from G
 ## Evidence
 
 - Branch: `feat/github-webhook-disconnect`
-- Commit SHAs: `1005e1f`.
+- Commit SHAs: `1005e1f`, `ced268f`.
 - Date: 2026-07-04.
 - Acceptance criteria status: Passed for signed GitHub webhook ingestion, idempotent linked issue sync, installation webhook state changes, and manual disconnect without OpenRoad request deletion.
 - Commands run:
@@ -107,6 +107,6 @@ As a workspace owner, I can trust OpenRoad to accept GitHub webhooks only from G
   - Built-server smoke with GitHub App env unset and admin-token mode - passed `health`, `contract`, `portal`, `private-denied`, and `private-token`.
 - Browser/viewports tested: No UI changes planned.
 - Accessibility checks: No UI changes planned.
-- Reviewer notes: Official GitHub docs confirmed `X-Hub-Signature-256` HMAC-SHA256 verification, raw payload integrity requirements, GitHub App webhook delivery shape, and `issues`/`installation` events.
+- Reviewer notes: Official GitHub docs confirmed `X-Hub-Signature-256` HMAC-SHA256 verification, raw payload integrity requirements, GitHub App webhook delivery shape, and `issues`/`installation` events. Read-only audit found workspace/provider scoping and unsuspend reactivation risks; fixed in `ced268f` with regression coverage.
 - Known unresolved risks: Browser Settings UI, background polling, conflict UI, and hosted observability remain later production slices.
 - Rollback notes: Revert this branch; if webhook processing caused bad sync state, unset `OPENROAD_GITHUB_APP_WEBHOOK_SECRET`, remove the GitHub App webhook URL, and restore `OPENROAD_DATA_FILE`, `OPENROAD_INTEGRATION_FILE`, and `OPENROAD_TEAM_FILE` from the latest backup.

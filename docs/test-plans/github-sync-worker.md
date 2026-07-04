@@ -114,12 +114,17 @@ As a self-host operator or workspace owner, I can verify a GitHub App installati
 ## Evidence
 
 - Branch: `feat/github-sync-worker`
-- Implementation commit SHA: Pending.
-- Date: Pending.
-- Acceptance criteria status: Pending.
-- Commands run: Pending.
+- Implementation commit SHA: `d84c98c700a916857a21780aaffa4b591869e792`
+- Date: 2026-07-04
+- Acceptance criteria status: Passed for this production slice. The branch adds the GitHub live sync worker, auto-wires it only when GitHub App credentials are present, keeps standalone/no-worker behavior intact, preserves provider-neutral sync job semantics, and leaves later UI/scheduler/write-back work explicitly out of scope.
+- Commands run:
+  - `pnpm vitest run server/github-sync-worker.test.ts server/github-app.test.ts server/http.test.ts; pnpm build:server` passed with 87 focused tests plus server build.
+  - `pnpm vitest run server/github-sync-worker.test.ts server/github-app.test.ts server/sync-jobs.test.ts server/integrations.test.ts server/access.test.ts server/http.test.ts scripts/openroad-ops.test.mjs scripts/openroad-release.test.mjs` passed with 127 branch-focused regression tests.
+  - `pnpm check` passed with 271 tests plus production client/server builds.
+  - `pnpm release:verify` passed and generated a dry-run release manifest without writing artifacts.
+  - Built-server smoke passed against `server-dist/server/index.js` with temporary state files, `OPENROAD_ADMIN_TOKEN`, and GitHub App credentials via `OPENROAD_GITHUB_APP_PRIVATE_KEY_FILE`: `pnpm ops:smoke` passed health/contract/portal/private auth checks; GitHub issue import created the linked request; GitHub sync enqueue created a due job; private runner auto-configured the GitHub worker; fake GitHub API received one installation-token request and one targeted issue fetch; persisted request title changed to `Updated from built smoke`; mapping `lastSyncedAt` was set; integration schema stayed `3`; sync job ended `succeeded`.
 - Browser/viewports tested: No UI changes planned.
 - Accessibility checks: No UI changes planned.
-- Reviewer notes: Pending.
+- Reviewer notes: Read-only sidecar review flagged production auto-wiring, mutation-lane consistency, targeted linked issue fetching, post-fetch revalidation, and provider error classification as required hardening. The implementation addresses those points with server auto-configuration, shared integration mutation exclusivity, direct `getRepositoryIssue` fetches, revalidation before apply, and sanitized retry/fatal error mapping.
 - Known unresolved risks: Browser Settings UI, repository discovery, unmapped issue import policy, pull request sync, provider write-back, conflict UI, OAuth callback, distributed locks, and scheduler packaging remain later production slices.
-- Rollback notes: Pending.
+- Rollback notes: Revert this branch or remove GitHub App credentials to disable the auto-configured worker. Restore a pre-branch backup if live sync changed request data unexpectedly, then rerun `pnpm ops:smoke`.

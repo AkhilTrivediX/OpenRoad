@@ -96,7 +96,7 @@ As a workspace owner, I can prepare a Jira OAuth connection and import Jira issu
 ## Evidence
 
 - Branch: `feat/jira-issue-sync`
-- Commit SHAs: `0c0e8a1`.
+- Commit SHAs: `0c0e8a1`, `5884db3`.
 - Date: 2026-07-04.
 - Acceptance criteria status: Passed for safe Jira OAuth setup, payload-backed Jira issue import/link, explicit Jira field mapping, workspace-scoped metadata, provider/id-scoped integration actors, and standalone operation with zero Jira env vars.
 - Commands run:
@@ -104,8 +104,11 @@ As a workspace owner, I can prepare a Jira OAuth connection and import Jira issu
   - `pnpm vitest run server/jira.test.ts src/integrations/jira.test.ts server/http.test.ts server/access.test.ts server/integrations.test.ts server/linear.test.ts src/integrations/linear.test.ts server/github-app.test.ts src/integrations/github.test.ts scripts/openroad-ops.test.mjs` - 111 tests passed.
   - `pnpm check` - 195 tests passed; production client and server builds passed.
   - Built-server smoke with GitHub, Linear, and Jira env unset and admin-token mode - passed `health`, `contract`, `portal`, `private-denied`, and `private-token`.
+  - After read-only audit hardening: `pnpm vitest run server/jira.test.ts src/integrations/jira.test.ts server/http.test.ts server/access.test.ts server/integrations.test.ts server/linear.test.ts src/integrations/linear.test.ts server/github-app.test.ts src/integrations/github.test.ts scripts/openroad-ops.test.mjs` - 112 tests passed.
+  - After read-only audit hardening: `pnpm check` - 196 tests passed; production client and server builds passed.
+  - After read-only audit hardening: built-server smoke with GitHub, Linear, and Jira env unset and admin-token mode - passed `health`, `contract`, `portal`, `private-denied`, and `private-token`.
 - Browser/viewports tested: No UI changes planned.
 - Accessibility checks: No UI changes planned.
-- Reviewer notes: Official Atlassian docs confirm OAuth 2.0 3LO uses `https://auth.atlassian.com/authorize`, authorization-code token exchange at `https://auth.atlassian.com/oauth/token`, API access through `api.atlassian.com`, classic Jira scopes including `read:jira-work`, `read:jira-user`, and `manage:jira-webhook`, and retry/idempotency headers for Jira webhooks. This branch intentionally avoids token persistence until a production secret-store slice exists.
+- Reviewer notes: Official Atlassian docs confirm OAuth 2.0 3LO uses `https://auth.atlassian.com/authorize`, authorization-code token exchange at `https://auth.atlassian.com/oauth/token`, API access through `api.atlassian.com`, classic Jira scopes including `read:jira-work`, `read:jira-user`, and `manage:jira-webhook`, and retry/idempotency headers for Jira webhooks. Read-only audit found Jira issue IDs must be cloud/site scoped and payload imports must not mint future write-back/webhook capabilities; both were hardened with regression coverage. This branch intentionally avoids token persistence until a production secret-store slice exists.
 - Known unresolved risks: OAuth callback/token exchange, encrypted token storage, live Jira REST fetch, Jira webhooks, browser Settings UI, and conflict UI remain later production slices.
 - Rollback notes: Revert this branch; existing Jira metadata can remain in `OPENROAD_INTEGRATION_FILE` for a later retry or be removed by an operator after backup.

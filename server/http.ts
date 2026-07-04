@@ -403,6 +403,24 @@ async function handleApiRequest(
     return;
   }
 
+  const githubLiveIssueFetchMatch = requestUrl.pathname.match(
+    /^\/api\/openroad\/workspaces\/([^/]+)\/integrations\/github\/issues\/live$/
+  );
+
+  if (githubLiveIssueFetchMatch) {
+    await handleGitHubLiveIssueFetchRequest(
+      request,
+      response,
+      requestUrl,
+      store,
+      access,
+      integrationStore,
+      githubAppClient,
+      githubLiveIssueFetchMatch[1]
+    );
+    return;
+  }
+
   const workspaceActionMatch = requestUrl.pathname.match(
     /^\/api\/openroad\/workspaces\/([^/]+)\/actions$/
   );
@@ -1111,6 +1129,197 @@ function getGitHubInstallationIdPayload(payload: unknown) {
   }
 
   return installationId;
+}
+
+async function handleGitHubLiveIssueFetchRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  requestUrl: URL,
+  store: OpenRoadStore,
+  access: AccessContext,
+  integrationStore: IntegrationStore | undefined,
+  githubAppClient: GitHubAppClient,
+  encodedWorkspaceId: string
+) {
+  if (request.method !== "GET") {
+    writeApiError(response, 405, "invalid_method", "This endpoint only supports GET.", access);
+    return;
+  }
+
+  const workspaceId = decodeURIComponent(encodedWorkspaceId);
+
+  try {
+    requireWorkspaceWriteOrIntegrationSync(access, workspaceId);
+
+    if (!integrationStore) {
+      throw new ApiRequestError(
+        "not_configured",
+        503,
+        "OpenRoad integration metadata store is not configured."
+      );
+    }
+
+    const installationId = getRequiredQueryText(
+      requestUrl,
+      "installationId",
+      "GitHub installation id is required."
+    );
+    const repository = parseGitHubRepositoryQuery(requestUrl.searchParams.get("repository"));
+    const state = parseGitHubIssueStateQuery(requestUrl.searchParams.get("state"));
+    const perPage = parsePerPageQuery(requestUrl.searchParams.get("perPage"));
+    const current = await store.load();
+    const workspace = current.state.workspaces.find((item) => item.id === workspaceId);
+
+    if (!workspace) {
+      throw new ApiRequestError("not_found", 404, "Workspace was not found.");
+    }
+
+    const integrationState = await integrationStore.load();
+    const installation = getVerifiedGitHubInstallation(
+      integrationState.state,
+      workspaceId,
+      installationId
+    );
+    const issues = await githubAppClient.listRepositoryIssues({
+      installationId: getGitHubApiInstallationId(installation.id),
+      owner: repository.owner,
+      perPage,
+      repo: repository.repo,
+      state
+    });
+
+    writeJson(
+      response,
+      200,
+      {
+        installation: sanitizeInstallation(installation),
+        issues: issues.map(createGitHubLiveIssuePreview),
+        repository: repository.fullName,
+        status: "fetched"
+      },
+      access
+    );
+  } catch (error) {
+    writeKnownApiError(response, error, access);
+  }
+}
+
+function requireWorkspaceWriteOrIntegrationSync(access: AccessContext, workspaceId: string) {
+  try {
+    requirePermission(access, "workspace:write", workspaceId);
+  } catch {
+    requirePermission(access, "integration:sync", workspaceId);
+  }
+}
+
+function getVerifiedGitHubInstallation(
+  integrationState: IntegrationState,
+  workspaceId: string,
+  installationId: string
+) {
+  const normalizedId = normalizeGitHubInstallationId(installationId);
+  const installation = integrationState.installations.find(
+    (item) =>
+      item.provider === "github" &&
+      item.workspaceId === workspaceId &&
+      (item.id === normalizedId || item.id === installationId)
+  );
+
+  if (!installation) {
+    throw new ApiRequestError("not_found", 404, "Verified GitHub installation was not found.");
+  }
+
+  if (installation.status !== "active" || !installation.permissions.includes("read:external")) {
+    throw new ApiRequestError(
+      "invalid_state",
+      422,
+      "GitHub installation cannot read external issues."
+    );
+  }
+
+  return installation;
+}
+
+function normalizeGitHubInstallationId(value: string) {
+  return value.startsWith("github-installation-") ? value : `github-installation-${value}`;
+}
+
+function getGitHubApiInstallationId(value: string) {
+  return value.replace(/^github-installation-/, "");
+}
+
+function parseGitHubRepositoryQuery(value: string | null) {
+  const repository = getBoundedText(value, 200);
+  const parts = repository?.split("/") ?? [];
+
+  if (parts.length !== 2 || !parts[0] || !parts[1]) {
+    throw new ApiRequestError(
+      "invalid_request",
+      400,
+      "GitHub repository must use owner/repo format."
+    );
+  }
+
+  return {
+    fullName: `${parts[0]}/${parts[1]}`,
+    owner: parts[0],
+    repo: parts[1]
+  };
+}
+
+function parseGitHubIssueStateQuery(value: string | null): "all" | "closed" | "open" {
+  if (value === "all" || value === "closed" || value === "open") return value;
+  return "open";
+}
+
+function parsePerPageQuery(value: string | null) {
+  const parsed = Number.parseInt(value ?? "", 10);
+  if (!Number.isFinite(parsed)) return 30;
+  return Math.min(100, Math.max(1, parsed));
+}
+
+function getRequiredQueryText(requestUrl: URL, key: string, message: string) {
+  const value = getBoundedText(requestUrl.searchParams.get(key), 160);
+  if (!value) throw new ApiRequestError("invalid_request", 400, message);
+  return value;
+}
+
+function createGitHubLiveIssuePreview(issue: GitHubIssue) {
+  return {
+    author: issue.author,
+    id: issue.id,
+    importPayload: {
+      assignees: issue.assignees.map((login) => ({ login })),
+      body: issue.body,
+      closed_at: issue.closedAt,
+      created_at: issue.createdAt,
+      html_url: issue.url,
+      labels: issue.labels.map((name) => ({ name })),
+      milestone: issue.milestone ? { title: issue.milestone } : null,
+      node_id: issue.id,
+      number: issue.number,
+      repository: {
+        full_name: issue.repository.fullName,
+        html_url: issue.repository.url,
+        name: issue.repository.name,
+        node_id: issue.repository.id,
+        owner: { login: issue.repository.owner },
+        private: issue.repository.visibility === "private"
+      },
+      state: issue.state,
+      state_reason: issue.stateReason,
+      title: issue.title,
+      updated_at: issue.updatedAt,
+      user: { login: issue.author }
+    },
+    labels: issue.labels,
+    number: issue.number,
+    repository: issue.repository.fullName,
+    state: issue.state,
+    title: issue.title,
+    updatedAt: issue.updatedAt,
+    url: issue.url
+  };
 }
 
 async function handleOpsStatusRequest(

@@ -757,6 +757,161 @@ describe("OpenRoad production server", () => {
     expect(integrations.state.installations).toHaveLength(0);
   });
 
+  it("fetches live GitHub issues from verified installations without returning tokens", async () => {
+    const fetches: Array<{ installationId: string; owner: string; repo: string; state?: string }> = [];
+    const { url } = await startTestServer({
+      githubAppClient: {
+        ...fakeGitHubAppClient(),
+        async listRepositoryIssues(options) {
+          fetches.push(options);
+          return fakeGitHubAppClient().listRepositoryIssues(options);
+        }
+      }
+    });
+
+    await verifyGitHubInstallation(url, "acme");
+    const response = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/github/issues/live?installationId=98765&repository=AkhilTrivediX/OpenRoad&state=open`
+    );
+    const text = JSON.stringify(response.body);
+
+    expect(response.status).toBe(200);
+    expect(fetches).toEqual([
+      {
+        installationId: "98765",
+        owner: "AkhilTrivediX",
+        perPage: 30,
+        repo: "OpenRoad",
+        state: "open"
+      }
+    ]);
+    expect(response.body).toMatchObject({
+      repository: "AkhilTrivediX/OpenRoad",
+      status: "fetched"
+    });
+    expect(response.body.issues).toHaveLength(1);
+    expect(response.body.issues[0]).toMatchObject({
+      importPayload: {
+        node_id: "I_kwDOGH123",
+        number: 42
+      },
+      title: "Import GitHub issues"
+    });
+    expect(text).not.toContain("installation-token");
+    expect(text).not.toContain("PRIVATE KEY");
+  });
+
+  it("imports a selected live GitHub issue through the existing import route", async () => {
+    const { store, url } = await startTestServer({
+      githubAppClient: fakeGitHubAppClient()
+    });
+
+    await verifyGitHubInstallation(url, "acme");
+    const liveIssues = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/github/issues/live?installationId=98765&repository=AkhilTrivediX/OpenRoad`
+    );
+    const imported = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/github/issues/import`, {
+      body: JSON.stringify(
+        gitHubImportPayload({
+          issue: liveIssues.body.issues[0].importPayload,
+          pullRequests: []
+        })
+      ),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const state = await store.load();
+
+    expect(liveIssues.status).toBe(200);
+    expect(imported.status).toBe(201);
+    expect(
+      state.state.workspaces[0].requests.some(
+        (request) => request.title === "Import GitHub issues" && request.source === "GitHub"
+      )
+    ).toBe(true);
+  });
+
+  it("protects live GitHub issue fetch by workspace scope and installation metadata", async () => {
+    const { url } = await startTestServer({
+      auth: { adminToken: "secret", singleUserMode: false, trustProxyHeaders: true },
+      githubAppClient: fakeGitHubAppClient()
+    });
+
+    await verifyGitHubInstallation(url, "acme", { Authorization: "Bearer secret" });
+    const publicFetch = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/github/issues/live?installationId=98765&repository=AkhilTrivediX/OpenRoad`
+    );
+    const viewerFetch = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/github/issues/live?installationId=98765&repository=AkhilTrivediX/OpenRoad`,
+      {
+        headers: workspaceActorHeaders("acme", "Viewer")
+      }
+    );
+    const contributorFetch = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/github/issues/live?installationId=98765&repository=AkhilTrivediX/OpenRoad`,
+      {
+        headers: workspaceActorHeaders("acme", "Contributor")
+      }
+    );
+    const integrationFetch = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/github/issues/live?installationId=98765&repository=AkhilTrivediX/OpenRoad`,
+      {
+        headers: integrationActorHeaders("acme", "github-installation-98765")
+      }
+    );
+    const crossWorkspaceFetch = await fetchJson(
+      `${url}/api/openroad/workspaces/maintainer/integrations/github/issues/live?installationId=98765&repository=AkhilTrivediX/OpenRoad`,
+      {
+        headers: workspaceActorHeaders("maintainer", "Contributor")
+      }
+    );
+
+    expect(publicFetch.status).toBe(403);
+    expect(viewerFetch.status).toBe(403);
+    expect(contributorFetch.status).toBe(200);
+    expect(integrationFetch.status).toBe(200);
+    expect(crossWorkspaceFetch.status).toBe(404);
+  });
+
+  it("rejects invalid live GitHub issue fetch requests without calling GitHub", async () => {
+    let fetchCount = 0;
+    const { integrationStore, url } = await startTestServer({
+      githubAppClient: {
+        ...fakeGitHubAppClient(),
+        async listRepositoryIssues(options) {
+          fetchCount += 1;
+          return fakeGitHubAppClient().listRepositoryIssues(options);
+        }
+      }
+    });
+
+    await verifyGitHubInstallation(url, "acme");
+    const integrationState = await integrationStore.load();
+    await integrationStore.replaceState({
+      ...integrationState.state,
+      installations: integrationState.state.installations.map((installation) => ({
+        ...installation,
+        status: "disconnected" as const
+      }))
+    });
+    const missingRepository = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/github/issues/live?installationId=98765`
+    );
+    const missingInstallation = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/github/issues/live?installationId=missing&repository=AkhilTrivediX/OpenRoad`
+    );
+    const disconnectedInstallation = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/github/issues/live?installationId=98765&repository=AkhilTrivediX/OpenRoad`
+    );
+
+    expect(missingRepository.status).toBe(400);
+    expect(missingRepository.body.error.code).toBe("invalid_request");
+    expect(missingInstallation.status).toBe(404);
+    expect(disconnectedInstallation.status).toBe(422);
+    expect(disconnectedInstallation.body.error.code).toBe("invalid_state");
+    expect(fetchCount).toBe(0);
+  });
+
   it("returns public portal data without private workspace details", async () => {
     const { store, url } = await startTestServer();
     const state = createStateWithPrivatePortalData();
@@ -1256,6 +1411,12 @@ function gitHubRepositoryPayload() {
 
 function fakeGitHubAppClient(): GitHubAppClient {
   return {
+    async createInstallationAccessToken() {
+      return {
+        expiresAt: "2026-07-04T01:00:00Z",
+        token: "installation-token"
+      };
+    },
     async getInstallation(installationId: string) {
       return {
         account: {
@@ -1270,8 +1431,51 @@ function fakeGitHubAppClient(): GitHubAppClient {
         },
         repository_selection: "selected"
       };
+    },
+    async listRepositoryIssues() {
+      return [
+        {
+          assignees: ["maintainer"],
+          author: "akhil",
+          body: "Expose GitHub issue context.",
+          createdAt: "2026-07-04T00:00:00Z",
+          id: "I_kwDOGH123",
+          labels: ["planned"],
+          number: 42,
+          repository: {
+            fullName: "AkhilTrivediX/OpenRoad",
+            id: "R_kwDOR123",
+            name: "OpenRoad",
+            owner: "AkhilTrivediX",
+            url: "https://github.com/AkhilTrivediX/OpenRoad",
+            visibility: "public"
+          },
+          state: "open",
+          title: "Import GitHub issues",
+          updatedAt: "2026-07-04T00:30:00Z",
+          url: "https://github.com/AkhilTrivediX/OpenRoad/issues/42"
+        }
+      ];
     }
   };
+}
+
+async function verifyGitHubInstallation(
+  url: string,
+  workspaceId: string,
+  headers: Record<string, string> = {}
+) {
+  return fetchJson(
+    `${url}/api/openroad/workspaces/${workspaceId}/integrations/github/app/installations/verify`,
+    {
+      body: JSON.stringify({ installationId: "98765" }),
+      headers: {
+        ...headers,
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    }
+  );
 }
 
 function createStateWithPrivatePortalData() {

@@ -3,7 +3,9 @@ import { readFile } from "node:fs/promises";
 
 import {
   createGitHubInstallation,
-  type GitHubInstallationInput
+  parseGitHubIssuePayload,
+  type GitHubInstallationInput,
+  type GitHubIssue
 } from "../src/integrations/github.js";
 import type { IntegrationInstallation, IntegrationPermission } from "../src/integrations/adapter.js";
 
@@ -42,7 +44,22 @@ export type GitHubAppInstallationApiPayload = {
 };
 
 export type GitHubAppClient = {
+  createInstallationAccessToken(installationId: string): Promise<GitHubInstallationAccessToken>;
   getInstallation(installationId: string): Promise<GitHubAppInstallationApiPayload>;
+  listRepositoryIssues(options: GitHubRepositoryIssueListOptions): Promise<GitHubIssue[]>;
+};
+
+export type GitHubInstallationAccessToken = {
+  expiresAt?: string;
+  token: string;
+};
+
+export type GitHubRepositoryIssueListOptions = {
+  installationId: string;
+  owner: string;
+  perPage?: number;
+  repo: string;
+  state?: "all" | "closed" | "open";
 };
 
 export type GitHubAppJwtOptions = {
@@ -75,15 +92,7 @@ export class FetchGitHubAppClient implements GitHubAppClient {
   ) {}
 
   async getInstallation(installationId: string) {
-    if (!this.config.appId) {
-      throw new GitHubAppClientError("missing_config", "OPENROAD_GITHUB_APP_ID is required.");
-    }
-
-    const privateKey = await readGitHubAppPrivateKey(this.config);
-    const jwt = createGitHubAppJwt({
-      appId: this.config.appId,
-      privateKey
-    });
+    const jwt = await this.createJwt();
     const response = await this.fetchImpl(
       `${this.config.apiBaseUrl}/app/installations/${encodeURIComponent(installationId)}`,
       {
@@ -109,6 +118,87 @@ export class FetchGitHubAppClient implements GitHubAppClient {
     }
 
     return body as GitHubAppInstallationApiPayload;
+  }
+
+  async createInstallationAccessToken(installationId: string): Promise<GitHubInstallationAccessToken> {
+    const jwt = await this.createJwt();
+    const response = await this.fetchImpl(
+      `${this.config.apiBaseUrl}/app/installations/${encodeURIComponent(
+        installationId
+      )}/access_tokens`,
+      {
+        headers: {
+          Accept: "application/vnd.github+json",
+          Authorization: `Bearer ${jwt}`,
+          "X-GitHub-Api-Version": "2022-11-28"
+        },
+        method: "POST"
+      }
+    );
+
+    if (!response.ok) {
+      throw new GitHubAppClientError(
+        "github_api_error",
+        `GitHub installation token request failed with status ${response.status}.`,
+        response.status
+      );
+    }
+
+    const body = (await response.json()) as unknown;
+    if (!isRecord(body) || typeof body.token !== "string" || !body.token.trim()) {
+      throw new GitHubAppClientError("invalid_response", "GitHub installation token response was invalid.");
+    }
+
+    return {
+      expiresAt: typeof body.expires_at === "string" ? body.expires_at : undefined,
+      token: body.token
+    };
+  }
+
+  async listRepositoryIssues(options: GitHubRepositoryIssueListOptions) {
+    const accessToken = await this.createInstallationAccessToken(options.installationId);
+    const url = new URL(
+      `/repos/${encodeURIComponent(options.owner)}/${encodeURIComponent(options.repo)}/issues`,
+      this.config.apiBaseUrl
+    );
+    url.searchParams.set("state", options.state ?? "open");
+    url.searchParams.set("per_page", String(options.perPage ?? 30));
+    const response = await this.fetchImpl(url.toString(), {
+      headers: {
+        Accept: "application/vnd.github+json",
+        Authorization: `Bearer ${accessToken.token}`,
+        "X-GitHub-Api-Version": "2022-11-28"
+      }
+    });
+
+    if (!response.ok) {
+      throw new GitHubAppClientError(
+        "github_api_error",
+        `GitHub issue fetch failed with status ${response.status}.`,
+        response.status
+      );
+    }
+
+    const body = (await response.json()) as unknown;
+    if (!Array.isArray(body)) {
+      throw new GitHubAppClientError("invalid_response", "GitHub issue list response was invalid.");
+    }
+
+    return body
+      .filter((item): item is Record<string, unknown> => isRecord(item) && !isRecord(item.pull_request))
+      .map((item) => parseGitHubIssuePayload(item));
+  }
+
+  private async createJwt() {
+    if (!this.config.appId) {
+      throw new GitHubAppClientError("missing_config", "OPENROAD_GITHUB_APP_ID is required.");
+    }
+
+    const privateKey = await readGitHubAppPrivateKey(this.config);
+    return createGitHubAppJwt({
+      appId: this.config.appId,
+      privateKey
+    });
   }
 }
 

@@ -59,7 +59,6 @@ The endpoint does not accept or store GitHub tokens, App private keys, webhook s
 
 The next GitHub slices should add:
 
-- Live REST/GraphQL issue fetch.
 - Webhook signature verification.
 - Idempotent webhook processing.
 - Background sync and conflict handling.

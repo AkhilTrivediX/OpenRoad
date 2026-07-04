@@ -1,6 +1,6 @@
 # OpenRoad GitHub App Installation
 
-OpenRoad now has a server-only GitHub App installation foundation. It does not fetch live issues yet; it prepares the safe connection path that live issue fetch and webhook work will use.
+OpenRoad now has a server-only GitHub App installation foundation and live issue fetch path. It does not run background sync yet; it prepares the safe connection path that webhook and recurring sync work will use.
 
 Official GitHub references used for this slice:
 
@@ -57,10 +57,17 @@ The endpoint does not persist installation access tokens. GitHub installation to
 
 The same GitHub installation id can be verified into more than one OpenRoad workspace without overwriting another workspace's integration metadata.
 
+## Live Issue Fetch Endpoint
+
+`GET /api/openroad/workspaces/:workspaceId/integrations/github/issues/live?installationId=98765&repository=AkhilTrivediX/OpenRoad`
+
+The endpoint requires workspace write permission or a scoped integration actor. It requires a verified active installation in the same OpenRoad workspace, generates a short-lived GitHub installation access token server-side, fetches `/repos/{owner}/{repo}/issues`, filters pull requests, and returns normalized issue previews.
+
+Installation tokens are never persisted, audited, or returned. Returned issue previews include an `importPayload` that can be sent to the existing payload-backed import endpoint.
+
 ## Deferred Work
 
 - Browser Settings UI for connect/disconnect.
 - Setup callback page that carries workspace context from GitHub back into OpenRoad.
-- Live issue fetch using installation access tokens.
 - Webhook endpoint with signature verification.
 - Background sync jobs and conflict handling.

@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
+  FetchGitHubAppClient,
   createGitHubAppJwt,
   createSafeGitHubAppSetup,
   decodeGitHubAppJwtPayload,
@@ -80,6 +81,119 @@ describe("GitHub App installation helpers", () => {
     expect(verifier.verify(publicKey, Buffer.from(signature, "base64url"))).toBe(true);
   });
 
+  it("creates installation access tokens with a GitHub App JWT", async () => {
+    const { privateKey } = generateKeyPairSync("rsa", {
+      modulusLength: 2048,
+      privateKeyEncoding: { format: "pem", type: "pkcs8" },
+      publicKeyEncoding: { format: "pem", type: "spki" }
+    });
+    const requests: Array<{ authorization?: string; method?: string; url: string }> = [];
+    const client = new FetchGitHubAppClient(
+      {
+        apiBaseUrl: "https://api.github.test",
+        appBaseUrl: "https://github.test",
+        appId: "12345",
+        privateKey,
+        slug: "openroad-test",
+        webhookSecretConfigured: false
+      },
+      async (url, init) => {
+        requests.push({
+          authorization: init?.headers
+            ? new Headers(init.headers).get("authorization") ?? undefined
+            : undefined,
+          method: init?.method,
+          url: String(url)
+        });
+        return new Response(
+          JSON.stringify({
+            expires_at: "2026-07-04T01:00:00Z",
+            token: "installation-token"
+          }),
+          { status: 201 }
+        );
+      }
+    );
+
+    const token = await client.createInstallationAccessToken("98765");
+
+    expect(token).toEqual({
+      expiresAt: "2026-07-04T01:00:00Z",
+      token: "installation-token"
+    });
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({
+      method: "POST",
+      url: "https://api.github.test/app/installations/98765/access_tokens"
+    });
+    expect(requests[0].authorization).toMatch(/^Bearer [^.]+\.[^.]+\.[^.]+$/);
+  });
+
+  it("fetches repository issues with installation tokens and filters pull requests", async () => {
+    const { privateKey } = generateKeyPairSync("rsa", {
+      modulusLength: 2048,
+      privateKeyEncoding: { format: "pem", type: "pkcs8" },
+      publicKeyEncoding: { format: "pem", type: "spki" }
+    });
+    const authorizations: string[] = [];
+    const client = new FetchGitHubAppClient(
+      {
+        apiBaseUrl: "https://api.github.test",
+        appBaseUrl: "https://github.test",
+        appId: "12345",
+        privateKey,
+        slug: "openroad-test",
+        webhookSecretConfigured: false
+      },
+      async (url, init) => {
+        const authorization = init?.headers
+          ? new Headers(init.headers).get("authorization") ?? ""
+          : "";
+        authorizations.push(authorization);
+
+        if (String(url).endsWith("/access_tokens")) {
+          return new Response(JSON.stringify({ token: "installation-token" }), { status: 201 });
+        }
+
+        expect(String(url)).toBe(
+          "https://api.github.test/repos/AkhilTrivediX/OpenRoad/issues?state=open&per_page=30"
+        );
+        expect(authorization).toBe("Bearer installation-token");
+        return new Response(
+          JSON.stringify([
+            gitHubIssuePayload({ node_id: "I_kwDOGH123", number: 42 }),
+            {
+              ...gitHubIssuePayload({ node_id: "PR_kwDOPR123", number: 7 }),
+              pull_request: {
+                html_url: "https://github.com/AkhilTrivediX/OpenRoad/pull/7"
+              }
+            }
+          ]),
+          { status: 200 }
+        );
+      }
+    );
+
+    const issues = await client.listRepositoryIssues({
+      installationId: "98765",
+      owner: "AkhilTrivediX",
+      repo: "OpenRoad",
+      state: "open"
+    });
+
+    expect(issues).toHaveLength(1);
+    expect(issues[0]).toMatchObject({
+      id: "I_kwDOGH123",
+      number: 42,
+      repository: {
+        fullName: "AkhilTrivediX/OpenRoad"
+      }
+    });
+    expect(authorizations[0]).toMatch(/^Bearer [^.]+\.[^.]+\.[^.]+$/);
+    expect(authorizations[1]).toBe("Bearer installation-token");
+    expect(JSON.stringify(issues)).not.toContain("installation-token");
+  });
+
   it("reads private keys from file when env uses a file path", async ({ task }) => {
     const root = join(process.env.TMP ?? process.env.TEMP ?? ".", `openroad-github-app-${Date.now()}-${task.name}`);
     const privateKeyFile = join(root, "app.pem");
@@ -136,3 +250,25 @@ describe("GitHub App installation helpers", () => {
     ).toThrow("read:external");
   });
 });
+
+function gitHubIssuePayload(overrides: Record<string, unknown> = {}) {
+  return {
+    body: "Expose GitHub issue context.",
+    html_url: "https://github.com/AkhilTrivediX/OpenRoad/issues/42",
+    labels: [{ name: "planned" }],
+    node_id: "I_kwDOGH123",
+    number: 42,
+    repository: {
+      full_name: "AkhilTrivediX/OpenRoad",
+      html_url: "https://github.com/AkhilTrivediX/OpenRoad",
+      name: "OpenRoad",
+      node_id: "R_kwDOR123",
+      owner: { login: "AkhilTrivediX" },
+      private: false
+    },
+    state: "open",
+    title: "Import GitHub issues",
+    user: { login: "akhil" },
+    ...overrides
+  };
+}

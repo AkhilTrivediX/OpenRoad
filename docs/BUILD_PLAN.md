@@ -10,7 +10,7 @@ Each feature must also satisfy `docs/PRODUCTION_READINESS.md` before merging to 
 
 Current stage: Stage 2 Team Beta foundation in progress.
 
-The standalone loop now covers workspaces, requests, triage, internal work, roadmap planning, changelog drafts, public portal preview, local durability, production APIs, basic tenancy boundaries, file-backed team metadata, audit events, self-host operations, a first app-module boundary, hardened public portal write APIs, the provider-neutral integration adapter contract, a payload-backed GitHub issue import/link API, and server-only GitHub App installation verification. The next production work should fetch live GitHub issues through verified installations.
+The standalone loop now covers workspaces, requests, triage, internal work, roadmap planning, changelog drafts, public portal preview, local durability, production APIs, basic tenancy boundaries, file-backed team metadata, audit events, self-host operations, a first app-module boundary, hardened public portal write APIs, the provider-neutral integration adapter contract, a payload-backed GitHub issue import/link API, server-only GitHub App installation verification, and live GitHub issue fetch through verified installations. The next production work should add webhook/disconnect hardening before broader provider rollout.
 
 ## Feature 1: Workspace Shell
 
@@ -357,7 +357,7 @@ Acceptance:
 - GitHub enriches OpenRoad but remains optional.
 - Disconnecting GitHub does not delete or corrupt core OpenRoad objects.
 - GitHub mappings stay outside the core OpenRoad workspace schema.
-- Live OAuth, provider tokens, and webhooks remain deferred to `feat/github-app-installation`.
+- Live OAuth/user tokens and webhooks remain deferred to later GitHub slices.
 
 ## Feature 9A: GitHub App Installation
 
@@ -384,20 +384,39 @@ Acceptance:
 
 Branch: `feat/github-live-issue-fetch`
 
-Status: next.
+Status: implemented and production-checked.
 
 Build:
 
 - Installation access token generation without persistence.
 - Live issue fetch for verified installations.
 - Import selected live GitHub issues through the existing payload-backed mapper.
-- Disconnect flow that preserves OpenRoad data.
+- Token-free issue preview responses.
 
 Acceptance:
 
 - Users can import GitHub issues without pasting payloads.
 - Installation tokens are short-lived and never persisted.
 - Existing standalone and payload-backed paths remain usable.
+
+## Feature 9C: GitHub Webhook And Disconnect Hardening
+
+Branch: `feat/github-webhook-disconnect`
+
+Status: next.
+
+Build:
+
+- Webhook endpoint with signature verification.
+- Idempotent issue event handling.
+- Disconnect flow that preserves OpenRoad data.
+- Hidden sync log/audit surface for GitHub sync events.
+
+Acceptance:
+
+- GitHub events cannot mutate OpenRoad without valid signatures.
+- Disconnecting GitHub stops future sync without deleting OpenRoad requests.
+- Existing manual import and live fetch paths remain usable.
 
 ## Feature 10: Linear Issue Sync
 

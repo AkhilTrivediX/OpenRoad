@@ -153,12 +153,22 @@ As a self-host operator or workspace owner, I can store a server-side Jira crede
 ## Evidence
 
 - Branch: `feat/jira-sync-worker`
-- Implementation commit SHA: Pending.
-- Date: Pending.
-- Acceptance criteria status: Pending.
-- Commands run: Pending.
-- Browser/viewports tested: Pending.
-- Accessibility checks: Pending.
-- Reviewer notes: Pending.
+- Implementation commit SHA: `eb4accfb72fdf5acf9985b1ba65879df65e85ae1`
+- Date: 2026-07-04.
+- Acceptance criteria status: Passed. Jira live sync is implemented for already-linked issue mappings using encrypted server-side credentials, and no OpenRoad state or integration metadata schema migration was introduced.
+- Commands run:
+  - `pnpm vitest run server/jira-sync-worker.test.ts src/integrations/jira.test.ts src/persistence/openroadIntegrations.test.ts src/App.test.tsx` - passed, 74 tests.
+  - `pnpm build:server` - passed.
+  - `pnpm vitest run server/jira-sync-worker.test.ts server/linear-sync-worker.test.ts server/github-sync-worker.test.ts server/provider-sync-worker.test.ts server/http.test.ts src/persistence/openroadIntegrations.test.ts src/App.test.tsx src/integrations/jira.test.ts src/integrations/linear.test.ts src/integrations/github.test.ts` - passed, 179 tests.
+  - `node C:\Users\PC\.agents\skills\impeccable\scripts\detect.mjs --json src\App.tsx src\styles.css` - passed with `[]`.
+  - `pnpm check` - passed, 306 tests plus production client/server build.
+  - `pnpm release:verify` - passed, dry-run manifest generated without writing.
+  - Custom built-server Jira smoke with temporary state and fake Jira REST API - passed. Verified one `GET /ex/jira/jira-cloud/rest/api/2/issue/10042` call with bearer auth, bounded fields, successful sync job, updated linked request title, and no fake token or `access_token` text in responses or persisted files.
+  - `pnpm ops:smoke -- --base-url http://127.0.0.1:4793 --workspace-id acme --admin-token ops-smoke-admin-token` - passed `health`, `contract`, `portal`, `private-denied`, and `private-token` against a temporary built server.
+- Browser/viewports tested:
+  - Built app at `1280x720` on `#settings`: Settings nav active, document dimensions stayed `1280x720`, Jira ready copy rendered, Jira manual sync button enabled, and no secret-shaped text rendered.
+  - Built app at `390x844` on `#settings`: document dimensions stayed `390x844`, no horizontal overflow, Jira connected row visible inside the internal app scroll surface, Jira sync button enabled at `44px` high, and no secret-shaped text rendered.
+- Accessibility checks: Jira manual sync action uses provider-specific accessible name `Jira sync linked issues`; Settings keeps `aria-current="page"` on the active nav item; sync readiness is expressed with text plus badge; mobile touch target height was verified at `44px`; no Sync logs navigation was added.
+- Reviewer notes: Official Atlassian docs were used for OAuth setup shape, `api.atlassian.com/ex/jira/{cloudId}` REST routing, `GET /rest/api/2/issue/{issueIdOrKey}`, required read scope behavior, and rate-limit handling. The worker intentionally does not perform JQL search, project discovery, OAuth callback exchange, token refresh, webhook ingestion, provider write-back, or conflict resolution.
 - Known unresolved risks: OAuth callback exchange, token refresh, Jira webhooks, provider write-back, conflict UI, scheduler packaging, distributed locks, and browser credential management remain later production slices.
-- Rollback notes: Pending.
+- Rollback notes: Revert `eb4accfb72fdf5acf9985b1ba65879df65e85ae1` and this evidence commit, or remove `OPENROAD_TOKEN_ENCRYPTION_KEY` to disable the auto-configured Jira worker. Existing OpenRoad state schema `7` and integration metadata schema `3` remain compatible. If live sync changed request content unexpectedly, restore the pre-branch backup and rerun `pnpm ops:smoke`.

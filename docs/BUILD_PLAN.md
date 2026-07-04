@@ -10,7 +10,7 @@ Each feature must also satisfy `docs/PRODUCTION_READINESS.md` before merging to 
 
 Current stage: Stage 2 Team Beta foundation in progress.
 
-The standalone loop now covers workspaces, requests, triage, internal work, roadmap planning, changelog drafts, public portal preview, local durability, production APIs, basic tenancy boundaries, file-backed team metadata, audit events, self-host operations, a first app-module boundary, hardened public portal write APIs, the provider-neutral integration adapter contract, a payload-backed GitHub issue import/link API, server-only GitHub App installation verification, live GitHub issue fetch through verified installations, signed GitHub webhooks, safe disconnect handling, Linear issue import/link, and Jira issue import/link with explicit field mapping. The next production work should move into requester notifications while provider token storage/live sync remain separate hardening slices.
+The standalone loop now covers workspaces, requests, triage, internal work, roadmap planning, changelog drafts, public portal preview, local durability, production APIs, basic tenancy boundaries, file-backed team metadata, audit events, self-host operations, a first app-module boundary, hardened public portal write APIs, the provider-neutral integration adapter contract, a payload-backed GitHub issue import/link API, server-only GitHub App installation verification, live GitHub issue fetch through verified installations, signed GitHub webhooks, safe disconnect handling, Linear issue import/link, Jira issue import/link with explicit field mapping, and requester notification preferences/outbox events. The next production work should move into AI assistance while provider token storage/live sync and notification delivery adapters remain separate hardening slices.
 
 ## Feature 1: Workspace Shell
 
@@ -461,17 +461,21 @@ Acceptance:
 
 Branch: `feat/requester-notifications`
 
+Status: implemented and production-checked.
+
 Build:
 
 - Notification preferences.
 - Status-change updates.
 - Changelog publish updates.
 - Anti-spam controls.
+- Internal outbox without external delivery.
 
 Acceptance:
 
 - Requesters can be notified when relevant work ships.
 - Notifications are useful and controllable.
+- Public portal and changelog previews do not leak private notification state.
 
 ## Feature 13: AI Assistance
 

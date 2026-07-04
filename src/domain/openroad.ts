@@ -8,7 +8,9 @@ export const changelogStates = ["Draft", "Ready"] as const;
 export const changelogVisibilities = ["Private", "Public"] as const;
 export const requestVisibilities = ["Private", "Public"] as const;
 export const commentVisibilities = ["Internal", "Public", "Hidden"] as const;
-export const openRoadSchemaVersion = 4;
+export const notificationEventTypes = ["request-status-change", "changelog-published"] as const;
+export const notificationEventStatuses = ["queued", "held"] as const;
+export const openRoadSchemaVersion = 5;
 export const openRoadStorageKey = "openroad:state:v1";
 export const openRoadSelectedWorkspaceKey = "openroad:selected-workspace:v1";
 
@@ -22,6 +24,8 @@ export type ChangelogState = (typeof changelogStates)[number];
 export type ChangelogVisibility = (typeof changelogVisibilities)[number];
 export type RequestVisibility = (typeof requestVisibilities)[number];
 export type CommentVisibility = (typeof commentVisibilities)[number];
+export type NotificationEventType = (typeof notificationEventTypes)[number];
+export type NotificationEventStatus = (typeof notificationEventStatuses)[number];
 
 export type OpenRoadState = {
   schemaVersion: typeof openRoadSchemaVersion;
@@ -38,6 +42,7 @@ export type Workspace = {
   roadmap: Record<RoadmapLane, RoadmapItem[]>;
   changelog: ChangelogItem[];
   portal: PortalSettings;
+  notifications: RequesterNotificationSettings;
   integrations: IntegrationChip[];
 };
 
@@ -137,6 +142,42 @@ export type IntegrationChip = {
   state: "Optional" | "Linked";
 };
 
+export type RequesterNotificationSettings = {
+  defaultChangelogUpdates: boolean;
+  defaultStatusUpdates: boolean;
+  enabled: boolean;
+  outbox: RequesterNotificationEvent[];
+  preferences: RequesterNotificationPreference[];
+  quietWindowHours: number;
+};
+
+export type RequesterNotificationPreference = {
+  changelogUpdates: boolean;
+  createdAt: string;
+  id: string;
+  requestId: string;
+  requester: string;
+  statusUpdates: boolean;
+  updatedAt: string;
+};
+
+export type RequesterNotificationEvent = {
+  body: string;
+  changelogId?: string;
+  changelogTitle?: string;
+  createdAt: string;
+  dedupeKey: string;
+  id: string;
+  nextStatus?: RequestStatus;
+  previousStatus?: RequestStatus;
+  requestId: string;
+  requestTitle: string;
+  requester: string;
+  status: NotificationEventStatus;
+  title: string;
+  type: NotificationEventType;
+};
+
 export type PortalSettings = {
   enabled: boolean;
   allowVoting: boolean;
@@ -215,6 +256,11 @@ export type OpenRoadAction =
   | { type: "replace-changelog-item"; changelogItem: ChangelogItem; workspaceId: string }
   | { type: "delete-changelog-item"; changelogItemId: string; workspaceId: string }
   | { type: "replace-portal-settings"; portal: PortalSettings; workspaceId: string }
+  | {
+      type: "replace-notification-settings";
+      notifications: RequesterNotificationSettings;
+      workspaceId: string;
+    }
   | { type: "replace-workspace"; workspace: Workspace }
   | { type: "replace-state"; state: OpenRoadState };
 
@@ -230,6 +276,15 @@ export const defaultPortalSettings: PortalSettings = {
   enabled: true,
   headline: "Public roadmap",
   intro: "Vote on requests, follow the roadmap, and read shipped updates without needing an account."
+};
+
+export const defaultNotificationSettings: RequesterNotificationSettings = {
+  defaultChangelogUpdates: true,
+  defaultStatusUpdates: true,
+  enabled: true,
+  outbox: [],
+  preferences: [],
+  quietWindowHours: 24
 };
 
 function seedRoadmapItem(
@@ -464,6 +519,7 @@ export const initialWorkspaces: Workspace[] = [
       headline: "Acme OSS public board",
       intro: "Track open requests, planned roadmap work, and release notes from the Acme OSS team."
     },
+    notifications: defaultNotificationSettings,
     integrations: integrationChips
   },
   {
@@ -578,6 +634,7 @@ export const initialWorkspaces: Workspace[] = [
       headline: "Maintainer Lab public board",
       intro: "See what the maintainers are considering, planning, and preparing to ship."
     },
+    notifications: defaultNotificationSettings,
     integrations: integrationChips
   }
 ];
@@ -609,12 +666,19 @@ export function openRoadReducer(state: OpenRoadState, action: OpenRoadAction): O
   }
 
   if (action.type === "replace-request") {
-    return updateWorkspaceById(state, action.workspaceId, (workspace) => ({
-      ...workspace,
-      requests: workspace.requests.map((request) =>
-        request.id === action.request.id ? cloneValue(action.request) : request
-      )
-    }));
+    return updateWorkspaceById(state, action.workspaceId, (workspace) => {
+      const previousRequest = workspace.requests.find((request) => request.id === action.request.id);
+      const nextWorkspace = {
+        ...workspace,
+        requests: workspace.requests.map((request) =>
+          request.id === action.request.id ? cloneValue(action.request) : request
+        )
+      };
+
+      return previousRequest
+        ? queueStatusChangeNotification(nextWorkspace, previousRequest, action.request)
+        : nextWorkspace;
+    });
   }
 
   if (action.type === "create-work-item") {
@@ -659,14 +723,23 @@ export function openRoadReducer(state: OpenRoadState, action: OpenRoadAction): O
   }
 
   if (action.type === "replace-changelog-item") {
-    return updateWorkspaceById(state, action.workspaceId, (workspace) => ({
-      ...workspace,
-      changelog: workspace.changelog.map((changelogItem) =>
-        changelogItem.id === action.changelogItem.id
-          ? cloneValue(action.changelogItem)
-          : changelogItem
-      )
-    }));
+    return updateWorkspaceById(state, action.workspaceId, (workspace) => {
+      const previousChangelogItem = workspace.changelog.find(
+        (changelogItem) => changelogItem.id === action.changelogItem.id
+      );
+      const nextWorkspace = {
+        ...workspace,
+        changelog: workspace.changelog.map((changelogItem) =>
+          changelogItem.id === action.changelogItem.id
+            ? cloneValue(action.changelogItem)
+            : changelogItem
+        )
+      };
+
+      return previousChangelogItem
+        ? queueChangelogPublishNotifications(nextWorkspace, previousChangelogItem, action.changelogItem)
+        : nextWorkspace;
+    });
   }
 
   if (action.type === "delete-changelog-item") {
@@ -682,6 +755,13 @@ export function openRoadReducer(state: OpenRoadState, action: OpenRoadAction): O
     return updateWorkspaceById(state, action.workspaceId, (workspace) => ({
       ...workspace,
       portal: cloneValue(action.portal)
+    }));
+  }
+
+  if (action.type === "replace-notification-settings") {
+    return updateWorkspaceById(state, action.workspaceId, (workspace) => ({
+      ...workspace,
+      notifications: sanitizeNotificationSettings(action.notifications)
     }));
   }
 
@@ -767,6 +847,221 @@ function removeRoadmapItemFromWorkspace(
     ...workspace,
     roadmap: nextRoadmap
   };
+}
+
+export function getRequesterNotificationPreference(
+  notifications: RequesterNotificationSettings,
+  request: Pick<RequestItem, "id" | "requester">
+) {
+  return notifications.preferences.find(
+    (preference) =>
+      preference.requestId === request.id &&
+      normalizePreferenceIdentity(preference.requester) ===
+        normalizePreferenceIdentity(request.requester)
+  );
+}
+
+export function resolveRequesterNotificationPreference(
+  notifications: RequesterNotificationSettings,
+  request: Pick<RequestItem, "id" | "requester">
+) {
+  const preference = getRequesterNotificationPreference(notifications, request);
+
+  return {
+    changelogUpdates: preference?.changelogUpdates ?? notifications.defaultChangelogUpdates,
+    preference,
+    statusUpdates: preference?.statusUpdates ?? notifications.defaultStatusUpdates
+  };
+}
+
+export function setRequesterNotificationPreference(
+  workspace: Workspace,
+  request: Pick<RequestItem, "id" | "requester">,
+  updates: Pick<RequesterNotificationPreference, "changelogUpdates" | "statusUpdates">,
+  now = "just now"
+): Workspace {
+  const existing = getRequesterNotificationPreference(workspace.notifications, request);
+  const nextPreference: RequesterNotificationPreference = {
+    changelogUpdates: updates.changelogUpdates,
+    createdAt: existing?.createdAt ?? now,
+    id: existing?.id ?? createNotificationPreferenceId(request),
+    requestId: request.id,
+    requester: request.requester,
+    statusUpdates: updates.statusUpdates,
+    updatedAt: now
+  };
+  const nextPreferences = [
+    nextPreference,
+    ...workspace.notifications.preferences.filter((preference) => preference.id !== nextPreference.id)
+  ].slice(0, 500);
+
+  return {
+    ...workspace,
+    notifications: sanitizeNotificationSettings({
+      ...workspace.notifications,
+      preferences: nextPreferences
+    })
+  };
+}
+
+function queueStatusChangeNotification(
+  workspace: Workspace,
+  previousRequest: RequestItem,
+  nextRequest: RequestItem,
+  now = new Date().toISOString()
+): Workspace {
+  if (
+    previousRequest.status === nextRequest.status ||
+    !isNotifiableRequestStatus(nextRequest.status)
+  ) {
+    return workspace;
+  }
+
+  const preference = resolveRequesterNotificationPreference(workspace.notifications, nextRequest);
+  if (!workspace.notifications.enabled || !preference.statusUpdates) return workspace;
+
+  const dedupeKey = createStatusNotificationDedupeKey(nextRequest.id, nextRequest.status);
+
+  return appendNotificationEvent(
+    workspace,
+    {
+      body: `${nextRequest.title} moved from ${previousRequest.status} to ${nextRequest.status}.`,
+      createdAt: now,
+      dedupeKey,
+      id: createNotificationEventId("request-status", now, nextRequest.id, dedupeKey),
+      nextStatus: nextRequest.status,
+      previousStatus: previousRequest.status,
+      requestId: nextRequest.id,
+      requestTitle: nextRequest.title,
+      requester: nextRequest.requester,
+      status: "queued",
+      title: `${nextRequest.status}: ${nextRequest.title}`,
+      type: "request-status-change"
+    },
+    now
+  );
+}
+
+function queueChangelogPublishNotifications(
+  workspace: Workspace,
+  previousChangelogItem: ChangelogItem,
+  nextChangelogItem: ChangelogItem,
+  now = new Date().toISOString()
+): Workspace {
+  if (isPublishedChangelog(previousChangelogItem) || !isPublishedChangelog(nextChangelogItem)) {
+    return workspace;
+  }
+
+  return nextChangelogItem.requestIds.reduce((nextWorkspace, requestId) => {
+    const request = nextWorkspace.requests.find((item) => item.id === requestId);
+    if (!request) return nextWorkspace;
+
+    const preference = resolveRequesterNotificationPreference(nextWorkspace.notifications, request);
+    if (!nextWorkspace.notifications.enabled || !preference.changelogUpdates) return nextWorkspace;
+
+    const dedupeKey = createChangelogNotificationDedupeKey(request.id, nextChangelogItem.id);
+
+    return appendNotificationEvent(
+      nextWorkspace,
+      {
+        body: `A public changelog update is ready: ${nextChangelogItem.publicSummary}`,
+        changelogId: nextChangelogItem.id,
+        changelogTitle: nextChangelogItem.title,
+        createdAt: now,
+        dedupeKey,
+        id: createNotificationEventId("changelog", now, request.id, dedupeKey),
+        requestId: request.id,
+        requestTitle: request.title,
+        requester: request.requester,
+        status: "queued",
+        title: `Shipped update: ${nextChangelogItem.title}`,
+        type: "changelog-published"
+      },
+      now
+    );
+  }, workspace);
+}
+
+function appendNotificationEvent(
+  workspace: Workspace,
+  event: RequesterNotificationEvent,
+  now: string
+): Workspace {
+  if (isDuplicateNotificationEvent(workspace.notifications, event.dedupeKey, now)) {
+    return workspace;
+  }
+
+  return {
+    ...workspace,
+    notifications: sanitizeNotificationSettings({
+      ...workspace.notifications,
+      outbox: [event, ...workspace.notifications.outbox].slice(0, 200)
+    })
+  };
+}
+
+function isDuplicateNotificationEvent(
+  notifications: RequesterNotificationSettings,
+  dedupeKey: string,
+  now: string
+) {
+  const quietWindowMs = Math.max(1, notifications.quietWindowHours) * 60 * 60 * 1000;
+  const nowTime = Date.parse(now);
+
+  return notifications.outbox.some((event) => {
+    if (event.dedupeKey !== dedupeKey) return false;
+    const eventTime = Date.parse(event.createdAt);
+    if (!Number.isFinite(nowTime) || !Number.isFinite(eventTime)) return true;
+    return nowTime - eventTime <= quietWindowMs;
+  });
+}
+
+function sanitizeNotificationSettings(
+  settings: RequesterNotificationSettings
+): RequesterNotificationSettings {
+  return {
+    defaultChangelogUpdates: settings.defaultChangelogUpdates,
+    defaultStatusUpdates: settings.defaultStatusUpdates,
+    enabled: settings.enabled,
+    outbox: settings.outbox.filter(isRequesterNotificationEvent).slice(0, 200),
+    preferences: settings.preferences.filter(isRequesterNotificationPreference).slice(0, 500),
+    quietWindowHours: Number.isFinite(settings.quietWindowHours)
+      ? Math.max(1, Math.min(168, Math.round(settings.quietWindowHours)))
+      : defaultNotificationSettings.quietWindowHours
+  };
+}
+
+function isNotifiableRequestStatus(status: RequestStatus) {
+  return status === "Planned" || status === "Shipping soon";
+}
+
+function isPublishedChangelog(changelogItem: ChangelogItem) {
+  return changelogItem.state === "Ready" && changelogItem.visibility === "Public";
+}
+
+function createStatusNotificationDedupeKey(requestId: string, status: RequestStatus) {
+  return `request-status-change:${requestId}:${status}`;
+}
+
+function createChangelogNotificationDedupeKey(requestId: string, changelogId: string) {
+  return `changelog-published:${requestId}:${changelogId}`;
+}
+
+function createNotificationPreferenceId(request: Pick<RequestItem, "id" | "requester">) {
+  return `notification-pref-${slugify(request.id)}-${slugify(request.requester)}`;
+}
+
+function createNotificationEventId(
+  prefix: string,
+  now: string,
+  requestId: string,
+  discriminator: string
+) {
+  return `${prefix}-${slugify(requestId)}-${slugify(discriminator)}-${slugify(now)}`;
+}
+
+function normalizePreferenceIdentity(value: string) {
+  return value.trim().toLowerCase();
 }
 
 function createEmptyRoadmap(): Record<RoadmapLane, RoadmapItem[]> {
@@ -980,6 +1275,7 @@ export function migrateOpenRoadState(value: unknown): OpenRoadState {
     (value.schemaVersion === 1 ||
       value.schemaVersion === 2 ||
       value.schemaVersion === 3 ||
+      value.schemaVersion === 4 ||
       value.schemaVersion === 0 ||
       value.schemaVersion === undefined) &&
     Array.isArray(value.workspaces)
@@ -1005,6 +1301,7 @@ function migrateWorkspaceFromPreviousSchema(value: unknown): Workspace {
   const migrated = {
     ...value,
     changelog: migrateChangelogFromPreviousSchema(value.changelog),
+    notifications: migrateNotificationSettingsFromPreviousSchema(value.notifications),
     portal: migratePortalSettingsFromPreviousSchema(value.portal),
     requests: migrateRequestsFromPreviousSchema(value.requests),
     roadmap: migrateRoadmapFromPreviousSchema(value.roadmap),
@@ -1024,6 +1321,16 @@ function migratePortalSettingsFromPreviousSchema(value: unknown): PortalSettings
   }
 
   return cloneValue(defaultPortalSettings);
+}
+
+function migrateNotificationSettingsFromPreviousSchema(
+  value: unknown
+): RequesterNotificationSettings {
+  if (isNotificationSettings(value)) {
+    return sanitizeNotificationSettings(cloneValue(value));
+  }
+
+  return cloneValue(defaultNotificationSettings);
 }
 
 function migrateRequestsFromPreviousSchema(value: unknown): RequestItem[] {
@@ -1192,6 +1499,7 @@ function isWorkspace(value: unknown): value is Workspace {
     Array.isArray(value.changelog) &&
     value.changelog.every(isChangelogItem) &&
     isPortalSettings(value.portal) &&
+    isNotificationSettings(value.notifications) &&
     Array.isArray(value.integrations)
   );
 }
@@ -1237,6 +1545,56 @@ function isPortalSettings(value: unknown): value is PortalSettings {
     typeof value.allowComments === "boolean" &&
     typeof value.headline === "string" &&
     typeof value.intro === "string"
+  );
+}
+
+function isNotificationSettings(value: unknown): value is RequesterNotificationSettings {
+  return (
+    isRecord(value) &&
+    typeof value.defaultChangelogUpdates === "boolean" &&
+    typeof value.defaultStatusUpdates === "boolean" &&
+    typeof value.enabled === "boolean" &&
+    Array.isArray(value.outbox) &&
+    value.outbox.every(isRequesterNotificationEvent) &&
+    Array.isArray(value.preferences) &&
+    value.preferences.every(isRequesterNotificationPreference) &&
+    typeof value.quietWindowHours === "number"
+  );
+}
+
+function isRequesterNotificationPreference(
+  value: unknown
+): value is RequesterNotificationPreference {
+  return (
+    isRecord(value) &&
+    typeof value.changelogUpdates === "boolean" &&
+    typeof value.createdAt === "string" &&
+    typeof value.id === "string" &&
+    typeof value.requestId === "string" &&
+    typeof value.requester === "string" &&
+    typeof value.statusUpdates === "boolean" &&
+    typeof value.updatedAt === "string"
+  );
+}
+
+function isRequesterNotificationEvent(value: unknown): value is RequesterNotificationEvent {
+  return (
+    isRecord(value) &&
+    typeof value.body === "string" &&
+    (value.changelogId === undefined || typeof value.changelogId === "string") &&
+    (value.changelogTitle === undefined || typeof value.changelogTitle === "string") &&
+    typeof value.createdAt === "string" &&
+    typeof value.dedupeKey === "string" &&
+    typeof value.id === "string" &&
+    (value.nextStatus === undefined || requestStatuses.includes(value.nextStatus as RequestStatus)) &&
+    (value.previousStatus === undefined ||
+      requestStatuses.includes(value.previousStatus as RequestStatus)) &&
+    typeof value.requestId === "string" &&
+    typeof value.requestTitle === "string" &&
+    typeof value.requester === "string" &&
+    notificationEventStatuses.includes(value.status as NotificationEventStatus) &&
+    typeof value.title === "string" &&
+    notificationEventTypes.includes(value.type as NotificationEventType)
   );
 }
 

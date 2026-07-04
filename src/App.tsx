@@ -39,6 +39,7 @@ import {
   changelogVisibilities,
   createPublicPortalSnapshot,
   createEntityId,
+  defaultNotificationSettings,
   defaultPortalSettings,
   createInitialOpenRoadState,
   exportWorkspace,
@@ -53,8 +54,10 @@ import {
   requestOwners,
   requestStatuses,
   requestVisibilities,
+  resolveRequesterNotificationPreference,
   saveOpenRoadState,
   saveSelectedWorkspaceId,
+  setRequesterNotificationPreference,
   workStatuses,
   type ChangelogItem,
   type ChangelogState,
@@ -331,6 +334,22 @@ export function App() {
         : [],
     [selectedRequest, workspace.workItems]
   );
+  const selectedRequestNotificationPreference = useMemo(
+    () =>
+      selectedRequest
+        ? resolveRequesterNotificationPreference(workspace.notifications, selectedRequest)
+        : null,
+    [selectedRequest, workspace.notifications]
+  );
+  const selectedRequestNotifications = useMemo(
+    () =>
+      selectedRequest
+        ? workspace.notifications.outbox
+            .filter((event) => event.requestId === selectedRequest.id)
+            .slice(0, 4)
+        : [],
+    [selectedRequest, workspace.notifications.outbox]
+  );
   const selectedWorkItem = useMemo(() => {
     const selectedWorkItemId = selectedWorkItemIdByWorkspace[workspace.id];
     return (
@@ -463,12 +482,14 @@ export function App() {
   }
 
   function updateRequest(requestId: string, updater: (request: RequestItem) => RequestItem) {
-    updateCurrentWorkspace((item) => ({
-      ...item,
-      requests: item.requests.map((request) =>
-        request.id === requestId ? updater(request) : request
-      )
-    }));
+    const request = workspace.requests.find((item) => item.id === requestId);
+    if (!request) return;
+
+    dispatchOpenRoad({
+      request: updater(request),
+      type: "replace-request",
+      workspaceId: workspace.id
+    });
   }
 
   function updatePortalSettings(updater: (portal: Workspace["portal"]) => Workspace["portal"]) {
@@ -476,6 +497,32 @@ export function App() {
       portal: updater(workspace.portal),
       type: "replace-portal-settings",
       workspaceId: workspace.id
+    });
+  }
+
+  function updateSelectedRequestNotificationPreference(
+    key: "changelogUpdates" | "statusUpdates",
+    enabled: boolean
+  ) {
+    if (!selectedRequest || !selectedRequestNotificationPreference) return;
+
+    dispatchOpenRoad({
+      type: "replace-workspace",
+      workspace: setRequesterNotificationPreference(
+        workspace,
+        selectedRequest,
+        {
+          changelogUpdates:
+            key === "changelogUpdates"
+              ? enabled
+              : selectedRequestNotificationPreference.changelogUpdates,
+          statusUpdates:
+            key === "statusUpdates"
+              ? enabled
+              : selectedRequestNotificationPreference.statusUpdates
+        },
+        new Date().toISOString()
+      )
     });
   }
 
@@ -579,6 +626,7 @@ export function App() {
         headline: `${name} public board`,
         intro: "Share visible requests, roadmap direction, and release updates from this workspace."
       },
+      notifications: defaultNotificationSettings,
       integrations: integrationChips
     };
 
@@ -1747,6 +1795,59 @@ export function App() {
                     <dd>{selectedRequest.archived ? "Archived" : "Active"}</dd>
                   </div>
                 </dl>
+
+                {selectedRequestNotificationPreference ? (
+                  <div className="notification-panel" aria-label="Requester notifications">
+                    <div className="source-history-header">
+                      <Bell aria-hidden="true" size={14} />
+                      <strong>Requester updates</strong>
+                      <small>{selectedRequestNotifications.length} queued</small>
+                    </div>
+                    <div className="notification-toggles">
+                      <label className="check-field">
+                        <input
+                          checked={selectedRequestNotificationPreference.statusUpdates}
+                          onChange={(event) =>
+                            updateSelectedRequestNotificationPreference(
+                              "statusUpdates",
+                              event.target.checked
+                            )
+                          }
+                          type="checkbox"
+                        />
+                        <span>Status</span>
+                      </label>
+                      <label className="check-field">
+                        <input
+                          checked={selectedRequestNotificationPreference.changelogUpdates}
+                          onChange={(event) =>
+                            updateSelectedRequestNotificationPreference(
+                              "changelogUpdates",
+                              event.target.checked
+                            )
+                          }
+                          type="checkbox"
+                        />
+                        <span>Changelog</span>
+                      </label>
+                    </div>
+                    {selectedRequestNotifications.length ? (
+                      <div className="notification-list">
+                        {selectedRequestNotifications.map((event) => (
+                          <article className="notification-item" key={event.id}>
+                            <strong>{event.title}</strong>
+                            <p>{event.body}</p>
+                            <small>{event.status} / quiet {workspace.notifications.quietWindowHours}h</small>
+                          </article>
+                        ))}
+                      </div>
+                    ) : (
+                      <small className="quiet-note">
+                        No queued updates for {selectedRequest.requester}.
+                      </small>
+                    )}
+                  </div>
+                ) : null}
 
                 {selectedRequestWorkItems.length ? (
                   <div className="linked-work" aria-label="Linked work for selected request">

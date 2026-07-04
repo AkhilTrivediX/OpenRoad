@@ -562,6 +562,59 @@ describe("OpenRoad workspace shell", () => {
     expect(screen.getAllByText("Product").length).toBeGreaterThan(0);
   });
 
+  it("queues requester status notifications from the request inspector", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(
+      within(screen.getByRole("region", { name: /Requests needing attention/ })).getByRole(
+        "button",
+        { name: /Dark mode for docs site/ }
+      )
+    );
+    await user.selectOptions(screen.getByLabelText("Selected request status"), "Planned");
+
+    const panel = screen.getByLabelText("Requester notifications");
+    expect(within(panel).getByText("1 queued")).toBeInTheDocument();
+    expect(within(panel).getByText("Planned: Dark mode for docs site")).toBeInTheDocument();
+    expect(within(panel).getByText(/moved from New to Planned/)).toBeInTheDocument();
+  });
+
+  it("counts requester notifications for the selected request only", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    const inboxRegion = screen.getByRole("region", { name: /Requests needing attention/ });
+
+    await user.click(within(inboxRegion).getByRole("button", { name: /Dark mode for docs site/ }));
+    await user.selectOptions(screen.getByLabelText("Selected request status"), "Planned");
+    expect(within(screen.getByLabelText("Requester notifications")).getByText("1 queued")).toBeInTheDocument();
+
+    await user.click(within(inboxRegion).getByRole("button", { name: /API rate limit visibility/ }));
+    const panel = screen.getByLabelText("Requester notifications");
+
+    expect(within(panel).getByText("0 queued")).toBeInTheDocument();
+    expect(within(panel).getByText(/No queued updates for CLI user/)).toBeInTheDocument();
+  });
+
+  it("honors requester status notification opt-outs in the inspector", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(
+      within(screen.getByRole("region", { name: /Requests needing attention/ })).getByRole(
+        "button",
+        { name: /Dark mode for docs site/ }
+      )
+    );
+    const panel = screen.getByLabelText("Requester notifications");
+
+    await user.click(within(panel).getByRole("checkbox", { name: "Status" }));
+    await user.selectOptions(screen.getByLabelText("Selected request status"), "Planned");
+
+    expect(within(panel).getByText("0 queued")).toBeInTheDocument();
+    expect(within(panel).getByText(/No queued updates for Docs feedback/)).toBeInTheDocument();
+  });
+
   it("adds and removes the current user's vote", async () => {
     const user = userEvent.setup();
     render(<App />);

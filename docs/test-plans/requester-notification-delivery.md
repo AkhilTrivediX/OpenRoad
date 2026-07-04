@@ -99,12 +99,16 @@ As a self-host operator, I can trigger delivery of queued requester notification
 ## Evidence
 
 - Branch: `feat/requester-notification-delivery`
-- Implementation commit SHA: Pending.
+- Implementation commit SHA: `1d13957`.
 - Date: 2026-07-04.
-- Acceptance criteria status: Pending implementation.
-- Commands run: Pending.
+- Acceptance criteria status: Passed for schema migration, private delivery endpoint auth, disabled-adapter handling, JSONL delivery handoff, delivered-state idempotency, retryable adapter failures, concurrent delivery serialization, latest-state merge protection, outbox trimming, and public/private projection boundaries.
+- Commands run:
+  - `pnpm vitest run src/domain/openroad.test.ts server/notifications.test.ts server/http.test.ts server/access.test.ts`: 105 tests passed.
+  - `pnpm check`: 241 tests passed; client and server production builds passed.
+  - Built-server smoke on port `4300`: `pnpm ops:smoke -- --admin-token secret` passed; direct notification queue, JSONL delivery, and repeat delivery dedupe checks passed.
+  - `pnpm release:verify`: dry-run release manifest generated for commit `1d13957692ee900a146f22cf1212f2be90fdb9a6` with OpenRoad state schema `7` rollback notes.
 - Browser/viewports tested: No UI changes planned.
 - Accessibility checks: No UI changes planned.
-- Reviewer notes: Pending implementation self-review and audit.
-- Known unresolved risks: Direct email/provider delivery, unsubscribe routing, scheduler packaging, and notification analytics remain future production slices.
-- Rollback notes: Pending final verification.
+- Reviewer notes: Read-only subagent audit found no P0 issues. P1 concurrency/stale-state and failed-delivery dead-letter risks were fixed by serializing delivery runs, merging delivery metadata into freshly loaded state, and keeping failed attempts queued for retry. P2 outbox trimming feedback was fixed by preserving undelivered events ahead of delivered history.
+- Known unresolved risks: Direct email/provider delivery, unsubscribe routing, scheduler packaging, multi-process delivery locking, and notification analytics remain future production slices.
+- Rollback notes: Restore a pre-schema-7 backup before downgrading to an older build. JSONL delivery files are operational handoff artifacts and are not required for state restore.

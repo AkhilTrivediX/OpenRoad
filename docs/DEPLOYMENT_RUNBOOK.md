@@ -169,7 +169,7 @@ The manifest records creation time, app package version, source paths, file size
 
 OpenRoad state schema `7` stores anonymous public portal voter keys and requester notification delivery metadata inside `openroad-state.json`. Upgrade from schema `6` is automatic on load and initializes existing notification events with `deliveryAttempts: 0`. Downgrading to a schema `6` or older build after schema `7` data is written requires restoring a pre-upgrade backup.
 
-Integration metadata schema `2` stores server-only encrypted provider credential records in `openroad-integrations.json`. Upgrade from schema `1` is automatic on load and initializes `credentials: []`. Downgrading to a schema `1` build after credentials are created requires revoking/removing credentials or restoring a pre-upgrade integration backup.
+Integration metadata schema `3` stores server-only encrypted provider credential records and background sync job metadata in `openroad-integrations.json`. Upgrade from schema `1` or `2` is automatic on load and initializes missing `credentials: []` and `syncJobs: []`. Downgrading to an older integration metadata build after credentials or sync jobs are created requires revoking/removing credentials, draining/removing sync jobs, or restoring a pre-upgrade integration backup.
 
 ## Provider Token Storage
 
@@ -183,6 +183,17 @@ $env:OPENROAD_TOKEN_ENCRYPTION_KEY_ID="primary"
 Credential APIs require `integration:manage` and return only metadata. They never return access tokens, refresh tokens, ciphertext, IVs, tags, or the encryption key. Manual GitHub disconnects and signed GitHub installation deletion webhooks revoke matching credentials.
 
 Changing the encryption key without re-encrypting credentials will make existing encrypted payloads unreadable to future sync workers. This release does not include external KMS or re-encryption tooling.
+
+## Background Sync Foundation
+
+OpenRoad stores provider-neutral sync jobs in `openroad-integrations.json` and exposes private sync job routes:
+
+- `POST /api/openroad/workspaces/:workspaceId/integrations/:provider/sync/jobs`
+- `POST /api/openroad/integrations/sync/run`
+
+The enqueue endpoint requires `integration:manage`. The runner endpoint requires global owner/admin write access and is disabled with `503 not_configured` until a server-side provider worker adapter is configured in a future release. Jobs contain scoped metadata and bounded, redacted summaries only; they must not contain provider tokens, encrypted credential payloads, raw provider payloads, webhook signatures, request headers, or request bodies.
+
+While OpenRoad uses file-backed integration metadata, integration writes are serialized inside one Node process. Running jobs receive a lease and can be reclaimed after the lease expires if a process crashes mid-run. Multi-process/distributed locking remains future database or external queue work.
 
 ## Requester Notification Delivery
 
@@ -283,7 +294,7 @@ For local single-user mode without `OPENROAD_ADMIN_TOKEN`, omit `--admin-token`;
 - OAuth/session auth is not implemented.
 - Team metadata is file-backed, not managed SQL.
 - Trusted proxy headers are disabled by default.
-- Payload-backed GitHub issue import, GitHub App installation verification, live issue fetch, signed webhooks, safe disconnect APIs, encrypted server-only provider credential storage, payload-backed Linear issue import, payload-backed Jira issue import, requester notification outbox/preferences, and a server-side JSONL notification delivery handoff exist; background jobs, OAuth callback exchange, Linear/Jira live sync/webhooks, direct email/provider notification delivery, conflict UI, and billing are not implemented.
+- Payload-backed GitHub issue import, GitHub App installation verification, live issue fetch, signed webhooks, safe disconnect APIs, encrypted server-only provider credential storage, provider-neutral background sync job metadata, payload-backed Linear issue import, payload-backed Jira issue import, requester notification outbox/preferences, and a server-side JSONL notification delivery handoff exist; live provider sync workers, OAuth callback exchange, Linear/Jira live sync/webhooks, direct email/provider notification delivery, conflict UI, and billing are not implemented.
 - Docker images are build-local by default; release manifests can record publishing metadata, but registry publishing infrastructure is not bundled yet.
 - Signed artifact infrastructure is not bundled yet; release manifests record signing as not configured unless an operator supplies signing metadata.
 - Named Docker volume backup requires an operator copy step or a future packaged volume helper.

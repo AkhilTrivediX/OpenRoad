@@ -12,11 +12,15 @@ import {
   type IntegrationPermission
 } from "../src/integrations/adapter.js";
 
-export const openRoadIntegrationSchemaVersion = 2;
+export const openRoadIntegrationSchemaVersion = 3;
 
 export const integrationCredentialSecretTypes = ["access-token", "refresh-token"] as const;
+export const integrationSyncJobReasons = ["manual", "scheduled", "webhook", "retry"] as const;
+export const integrationSyncJobStatuses = ["queued", "running", "succeeded", "failed"] as const;
 
 export type IntegrationCredentialSecretType = (typeof integrationCredentialSecretTypes)[number];
+export type IntegrationSyncJobReason = (typeof integrationSyncJobReasons)[number];
+export type IntegrationSyncJobStatus = (typeof integrationSyncJobStatuses)[number];
 
 export type EncryptedIntegrationCredentialSecret = {
   alg: "aes-256-gcm";
@@ -52,6 +56,7 @@ export type IntegrationState = {
   mappings: ExternalObjectMapping[];
   schemaVersion: typeof openRoadIntegrationSchemaVersion;
   syncEvents: IntegrationSyncEvent[];
+  syncJobs: IntegrationSyncJob[];
 };
 
 export type IntegrationSyncEvent = {
@@ -64,6 +69,27 @@ export type IntegrationSyncEvent = {
   result: "accepted" | "duplicate" | "ignored" | "synced";
   summary: string;
   workspaceId?: string;
+};
+
+export type IntegrationSyncJob = {
+  attempt: number;
+  claimedAt?: string;
+  completedAt?: string;
+  createdAt: string;
+  dedupeKey: string;
+  error?: string;
+  id: string;
+  installationId: string;
+  lastRunAt?: string;
+  leaseExpiresAt?: string;
+  mappingId?: string;
+  nextRunAt?: string;
+  provider: IntegrationProvider;
+  reason: IntegrationSyncJobReason;
+  resultSummary?: string;
+  status: IntegrationSyncJobStatus;
+  updatedAt: string;
+  workspaceId: string;
 };
 
 export type IntegrationStoreLoadStatus = "ready" | "seeded" | "migrated" | "recovered";
@@ -186,7 +212,8 @@ export function createInitialIntegrationState(): IntegrationState {
     installations: [],
     mappings: [],
     schemaVersion: openRoadIntegrationSchemaVersion,
-    syncEvents: []
+    syncEvents: [],
+    syncJobs: []
   };
 }
 
@@ -207,15 +234,18 @@ export function parseIntegrationState(value: unknown): IntegrationState {
 
   const schemaVersion = getPersistedSchemaVersion(value);
   const isVersionOne = schemaVersion === 1;
+  const isVersionTwo = schemaVersion === 2;
   const isCurrentVersion = schemaVersion === openRoadIntegrationSchemaVersion;
   const credentials = isVersionOne && value.credentials === undefined ? [] : value.credentials;
+  const syncJobs = (isVersionOne || isVersionTwo) && value.syncJobs === undefined ? [] : value.syncJobs;
 
   if (
-    (!isVersionOne && !isCurrentVersion) ||
+    (!isVersionOne && !isVersionTwo && !isCurrentVersion) ||
     !Array.isArray(credentials) ||
     !Array.isArray(value.installations) ||
     !Array.isArray(value.mappings) ||
-    (value.syncEvents !== undefined && !Array.isArray(value.syncEvents))
+    (value.syncEvents !== undefined && !Array.isArray(value.syncEvents)) ||
+    !Array.isArray(syncJobs)
   ) {
     throw new IntegrationStoreError("invalid_state", "OpenRoad integration metadata is invalid.");
   }
@@ -224,7 +254,8 @@ export function parseIntegrationState(value: unknown): IntegrationState {
     !credentials.every(isIntegrationCredential) ||
     !value.installations.every(isIntegrationInstallation) ||
     !value.mappings.every(isMapping) ||
-    (Array.isArray(value.syncEvents) && !value.syncEvents.every(isSyncEvent))
+    (Array.isArray(value.syncEvents) && !value.syncEvents.every(isSyncEvent)) ||
+    !syncJobs.every(isIntegrationSyncJob)
   ) {
     throw new IntegrationStoreError("invalid_state", "OpenRoad integration metadata is invalid.");
   }
@@ -234,7 +265,8 @@ export function parseIntegrationState(value: unknown): IntegrationState {
     installations: value.installations.map(sanitizeIntegrationInstallation),
     mappings: value.mappings.map(sanitizeExternalObjectMapping),
     schemaVersion: openRoadIntegrationSchemaVersion,
-    syncEvents: (value.syncEvents ?? []).map(sanitizeIntegrationSyncEvent).slice(0, 1000)
+    syncEvents: (value.syncEvents ?? []).map(sanitizeIntegrationSyncEvent).slice(0, 1000),
+    syncJobs: trimIntegrationSyncJobs(syncJobs.map(sanitizeIntegrationSyncJob))
   });
 }
 
@@ -386,6 +418,29 @@ export function sanitizeIntegrationSyncEvent(event: IntegrationSyncEvent): Integ
   };
 }
 
+export function sanitizeIntegrationSyncJob(job: IntegrationSyncJob): IntegrationSyncJob {
+  return {
+    attempt: Math.max(0, Math.floor(job.attempt)),
+    ...(job.claimedAt ? { claimedAt: job.claimedAt } : {}),
+    ...(job.completedAt ? { completedAt: job.completedAt } : {}),
+    createdAt: job.createdAt,
+    dedupeKey: job.dedupeKey,
+    ...(job.error ? { error: redactSensitiveText(job.error.slice(0, 500)) } : {}),
+    id: job.id,
+    installationId: job.installationId,
+    ...(job.lastRunAt ? { lastRunAt: job.lastRunAt } : {}),
+    ...(job.leaseExpiresAt ? { leaseExpiresAt: job.leaseExpiresAt } : {}),
+    ...(job.mappingId ? { mappingId: job.mappingId } : {}),
+    ...(job.nextRunAt ? { nextRunAt: job.nextRunAt } : {}),
+    provider: job.provider,
+    reason: job.reason,
+    ...(job.resultSummary ? { resultSummary: redactSensitiveText(job.resultSummary.slice(0, 500)) } : {}),
+    status: job.status,
+    updatedAt: job.updatedAt,
+    workspaceId: job.workspaceId
+  };
+}
+
 function upsertInstallationByKey(
   items: IntegrationInstallation[],
   nextItem: IntegrationInstallation
@@ -402,6 +457,12 @@ function createInstallationKey(installation: IntegrationInstallation) {
 function upsertById<T extends { id: string }>(items: T[], nextItem: T) {
   const nextItems = items.filter((item) => item.id !== nextItem.id);
   return [cloneValue(nextItem), ...nextItems];
+}
+
+function trimIntegrationSyncJobs(jobs: IntegrationSyncJob[]) {
+  const activeJobs = jobs.filter((job) => job.status === "queued" || job.status === "running");
+  const historyJobs = jobs.filter((job) => job.status !== "queued" && job.status !== "running");
+  return [...activeJobs, ...historyJobs].slice(0, 1000);
 }
 
 function sanitizeEncryptedIntegrationCredentialSecret(
@@ -503,6 +564,31 @@ function isSyncEvent(value: unknown): value is IntegrationSyncEvent {
   );
 }
 
+function isIntegrationSyncJob(value: unknown): value is IntegrationSyncJob {
+  return (
+    isRecord(value) &&
+    typeof value.attempt === "number" &&
+    Number.isFinite(value.attempt) &&
+    (value.claimedAt === undefined || typeof value.claimedAt === "string") &&
+    (value.completedAt === undefined || typeof value.completedAt === "string") &&
+    typeof value.createdAt === "string" &&
+    typeof value.dedupeKey === "string" &&
+    (value.error === undefined || typeof value.error === "string") &&
+    typeof value.id === "string" &&
+    typeof value.installationId === "string" &&
+    (value.lastRunAt === undefined || typeof value.lastRunAt === "string") &&
+    (value.leaseExpiresAt === undefined || typeof value.leaseExpiresAt === "string") &&
+    (value.mappingId === undefined || typeof value.mappingId === "string") &&
+    (value.nextRunAt === undefined || typeof value.nextRunAt === "string") &&
+    integrationProviders.includes(value.provider as IntegrationProvider) &&
+    integrationSyncJobReasons.includes(value.reason as IntegrationSyncJobReason) &&
+    (value.resultSummary === undefined || typeof value.resultSummary === "string") &&
+    integrationSyncJobStatuses.includes(value.status as IntegrationSyncJobStatus) &&
+    typeof value.updatedAt === "string" &&
+    typeof value.workspaceId === "string"
+  );
+}
+
 function isExternalObjectRef(value: unknown) {
   return (
     isRecord(value) &&
@@ -554,4 +640,19 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function cloneValue<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function redactSensitiveText(value: string) {
+  return value
+    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [redacted]")
+    .replace(
+      /([?&](?:access_token|refresh_token|token|jwt|secret|client_secret|authorization)=)[^&\s]+/gi,
+      "$1[redacted]"
+    )
+    .replace(
+      /((?:access[_-]?token|refresh[_-]?token|secret|client[_-]?secret|password|authorization)\s*[:=]\s*)[^\s,;]+/gi,
+      "$1[redacted]"
+    )
+    .replace(/\b[\w.-]*(?:token|secret|password|credential|authorization)[\w.-]*\b/gi, "[redacted]")
+    .slice(0, 500);
 }

@@ -99,6 +99,7 @@ Public portal responses use the OpenRoad public projection and must not include 
 - `GET /api/openroad/workspaces/:workspaceId/integrations/:provider/credentials`
 - `POST /api/openroad/workspaces/:workspaceId/integrations/:provider/credentials`
 - `POST /api/openroad/workspaces/:workspaceId/integrations/:provider/credentials/:credentialId/revoke`
+- `POST /api/openroad/workspaces/:workspaceId/integrations/:provider/sync/jobs`
 - `GET /api/openroad/audit-events`
 - `GET /api/openroad/ops/status`
 
@@ -124,9 +125,17 @@ Jira OAuth setup requires `integration:manage`, which is reserved for local owne
 
 Provider credential create/list/revoke routes require `integration:manage`, which is reserved for local owners/admins and workspace owners. Credential storage requires `OPENROAD_TOKEN_ENCRYPTION_KEY`; credentials must be scoped to an active installation in the same workspace and provider. Responses return only metadata and never return access tokens, refresh tokens, ciphertext, IVs, tags, or encryption key material.
 
+Integration sync job enqueue routes require `integration:manage`, which is reserved for local owners/admins and workspace owners. Jobs must be scoped to an active installation in the same workspace and provider. Responses return sanitized job metadata and never return provider tokens, encrypted credentials, raw provider payloads, webhook signatures, request headers, or request bodies. Concurrent integration metadata writes are serialized inside one Node process while OpenRoad uses file-backed stores.
+
 ## Provider-Signature Routes
 
 - `POST /api/openroad/integrations/github/webhook`
+
+## Global Private Worker Routes
+
+- `POST /api/openroad/integrations/sync/run`
+
+The sync runner route requires global owner/admin write access. It is disabled with `503 not_configured` until a server-side integration sync worker adapter is configured. The runner claims due queued or stale-running jobs, processes them server-side, redacts worker failure text before persistence, and returns sanitized processing counts.
 
 The GitHub webhook route is not authorized by OpenRoad actor headers. It is provider-signature protected: the server requires `OPENROAD_GITHUB_APP_WEBHOOK_SECRET` and verifies `X-Hub-Signature-256` against the raw request body with HMAC-SHA256 before parsing JSON or mutating state.
 

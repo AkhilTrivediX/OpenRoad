@@ -336,7 +336,8 @@ function validateIntegrationState(value) {
     !Array.isArray(value.installations) ||
     !Array.isArray(value.mappings) ||
     (value.schemaVersion >= 2 && !Array.isArray(value.credentials)) ||
-    (value.syncEvents !== undefined && !Array.isArray(value.syncEvents))
+    (value.syncEvents !== undefined && !Array.isArray(value.syncEvents)) ||
+    (value.schemaVersion >= 3 && !Array.isArray(value.syncJobs))
   ) {
     throw new OpsError(
       "invalid_integration_state",
@@ -355,7 +356,10 @@ function sanitizeIntegrationState(value) {
     installations: value.installations.map(sanitizeIntegrationInstallation),
     mappings: value.mappings.map(sanitizeExternalObjectMapping),
     schemaVersion: value.schemaVersion,
-    syncEvents: (value.syncEvents ?? []).map(sanitizeIntegrationSyncEvent)
+    syncEvents: (value.syncEvents ?? []).map(sanitizeIntegrationSyncEvent),
+    ...(value.schemaVersion >= 3
+      ? { syncJobs: value.syncJobs.map(sanitizeIntegrationSyncJob) }
+      : {})
   };
 }
 
@@ -453,13 +457,56 @@ function sanitizeIntegrationSyncEvent(event) {
   };
 }
 
+function sanitizeIntegrationSyncJob(job) {
+  if (!isRecord(job)) return job;
+
+  return {
+    attempt: job.attempt,
+    ...(job.claimedAt ? { claimedAt: job.claimedAt } : {}),
+    ...(job.completedAt ? { completedAt: job.completedAt } : {}),
+    createdAt: job.createdAt,
+    dedupeKey: job.dedupeKey,
+    ...(job.error ? { error: redactSensitiveText(String(job.error).slice(0, 500)) } : {}),
+    id: job.id,
+    installationId: job.installationId,
+    ...(job.lastRunAt ? { lastRunAt: job.lastRunAt } : {}),
+    ...(job.leaseExpiresAt ? { leaseExpiresAt: job.leaseExpiresAt } : {}),
+    ...(job.mappingId ? { mappingId: job.mappingId } : {}),
+    ...(job.nextRunAt ? { nextRunAt: job.nextRunAt } : {}),
+    provider: job.provider,
+    reason: job.reason,
+    ...(job.resultSummary
+      ? { resultSummary: redactSensitiveText(String(job.resultSummary).slice(0, 500)) }
+      : {}),
+    status: job.status,
+    updatedAt: job.updatedAt,
+    workspaceId: job.workspaceId
+  };
+}
+
+function redactSensitiveText(value) {
+  return value
+    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [redacted]")
+    .replace(
+      /([?&](?:access_token|refresh_token|token|jwt|secret|client_secret|authorization)=)[^&\s]+/gi,
+      "$1[redacted]"
+    )
+    .replace(
+      /((?:access[_-]?token|refresh[_-]?token|secret|client[_-]?secret|password|authorization)\s*[:=]\s*)[^\s,;]+/gi,
+      "$1[redacted]"
+    )
+    .replace(/\b[\w.-]*(?:token|secret|password|credential|authorization)[\w.-]*\b/gi, "[redacted]")
+    .slice(0, 500);
+}
+
 function createEmptyIntegrationState() {
   return {
     credentials: [],
     installations: [],
     mappings: [],
-    schemaVersion: 2,
-    syncEvents: []
+    schemaVersion: 3,
+    syncEvents: [],
+    syncJobs: []
   };
 }
 

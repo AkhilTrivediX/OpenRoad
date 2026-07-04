@@ -16,8 +16,9 @@ As a self-host operator or workspace owner, I can enqueue integration sync jobs 
 - Durable `syncJobs` collection in `OPENROAD_INTEGRATION_FILE`.
 - Provider/workspace/installation-scoped sync job model.
 - Job enqueue helper with dedupe keys for repeated manual/scheduled/webhook requests.
-- Due-job claim helper with bounded batch size and process-local serialization.
+- Due-job claim helper with bounded batch size, process-local serialization, and stale-running lease recovery.
 - Job completion, retryable failure, fatal failure, backoff, and attempt metadata.
+- Process-local integration metadata mutation lane for file-backed integration writes.
 - Private sync runner endpoint guarded by global owner/admin access.
 - Workspace/provider enqueue endpoint guarded by integration management access.
 - Sanitized job list/response metadata with no provider tokens, encrypted secrets, raw payloads, request bodies, or webhook headers.
@@ -46,10 +47,13 @@ As a self-host operator or workspace owner, I can enqueue integration sync jobs 
 - Public visitors, requesters, viewers, contributors, and integration actors cannot enqueue or run sync jobs unless an explicit future route grants that capability.
 - Local owners/admins and workspace owners can enqueue jobs for their workspace.
 - The worker endpoint claims due queued jobs, marks them running, records success/failure, and keeps retryable failures queued with backoff.
+- Running jobs receive a lease and become claimable again after the lease expires, preventing permanent stuck work after a crash.
 - Fatal failures mark jobs failed without deleting job history.
 - Concurrent worker calls do not process the same job twice inside one Node process.
+- Concurrent integration metadata writes inside one Node process do not overwrite each other.
 - Responses and audit events never include provider tokens, encrypted secrets, raw provider payloads, webhook signatures, or request bodies.
-- Job history is trimmed without dropping queued/running work.
+- Worker-returned failure text is redacted before persistence and response.
+- Job history keeps active work first, rejects new active work when the bounded queue is full, and retains newest completed history.
 - Existing provider token storage, GitHub import/live/webhook/disconnect, Linear/Jira import/setup, notification delivery, public portal, ops, release, and app tests still pass.
 - `pnpm check` passes.
 
@@ -63,14 +67,17 @@ As a self-host operator or workspace owner, I can enqueue integration sync jobs 
 - Enqueue helper dedupes active jobs by provider/workspace/installation/reason/mapping scope.
 - Enqueue helper preserves existing credential metadata without exposing encrypted secrets in responses.
 - Claim helper respects due time, batch limit, queued status, and provider/workspace filters.
+- Claim helper gives running jobs a lease and reclaims stale running work after expiry.
 - Completion helper marks jobs succeeded with bounded result summary.
 - Retryable failure increments attempts, records bounded error text, and schedules a future run.
 - Fatal failure marks jobs failed and removes queued eligibility.
-- Job trimming preserves queued/running jobs ahead of old succeeded/failed history.
+- Job trimming preserves active jobs ahead of succeeded/failed history and keeps newest history first.
 - Enqueue endpoint requires `integration:manage`.
+- Enqueue endpoint serializes concurrent integration metadata mutations and does not drop parallel jobs.
 - Runner endpoint requires global owner/admin write access.
 - Runner endpoint returns `503 not_configured` when no worker adapter is configured.
 - Runner endpoint serializes concurrent calls in process.
+- Runner endpoint merges completed job updates into the latest integration metadata state.
 - Runner endpoint responses are sanitized and bounded.
 - Backup/restore sanitizes credential-bearing and job-bearing integration metadata.
 - Release manifest reports integration metadata schema `3`.
@@ -93,7 +100,7 @@ As a self-host operator or workspace owner, I can enqueue integration sync jobs 
 
 - No provider tokens, encryption keys, webhook secrets, private keys, admin tokens, or real credentials are committed.
 - Sync job APIs never echo tokens, encrypted credential payloads, raw provider payloads, webhook signatures, request headers, or request bodies.
-- Job errors and summaries are bounded before persistence and response.
+- Job errors and summaries are bounded before persistence and response; worker failure text is redacted for common token/secret shapes.
 - Worker endpoint is server-side only and private by default.
 - Sync adapter input receives only scoped job metadata; future provider calls must explicitly fetch/decrypt credentials server-side.
 - Audit events contain provider/workspace/installation/job ids only, not secrets or provider payloads.
@@ -113,6 +120,7 @@ As a self-host operator or workspace owner, I can enqueue integration sync jobs 
 - Create an active provider installation, enqueue a sync job, run the private worker with a test adapter, and confirm sanitized responses.
 - Re-run the worker and verify already succeeded jobs are not duplicated.
 - Enqueue a retryable failure job and confirm backoff/attempt metadata.
+- Force a running job past its lease and confirm it can be reclaimed.
 - Run `pnpm release:verify`.
 
 ## Evidence
@@ -125,5 +133,5 @@ As a self-host operator or workspace owner, I can enqueue integration sync jobs 
 - Browser/viewports tested: No UI changes planned.
 - Accessibility checks: No UI changes planned.
 - Reviewer notes: Pending.
-- Known unresolved risks: Live provider fetch, provider write-back, OAuth callback exchange, conflict UI, browser Settings UI, external queue systems, distributed locks, and scheduler packaging remain later production slices.
+- Known unresolved risks: Live provider fetch, provider write-back, OAuth callback exchange, conflict UI, browser Settings UI, external queue systems, distributed locks across multiple Node processes, and scheduler packaging remain later production slices.
 - Rollback notes: Pending.

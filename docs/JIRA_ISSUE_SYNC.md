@@ -10,6 +10,7 @@ OpenRoad supports a first Jira integration slice that keeps Jira complexity outs
 - Provider-neutral external mappings in `OPENROAD_INTEGRATION_FILE`.
 - Workspace-scoped installation metadata.
 - Encrypted server-only credential records through the provider-neutral credential API when `OPENROAD_TOKEN_ENCRYPTION_KEY` is configured.
+- Provider-neutral background sync jobs for active Jira installations.
 - Provider/id-scoped integration actors, for example `jira:jira-install-jira-cloud-id`.
 - Audit events for Jira issue import/update.
 
@@ -108,6 +109,12 @@ Add `requestId` to link the Jira issue to an existing OpenRoad request. Re-impor
 `POST /api/openroad/workspaces/:workspaceId/integrations/jira/credentials`
 
 Credential storage requires `integration:manage`, an active Jira installation in the workspace, and `OPENROAD_TOKEN_ENCRYPTION_KEY`. API responses return only metadata and never return access tokens, refresh tokens, ciphertext, IVs, tags, or key material.
+
+## Background Sync Jobs
+
+`POST /api/openroad/workspaces/:workspaceId/integrations/jira/sync/jobs`
+
+The endpoint queues provider-neutral sync jobs for active Jira installations. The private runner is `POST /api/openroad/integrations/sync/run`, but live Jira REST workers remain deferred.
 
 ## Deferred
 

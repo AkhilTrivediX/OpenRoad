@@ -105,8 +105,16 @@ Credential storage is managed through the provider-neutral routes:
 
 These routes require `integration:manage` and `OPENROAD_TOKEN_ENCRYPTION_KEY`. Responses return only credential metadata. GitHub installation access tokens generated for live issue fetch remain short-lived and are still not persisted.
 
+## Background Sync Jobs
+
+Provider-neutral sync jobs can be queued at:
+
+`POST /api/openroad/workspaces/:workspaceId/integrations/github/sync/jobs`
+
+The private runner is `POST /api/openroad/integrations/sync/run`. It is disabled until a future GitHub sync worker adapter is configured.
+
 ## Deferred Work
 
 - Browser Settings UI for connect/disconnect and sync logs.
 - Setup callback page that carries workspace context from GitHub back into OpenRoad.
-- Background sync jobs and conflict handling.
+- Live background sync worker and conflict handling.

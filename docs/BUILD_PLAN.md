@@ -10,7 +10,7 @@ Each feature must also satisfy `docs/PRODUCTION_READINESS.md` before merging to 
 
 Current stage: Stage 2 Team Beta foundation in progress.
 
-The standalone loop now covers workspaces, requests, triage, internal work, roadmap planning, changelog drafts, public portal preview, local durability, production APIs, basic tenancy boundaries, file-backed team metadata, audit events, self-host operations, app-level crash recovery, a first app-module boundary, hardened public portal write APIs with persisted visitor vote identity, the provider-neutral integration adapter contract, a payload-backed GitHub issue import/link API, server-only GitHub App installation verification, live GitHub issue fetch through verified installations, signed GitHub webhooks, safe disconnect handling, encrypted server-only provider credential storage, Linear issue import/link, Jira issue import/link with explicit field mapping, requester notification preferences/outbox events plus JSONL delivery handoff, deterministic local assistant triage, and release candidate manifest tooling. The next production work should move into background sync foundations while direct email/provider notification delivery and real model-backed AI adapters remain separate hardening slices.
+The standalone loop now covers workspaces, requests, triage, internal work, roadmap planning, changelog drafts, public portal preview, local durability, production APIs, basic tenancy boundaries, file-backed team metadata, audit events, self-host operations, app-level crash recovery, a first app-module boundary, hardened public portal write APIs with persisted visitor vote identity, the provider-neutral integration adapter contract, a payload-backed GitHub issue import/link API, server-only GitHub App installation verification, live GitHub issue fetch through verified installations, signed GitHub webhooks, safe disconnect handling, encrypted server-only provider credential storage, provider-neutral background sync job foundations, Linear issue import/link, Jira issue import/link with explicit field mapping, requester notification preferences/outbox events plus JSONL delivery handoff, deterministic local assistant triage, and release candidate manifest tooling. The next production work should move into live provider sync workers while direct email/provider notification delivery and real model-backed AI adapters remain separate hardening slices.
 
 ## Feature 1: Workspace Shell
 
@@ -497,6 +497,27 @@ Acceptance:
 - Standalone mode works with zero credentials and no encryption key.
 - Credential APIs return only metadata and never return tokens or encrypted payload internals.
 - Background sync and provider write-back now have a server-only secret boundary to build on.
+
+## Feature 11B: Background Sync Foundation
+
+Branch: `feat/background-sync-foundation`
+
+Status: implemented and production-checked.
+
+Build:
+
+- Integration metadata schema `3` with provider-neutral sync jobs.
+- Enqueue and private runner APIs.
+- Dedupe, due-job claim, running-job lease recovery, completion, retryable failure, fatal failure, and history trimming helpers.
+- Process-local integration metadata mutation lane for the file-backed store.
+- Server-side worker adapter boundary, disabled by default.
+- Sanitized/redacted job responses and backup/restore/release schema notes.
+
+Acceptance:
+
+- Sync work is durable, bounded, and private before live provider workers are added.
+- Standalone mode remains usable with no integrations and no sync adapter.
+- Job metadata never stores provider tokens, encrypted credential payloads, raw provider payloads, webhook headers, or unredacted worker failure text.
 
 ## Feature 12: Requester Notifications
 

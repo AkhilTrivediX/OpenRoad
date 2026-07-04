@@ -37,6 +37,7 @@ OpenRoad now has a working standalone product loop, production server foundation
 - Live GitHub issue fetch through verified installations without persisted tokens.
 - Signed GitHub App webhook ingestion, idempotent linked issue sync, and safe disconnect handling.
 - Encrypted server-only provider credential storage primitives for GitHub, Linear, and Jira.
+- Provider-neutral background sync job foundation with private runner boundary.
 - Safe Linear OAuth setup plus payload-backed Linear issue import/link.
 - Safe Jira OAuth setup plus payload-backed Jira issue import/link with explicit field mapping.
 - Requester notification preferences plus an internal outbox for status and changelog updates.
@@ -44,7 +45,7 @@ OpenRoad now has a working standalone product loop, production server foundation
 - Release candidate manifest tooling for version, checksum, support-window, and dry-run publishing verification.
 - Docker Compose, backup/restore, and smoke-check commands for self-host operators.
 
-Current production limits are explicit: OAuth/session auth, invitation flows, managed database migrations, hosted release promotion, deeper observability, browser Settings UI for integrations, OAuth callback exchange, Linear/Jira live fetch/webhooks, background sync jobs, direct email/provider notification delivery, real model-backed AI adapters with consent/prompt redaction/audit logs, and conflict UI are planned next-stage work.
+Current production limits are explicit: OAuth/session auth, invitation flows, managed database migrations, hosted release promotion, deeper observability, browser Settings UI for integrations, OAuth callback exchange, live provider sync workers, Linear/Jira live fetch/webhooks, direct email/provider notification delivery, real model-backed AI adapters with consent/prompt redaction/audit logs, and conflict UI are planned next-stage work.
 
 Current docs:
 
@@ -59,6 +60,7 @@ Current docs:
 - [Linear issue sync](docs/LINEAR_ISSUE_SYNC.md)
 - [Jira issue sync](docs/JIRA_ISSUE_SYNC.md)
 - [Provider token storage](docs/PROVIDER_TOKEN_STORAGE.md)
+- [Background sync foundation](docs/BACKGROUND_SYNC_FOUNDATION.md)
 - [Requester notifications](docs/REQUESTER_NOTIFICATIONS.md)
 - [AI-assisted triage](docs/AI_ASSISTED_TRIAGE.md)
 - [Release operations](docs/RELEASE_OPERATIONS.md)
@@ -140,6 +142,8 @@ The server exposes:
 - `GET /api/openroad/workspaces/:workspaceId/integrations/:provider/credentials`
 - `POST /api/openroad/workspaces/:workspaceId/integrations/:provider/credentials`
 - `POST /api/openroad/workspaces/:workspaceId/integrations/:provider/credentials/:credentialId/revoke`
+- `POST /api/openroad/workspaces/:workspaceId/integrations/:provider/sync/jobs`
+- `POST /api/openroad/integrations/sync/run`
 - `GET /api/openroad/audit-events`
 - `GET /api/openroad/ops/status`
 - `GET /api/openroad/workspaces/:workspaceId/portal`

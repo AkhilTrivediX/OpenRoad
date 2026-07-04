@@ -16,7 +16,7 @@ As a self-host operator, I can trigger delivery of queued requester notification
 - A local JSONL file adapter for self-host handoff to an external mail/helpdesk worker.
 - Environment configuration for delivery mode and delivery file path.
 - Private delivery endpoint guarded by `state:write`.
-- Delivery processing that marks queued events as delivered or failed with bounded metadata.
+- Delivery processing that marks successful events delivered and keeps failed attempts retryable with bounded error metadata.
 - OpenRoad schema migration for delivery status and attempt fields.
 - Tests for successful delivery, adapter failure, disabled adapter behavior, auth boundaries, migration, and duplicate prevention.
 - Docs for operator configuration, smoke usage, rollback, and current non-email delivery limits.
@@ -38,7 +38,9 @@ As a self-host operator, I can trigger delivery of queued requester notification
 - Delivery endpoint returns a structured not-configured response when no adapter is enabled.
 - Configured file adapter writes public-safe JSONL records and marks events delivered.
 - Re-running delivery does not resend already delivered events.
-- Adapter failures mark events failed with bounded error text and do not drop the event.
+- Adapter failures leave events queued with bounded error text and do not drop the event.
+- Concurrent delivery runs do not duplicate external delivery for the same queued event.
+- Outbox trimming keeps queued, held, and failed work ahead of delivered history.
 - Delivery responses summarize delivered, failed, skipped, and remaining queued counts.
 - Public portal, workspace read APIs, and app UI do not expose delivery internals beyond existing private notification panels.
 - Existing notification queueing, quiet-window dedupe, preferences, public/private redaction, and backup/restore behavior continue to pass.
@@ -50,7 +52,9 @@ As a self-host operator, I can trigger delivery of queued requester notification
 - File delivery adapter writes one JSONL record per queued event with public-safe fields only.
 - Delivery processor marks queued events delivered after successful adapter writes.
 - Delivery processor leaves delivered events untouched on later runs.
-- Delivery processor marks failed attempts without losing the event.
+- Delivery processor marks failed attempts without losing the event or removing it from the retry queue.
+- Delivery processor merges delivery metadata into the latest state without clobbering newer request edits.
+- Delivery endpoint serializes concurrent delivery calls.
 - Delivery endpoint requires `POST`.
 - Delivery endpoint requires `state:write` / local owner access.
 - Delivery endpoint returns `503 not_configured` when delivery is disabled.

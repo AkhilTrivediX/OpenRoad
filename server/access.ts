@@ -118,6 +118,12 @@ export const routeProtections: RouteProtection[] = [
   },
   {
     methods: ["POST"],
+    path: "/api/openroad/notifications/deliver",
+    permission: "state:write",
+    scope: "global"
+  },
+  {
+    methods: ["POST"],
     path: "/api/openroad/actions",
     permission: "workspace:write",
     scope: "workspace"

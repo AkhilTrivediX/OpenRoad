@@ -87,6 +87,14 @@ import {
   type IntegrationSyncEvent
 } from "./integrations.js";
 import {
+  createExclusiveRunner,
+  createNotificationDeliveryAdapterFromEnv,
+  deliverRequesterNotifications,
+  mergeNotificationDeliveryState,
+  type NotificationDeliveryRunner,
+  type NotificationDeliveryAdapter
+} from "./notifications.js";
+import {
   FetchGitHubAppClient,
   GitHubAppClientError,
   createSafeGitHubAppSetup,
@@ -117,6 +125,7 @@ type CreateOpenRoadServerOptions = {
   jiraOAuthConfig?: JiraOAuthConfig;
   linearOAuthConfig?: LinearOAuthConfig;
   logger?: Pick<Console, "error" | "log">;
+  notificationDeliveryAdapter?: NotificationDeliveryAdapter;
   portalRateLimiter?: PortalRateLimiter;
   store: OpenRoadStore;
   teamStore?: TeamStore;
@@ -240,12 +249,14 @@ export function createOpenRoadServer({
   jiraOAuthConfig = jiraOAuthConfigFromEnv(),
   linearOAuthConfig = linearOAuthConfigFromEnv(),
   logger = console,
+  notificationDeliveryAdapter = createNotificationDeliveryAdapterFromEnv(),
   portalRateLimiter = createPortalRateLimiterFromEnv(),
   store,
   teamStore
 }: CreateOpenRoadServerOptions): Server {
   const resolvedDistDir = resolve(distDir);
   const activeGitHubWebhookDeliveries = new Set<string>();
+  const runNotificationDeliveryExclusive = createExclusiveRunner();
 
   return createServer(async (request, response) => {
     const access = createAccessContext(request, auth);
@@ -266,6 +277,8 @@ export function createOpenRoadServer({
           integrationStore,
           jiraOAuthConfig,
           linearOAuthConfig,
+          notificationDeliveryAdapter,
+          runNotificationDeliveryExclusive,
           teamStore,
           portalRateLimiter,
           activeGitHubWebhookDeliveries
@@ -299,6 +312,8 @@ async function handleApiRequest(
   integrationStore: IntegrationStore | undefined,
   jiraOAuthConfig: JiraOAuthConfig,
   linearOAuthConfig: LinearOAuthConfig,
+  notificationDeliveryAdapter: NotificationDeliveryAdapter | undefined,
+  runNotificationDeliveryExclusive: NotificationDeliveryRunner,
   teamStore: TeamStore | undefined,
   portalRateLimiter: PortalRateLimiter,
   activeGitHubWebhookDeliveries: Set<string>
@@ -357,6 +372,19 @@ async function handleApiRequest(
 
   if (requestUrl.pathname === "/api/openroad/audit-events") {
     await handleAuditEventsRequest(request, response, requestUrl, store, access, teamStore);
+    return;
+  }
+
+  if (requestUrl.pathname === "/api/openroad/notifications/deliver") {
+    await handleNotificationDeliveryRequest(
+      request,
+      response,
+      store,
+      access,
+      teamStore,
+      notificationDeliveryAdapter,
+      runNotificationDeliveryExclusive
+    );
     return;
   }
 
@@ -2886,6 +2914,79 @@ async function handleOpsStatusRequest(
   }
 }
 
+async function handleNotificationDeliveryRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  store: OpenRoadStore,
+  access: AccessContext,
+  teamStore: TeamStore | undefined,
+  notificationDeliveryAdapter: NotificationDeliveryAdapter | undefined,
+  runNotificationDeliveryExclusive: NotificationDeliveryRunner
+) {
+  if (request.method !== "POST") {
+    writeApiError(response, 405, "invalid_method", "This endpoint only supports POST.", access);
+    return;
+  }
+
+  try {
+    requirePermission(access, "state:write");
+
+    if (!notificationDeliveryAdapter) {
+      writeApiError(
+        response,
+        503,
+        "not_configured",
+        "Requester notification delivery is not configured.",
+        access
+      );
+      return;
+    }
+
+    const payload = await readJsonBody(request, 20_000);
+    const workspaceId = isRecord(payload) ? getBoundedText(payload.workspaceId, 120) : undefined;
+    const limit = isRecord(payload) ? getPositiveInteger(payload.limit, 100) : 100;
+    const deliveryResponse = await runNotificationDeliveryExclusive(async () => {
+      const result = await store.load();
+
+      if (workspaceId && !result.state.workspaces.some((workspace) => workspace.id === workspaceId)) {
+        throw new ApiRequestError("not_found", 404, "Workspace was not found.");
+      }
+
+      const delivery = await deliverRequesterNotifications(result.state, notificationDeliveryAdapter, {
+        limit,
+        workspaceId
+      });
+      let state = result.state;
+
+      if (delivery.changed) {
+        const latest = await store.load();
+        const merged = mergeNotificationDeliveryState(latest.state, delivery.state);
+        state = merged === latest.state ? latest.state : await store.replaceState(merged);
+      }
+
+      await recordAuditEvent(teamStore, state, access, {
+        summary: `Requester notification delivery processed ${delivery.attempted} event(s).`,
+        type: "notifications.deliver",
+        workspaceId
+      });
+
+      return {
+        attempted: delivery.attempted,
+        delivered: delivery.delivered,
+        failed: delivery.failed,
+        remainingQueued: countQueuedNotifications(state, workspaceId),
+        skipped: delivery.skipped,
+        status: "processed",
+        workspaceId: workspaceId ?? null
+      };
+    });
+
+    writeJson(response, 200, deliveryResponse, access);
+  } catch (error) {
+    writeKnownApiError(response, error, access);
+  }
+}
+
 async function handleWorkspaceRequest(
   request: IncomingMessage,
   response: ServerResponse,
@@ -3380,6 +3481,13 @@ function consumePortalRateLimit(
   );
 }
 
+function countQueuedNotifications(state: OpenRoadState, workspaceId?: string) {
+  return state.workspaces.reduce((count, workspace) => {
+    if (workspaceId && workspace.id !== workspaceId) return count;
+    return count + workspace.notifications.outbox.filter((event) => event.status === "queued").length;
+  }, 0);
+}
+
 function createRequesterAccess(
   access: AccessContext,
   workspaceId: string,
@@ -3553,6 +3661,19 @@ function positiveInteger(value: string | undefined, fallback: number) {
   if (!value) return fallback;
   const parsed = Number.parseInt(value, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function getPositiveInteger(value: unknown, fallback: number) {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return Math.round(value);
+  }
+
+  if (typeof value === "string") {
+    const parsed = Number.parseInt(value, 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+  }
+
+  return fallback;
 }
 
 function isOpenRoadActionPayload(value: unknown): value is { action: OpenRoadAction } {

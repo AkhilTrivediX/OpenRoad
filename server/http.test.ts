@@ -26,6 +26,7 @@ import { FileOpenRoadStore } from "./store";
 import { FileTeamStore } from "./team";
 import type { AuthOptions } from "./access";
 import { GitHubAppClientError, type GitHubAppClient, type GitHubAppConfig } from "./github-app";
+import type { LinearApiClient } from "./linear-api";
 import type { LinearOAuthConfig } from "./linear";
 import type { JiraOAuthConfig } from "./jira";
 import type { NotificationDeliveryAdapter } from "./notifications";
@@ -1724,6 +1725,118 @@ describe("OpenRoad production server", () => {
     expect(issueMapping?.lastSyncedAt).toBeTruthy();
     expect(syncJob).toMatchObject({ status: "succeeded" });
     expect(JSON.stringify(run.body)).not.toContain("installation-token");
+  });
+
+  it("auto-configures the Linear sync worker when the token vault and credentials are ready", async () => {
+    const linearIssueFetches: Array<{ issueId: string; token: string }> = [];
+    const tokenVault = testTokenVault();
+    const { integrationStore, store, url } = await startTestServer({
+      auth: { adminToken: "secret", singleUserMode: false, trustProxyHeaders: true },
+      linearApiClient: {
+        async getIssue(options) {
+          linearIssueFetches.push({
+            issueId: options.issueId,
+            token: options.credential.accessToken
+          });
+          return {
+            assignee: "Akhil Trivedi",
+            body: "Updated by live Linear sync.",
+            creator: "Customer Ops",
+            id: "lin-issue-123",
+            identifier: "OPEN-42",
+            labels: ["planned"],
+            project: "OpenRoad Beta",
+            state: { id: "state-started", name: "Started", type: "started" },
+            team: { id: "team-open", key: "OPEN", name: "OpenRoad" },
+            title: "Updated from live Linear",
+            updatedAt: "2026-07-04T01:00:00Z",
+            url: "https://linear.app/openroad/issue/OPEN-42/import-linear-issues"
+          };
+        }
+      },
+      tokenVault
+    });
+
+    const imported = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/linear/issues/import`, {
+      body: JSON.stringify(
+        linearImportPayload({
+          issue: linearIssuePayload({ title: "Original Linear title" })
+        })
+      ),
+      headers: {
+        Authorization: "Bearer secret",
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/linear/credentials`, {
+      body: JSON.stringify(linearCredentialPayload()),
+      headers: {
+        Authorization: "Bearer secret",
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    const statusBefore = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/status`, {
+      headers: workspaceActorHeaders("acme", "Viewer")
+    });
+    const queued = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/linear/sync/jobs`, {
+      body: JSON.stringify({ installationId: "linear-install", reason: "manual" }),
+      headers: {
+        Authorization: "Bearer secret",
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    const run = await fetchJson(`${url}/api/openroad/integrations/sync/run`, {
+      body: JSON.stringify({ limit: 5, provider: "linear", workspaceId: "acme" }),
+      headers: {
+        Authorization: "Bearer secret",
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    const statusAfter = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/status`, {
+      headers: workspaceActorHeaders("acme", "Viewer")
+    });
+    const [openRoad, integrations] = await Promise.all([store.load(), integrationStore.load()]);
+    const request = openRoad.state.workspaces[0].requests.find(
+      (item) => item.id === imported.body.request.id
+    );
+    const issueMapping = integrations.state.mappings.find((mapping) => mapping.external.provider === "linear");
+    const syncJob = integrations.state.syncJobs.find((job) => job.id === queued.body.job.id);
+    const linearBefore = statusBefore.body.providers.find(
+      (provider: { provider: string }) => provider.provider === "linear"
+    );
+    const linearAfter = statusAfter.body.providers.find(
+      (provider: { provider: string }) => provider.provider === "linear"
+    );
+    const responseText = JSON.stringify([run.body, statusAfter.body]);
+
+    expect(run.status).toBe(200);
+    expect(run.body).toMatchObject({
+      claimed: 1,
+      processed: [{ id: queued.body.job.id, kind: "success", status: "succeeded" }],
+      status: "processed"
+    });
+    expect(linearBefore).toMatchObject({
+      activeCredentials: 1,
+      capabilities: {
+        manualSync: true
+      },
+      syncWorkerConfigured: true
+    });
+    expect(linearAfter).toMatchObject({
+      lastJobStatus: "succeeded",
+      linkedIssueMappings: 1,
+      syncWorkerConfigured: true
+    });
+    expect(linearIssueFetches).toEqual([{ issueId: "lin-issue-123", token: "linear-access-secret" }]);
+    expect(request?.title).toBe("Updated from live Linear");
+    expect(issueMapping?.lastSyncedAt).toBeTruthy();
+    expect(syncJob).toMatchObject({ status: "succeeded" });
+    expect(responseText).not.toContain("linear-access-secret");
+    expect(responseText).not.toContain("ciphertext");
   });
 
   it("maps auto-configured GitHub sync worker failures through the private runner", async () => {
@@ -3566,6 +3679,7 @@ async function startTestServer(
     githubAppConfig?: GitHubAppConfig;
     integrationSyncWorker?: IntegrationSyncWorker;
     jiraOAuthConfig?: JiraOAuthConfig;
+    linearApiClient?: LinearApiClient;
     linearOAuthConfig?: LinearOAuthConfig;
     notificationDeliveryAdapter?: NotificationDeliveryAdapter;
     portalRateLimiter?: PortalRateLimiter;
@@ -3594,6 +3708,7 @@ async function startTestServer(
     integrationStore,
     integrationSyncWorker: options.integrationSyncWorker,
     jiraOAuthConfig: options.jiraOAuthConfig,
+    linearApiClient: options.linearApiClient,
     linearOAuthConfig: options.linearOAuthConfig,
     logger: { error: vi.fn(), log: vi.fn() },
     notificationDeliveryAdapter: options.notificationDeliveryAdapter,
@@ -3679,6 +3794,19 @@ function gitHubCredentialPayload(overrides: Record<string, unknown> = {}) {
     permissions: ["read:external"],
     providerScopes: ["repo", "issues:read"],
     refreshToken: "github-refresh-secret",
+    tokenType: "bearer",
+    ...overrides
+  };
+}
+
+function linearCredentialPayload(overrides: Record<string, unknown> = {}) {
+  return {
+    accessToken: "linear-access-secret",
+    expiresAt: "2999-07-05T00:00:00.000Z",
+    installationId: "linear-install",
+    label: "Linear sync",
+    permissions: ["read:external"],
+    providerScopes: ["issues:read"],
     tokenType: "bearer",
     ...overrides
   };

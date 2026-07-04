@@ -48,6 +48,7 @@ async function createRoadmapItem(
 describe("OpenRoad workspace shell", () => {
   beforeEach(() => {
     localStorage.clear();
+    window.history.replaceState(null, "", "/");
   });
 
   afterEach(() => {
@@ -90,6 +91,22 @@ describe("OpenRoad workspace shell", () => {
     });
   });
 
+  it("marks the current hash target in primary navigation", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    const primaryNav = screen.getByLabelText("Primary navigation");
+    const inboxLink = within(primaryNav).getByRole("link", { name: /Inbox/ });
+    const settingsLink = within(primaryNav).getByRole("link", { name: "Settings" });
+
+    expect(inboxLink).toHaveAttribute("aria-current", "page");
+
+    await user.click(settingsLink);
+
+    expect(settingsLink).toHaveAttribute("aria-current", "page");
+    expect(inboxLink).not.toHaveAttribute("aria-current");
+  });
+
   it("communicates standalone-first use and optional integrations", () => {
     render(<App />);
 
@@ -111,7 +128,7 @@ describe("OpenRoad workspace shell", () => {
     expect(await screen.findByText("Server metadata")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "GitHub" })).toBeInTheDocument();
     expect(screen.getByText(/1 linked issue mapping ready for manual sync/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Sync linked issues" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "GitHub sync linked issues" })).toBeEnabled();
     expect(screen.queryByText("sync-job-1")).not.toBeInTheDocument();
     expect(document.body.textContent).not.toContain("installation-token");
   });
@@ -124,7 +141,7 @@ describe("OpenRoad workspace shell", () => {
 
     render(<App />);
 
-    await user.click(await screen.findByRole("button", { name: "Sync linked issues" }));
+    await user.click(await screen.findByRole("button", { name: "GitHub sync linked issues" }));
 
     expect(await screen.findByText("GitHub linked issue sync completed.")).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith(
@@ -136,6 +153,31 @@ describe("OpenRoad workspace shell", () => {
       expect.objectContaining({ method: "POST" })
     );
     expect(document.body.textContent).not.toContain("installation-token");
+  });
+
+  it("runs Linear manual sync from Settings when the server reports support", async () => {
+    vi.stubEnv("VITE_OPENROAD_SERVER_SYNC", "on");
+    const fetchMock = createSettingsIntegrationFetchMock({ linearReady: true });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "Linear sync linked issues" }));
+
+    expect(await screen.findByText("Linear linked issue sync completed.")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/openroad/workspaces/acme/integrations/linear/sync/jobs",
+      expect.objectContaining({ method: "POST" })
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/openroad/integrations/sync/run",
+      expect.objectContaining({
+        body: JSON.stringify({ limit: 5, provider: "linear", workspaceId: "acme" }),
+        method: "POST"
+      })
+    );
+    expect(document.body.textContent).not.toContain("linear-access-secret");
   });
 
   it("switches workspaces", async () => {
@@ -1173,7 +1215,7 @@ describe("OpenRoad workspace shell", () => {
   }, 10_000);
 });
 
-function createSettingsIntegrationFetchMock() {
+function createSettingsIntegrationFetchMock(options: { linearReady?: boolean } = {}) {
   const state = createInitialOpenRoadState();
 
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -1204,6 +1246,7 @@ function createSettingsIntegrationFetchMock() {
                 status: "active"
               }
             ],
+            activeCredentials: 0,
             activeInstallations: 1,
             capabilities: {
               disconnect: true,
@@ -1243,6 +1286,7 @@ function createSettingsIntegrationFetchMock() {
           },
           {
             accounts: [],
+            activeCredentials: 0,
             activeInstallations: 0,
             capabilities: {
               disconnect: false,
@@ -1266,28 +1310,40 @@ function createSettingsIntegrationFetchMock() {
             totalInstallations: 0
           },
           {
-            accounts: [],
-            activeInstallations: 0,
+            accounts: options.linearReady
+              ? [
+                  {
+                    createdAt: "2026-07-04T00:00:00Z",
+                    id: "linear-install",
+                    providerAccountName: "OpenRoad",
+                    status: "active"
+                  }
+                ]
+              : [],
+            activeCredentials: options.linearReady ? 1 : 0,
+            activeInstallations: options.linearReady ? 1 : 0,
             capabilities: {
-              disconnect: false,
-              import: false,
-              liveSync: false,
-              manualSync: false,
+              disconnect: Boolean(options.linearReady),
+              import: Boolean(options.linearReady),
+              liveSync: Boolean(options.linearReady),
+              manualSync: Boolean(options.linearReady),
               setup: false,
               webhooks: false
             },
-            connection: "optional",
+            connection: options.linearReady ? "connected" : "optional",
             label: "Linear",
-            linkedIssueMappings: 0,
-            linkedMappings: 0,
+            linkedIssueMappings: options.linearReady ? 1 : 0,
+            linkedMappings: options.linearReady ? 1 : 0,
             provider: "linear",
             queuedSyncJobs: 0,
             recentJobs: [],
             runningSyncJobs: 0,
             setupConfigured: false,
-            statusText: "Optional. Server setup is not configured yet.",
-            syncWorkerConfigured: false,
-            totalInstallations: 0
+            statusText: options.linearReady
+              ? "Connected. 1 linked issue mapping ready for manual sync."
+              : "Optional. Server setup is not configured yet.",
+            syncWorkerConfigured: Boolean(options.linearReady),
+            totalInstallations: options.linearReady ? 1 : 0
           }
         ],
         status: "ready",
@@ -1296,6 +1352,10 @@ function createSettingsIntegrationFetchMock() {
     }
 
     if (url === "/api/openroad/workspaces/acme/integrations/github/sync/jobs") {
+      return jsonResponse({ job: { id: "sync-job-1", status: "queued" }, status: "queued" }, 201);
+    }
+
+    if (url === "/api/openroad/workspaces/acme/integrations/linear/sync/jobs") {
       return jsonResponse({ job: { id: "sync-job-1", status: "queued" }, status: "queued" }, 201);
     }
 

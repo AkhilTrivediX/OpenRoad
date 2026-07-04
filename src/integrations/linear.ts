@@ -110,7 +110,7 @@ export function parseLinearIssuePayload(value: unknown): LinearIssue {
   const title = requireText(getString(value.title), "Linear issue title");
   const id = requireText(getString(value.id), "Linear issue id");
   const state = parseLinearState(value.state);
-  const url = getString(value.url) ?? `https://linear.app/issue/${identifier}`;
+  const url = normalizeExternalUrl(getString(value.url), `https://linear.app/issue/${identifier}`);
 
   return {
     assignee: parsePersonName(value.assignee),
@@ -389,6 +389,20 @@ function getString(value: unknown) {
   if (typeof value === "string") return value.trim() || undefined;
   if (typeof value === "number" && Number.isFinite(value)) return String(value);
   return undefined;
+}
+
+function normalizeExternalUrl(value: string | undefined, fallback: string) {
+  if (!value) return fallback;
+
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:" && url.protocol !== "http:") return fallback;
+    url.search = "";
+    url.hash = "";
+    return url.toString();
+  } catch {
+    return fallback;
+  }
 }
 
 function getOptionalNumber(value: unknown) {

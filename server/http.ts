@@ -5,6 +5,15 @@ import { createServer } from "node:http";
 import { extname, join, resolve, sep } from "node:path";
 
 import {
+  AccessDeniedError,
+  createAccessContext,
+  openRoadApiContract,
+  openRoadApiVersion,
+  requirePermission,
+  type AccessContext,
+  type AuthOptions
+} from "./access.js";
+import {
   createPublicPortalSnapshot,
   openRoadReducer,
   openRoadSchemaVersion,
@@ -17,6 +26,7 @@ import {
 } from "./store.js";
 
 type CreateOpenRoadServerOptions = {
+  auth?: AuthOptions;
   distDir?: string;
   logger?: Pick<Console, "error" | "log">;
   store: OpenRoadStore;
@@ -24,6 +34,7 @@ type CreateOpenRoadServerOptions = {
 
 type ApiErrorCode =
   | "corrupt_state"
+  | "forbidden"
   | "invalid_json"
   | "invalid_method"
   | "invalid_state"
@@ -66,6 +77,7 @@ const openRoadActionTypes = new Set([
 ]);
 
 export function createOpenRoadServer({
+  auth,
   distDir = resolve("dist"),
   logger = console,
   store
@@ -73,18 +85,26 @@ export function createOpenRoadServer({
   const resolvedDistDir = resolve(distDir);
 
   return createServer(async (request, response) => {
+    const access = createAccessContext(request, auth);
+
     try {
       const requestUrl = new URL(request.url ?? "/", "http://openroad.local");
 
       if (requestUrl.pathname.startsWith("/api/")) {
-        await handleApiRequest(request, response, requestUrl, store);
+        await handleApiRequest(request, response, requestUrl, store, access, auth);
         return;
       }
 
-      await serveStaticAsset(request, response, requestUrl, resolvedDistDir);
+      await serveStaticAsset(request, response, requestUrl, resolvedDistDir, access);
     } catch (error) {
       logger.error(error);
-      writeApiError(response, 500, "server_error", "OpenRoad server failed to handle the request.");
+      writeApiError(
+        response,
+        500,
+        "server_error",
+        "OpenRoad server failed to handle the request.",
+        access
+      );
     }
   });
 }
@@ -93,28 +113,49 @@ async function handleApiRequest(
   request: IncomingMessage,
   response: ServerResponse,
   requestUrl: URL,
-  store: OpenRoadStore
+  store: OpenRoadStore,
+  access: AccessContext,
+  auth: AuthOptions | undefined
 ) {
   if (requestUrl.pathname === "/api/health") {
     if (request.method !== "GET") {
-      writeApiError(response, 405, "invalid_method", "This endpoint only supports GET.");
+      writeApiError(response, 405, "invalid_method", "This endpoint only supports GET.", access);
       return;
     }
 
     writeJson(response, 200, {
       ok: true,
       schemaVersion: openRoadSchemaVersion
-    });
+    }, access);
+    return;
+  }
+
+  if (requestUrl.pathname === "/api/openroad/contract") {
+    if (request.method !== "GET") {
+      writeApiError(response, 405, "invalid_method", "This endpoint only supports GET.", access);
+      return;
+    }
+
+    writeJson(response, 200, {
+      contract: {
+        ...openRoadApiContract,
+        auth: {
+          adminTokenConfigured: Boolean(auth?.adminToken),
+          singleUserMode: auth?.singleUserMode !== false,
+          trustedProxyHeadersEnabled: Boolean(auth?.trustProxyHeaders)
+        }
+      }
+    }, access);
     return;
   }
 
   if (requestUrl.pathname === "/api/openroad/state") {
-    await handleStateRequest(request, response, store);
+    await handleStateRequest(request, response, store, access);
     return;
   }
 
   if (requestUrl.pathname === "/api/openroad/actions") {
-    await handleActionRequest(request, response, store);
+    await handleActionRequest(request, response, store, access);
     return;
   }
 
@@ -123,46 +164,61 @@ async function handleApiRequest(
   );
 
   if (portalMatch) {
-    await handlePortalRequest(request, response, requestUrl, store, portalMatch[1]);
+    await handlePortalRequest(request, response, requestUrl, store, access, portalMatch[1]);
     return;
   }
 
-  writeApiError(response, 404, "not_found", "OpenRoad API route was not found.");
+  const workspaceMatch = requestUrl.pathname.match(/^\/api\/openroad\/workspaces\/([^/]+)$/);
+
+  if (workspaceMatch) {
+    await handleWorkspaceRequest(request, response, store, access, workspaceMatch[1]);
+    return;
+  }
+
+  writeApiError(response, 404, "not_found", "OpenRoad API route was not found.", access);
 }
 
 async function handleStateRequest(
   request: IncomingMessage,
   response: ServerResponse,
-  store: OpenRoadStore
+  store: OpenRoadStore,
+  access: AccessContext
 ) {
   if (request.method === "GET") {
-    const result = await store.load();
-    writeJson(response, 200, result);
+    try {
+      requirePermission(access, "state:read");
+      const result = await store.load();
+      writeJson(response, 200, result, access);
+    } catch (error) {
+      writeKnownApiError(response, error, access);
+    }
     return;
   }
 
   if (request.method === "PUT") {
     try {
+      requirePermission(access, "state:write");
       const payload = await readJsonBody(request);
       const statePayload = getStatePayload(payload);
       const state = await store.replaceState(statePayload);
-      writeJson(response, 200, { state, status: "saved" });
+      writeJson(response, 200, { state, status: "saved" }, access);
     } catch (error) {
-      writeKnownApiError(response, error);
+      writeKnownApiError(response, error, access);
     }
     return;
   }
 
-  writeApiError(response, 405, "invalid_method", "This endpoint only supports GET and PUT.");
+  writeApiError(response, 405, "invalid_method", "This endpoint only supports GET and PUT.", access);
 }
 
 async function handleActionRequest(
   request: IncomingMessage,
   response: ServerResponse,
-  store: OpenRoadStore
+  store: OpenRoadStore,
+  access: AccessContext
 ) {
   if (request.method !== "POST") {
-    writeApiError(response, 405, "invalid_method", "This endpoint only supports POST.");
+    writeApiError(response, 405, "invalid_method", "This endpoint only supports POST.", access);
     return;
   }
 
@@ -170,10 +226,17 @@ async function handleActionRequest(
     const payload = await readJsonBody(request);
 
     if (!isOpenRoadActionPayload(payload)) {
-      writeApiError(response, 400, "invalid_state", "Request must include an OpenRoad action.");
+      writeApiError(
+        response,
+        400,
+        "invalid_state",
+        "Request must include an OpenRoad action.",
+        access
+      );
       return;
     }
 
+    requireActionPermission(access, payload.action);
     const current = await store.load();
     let nextState;
 
@@ -185,9 +248,39 @@ async function handleActionRequest(
     }
 
     const state = await store.replaceState(nextState);
-    writeJson(response, 200, { state, status: "saved" });
+    writeJson(response, 200, { state, status: "saved" }, access);
   } catch (error) {
-    writeKnownApiError(response, error);
+    writeKnownApiError(response, error, access);
+  }
+}
+
+async function handleWorkspaceRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  store: OpenRoadStore,
+  access: AccessContext,
+  encodedWorkspaceId: string
+) {
+  if (request.method !== "GET") {
+    writeApiError(response, 405, "invalid_method", "This endpoint only supports GET.", access);
+    return;
+  }
+
+  const workspaceId = decodeURIComponent(encodedWorkspaceId);
+
+  try {
+    requirePermission(access, "workspace:read", workspaceId);
+    const result = await store.load();
+    const workspace = result.state.workspaces.find((item) => item.id === workspaceId);
+
+    if (!workspace) {
+      writeApiError(response, 404, "not_found", "Workspace was not found.", access);
+      return;
+    }
+
+    writeJson(response, 200, { workspace }, access);
+  } catch (error) {
+    writeKnownApiError(response, error, access);
   }
 }
 
@@ -196,19 +289,21 @@ async function handlePortalRequest(
   response: ServerResponse,
   requestUrl: URL,
   store: OpenRoadStore,
+  access: AccessContext,
   encodedWorkspaceId: string
 ) {
   if (request.method !== "GET") {
-    writeApiError(response, 405, "invalid_method", "This endpoint only supports GET.");
+    writeApiError(response, 405, "invalid_method", "This endpoint only supports GET.", access);
     return;
   }
 
+  requirePermission(access, "portal:read", decodeURIComponent(encodedWorkspaceId));
   const result = await store.load();
   const workspaceId = decodeURIComponent(encodedWorkspaceId);
   const workspace = result.state.workspaces.find((item) => item.id === workspaceId);
 
   if (!workspace) {
-    writeApiError(response, 404, "not_found", "Workspace was not found.");
+    writeApiError(response, 404, "not_found", "Workspace was not found.", access);
     return;
   }
 
@@ -216,6 +311,8 @@ async function handlePortalRequest(
     response,
     200,
     createPublicPortalSnapshot(workspace, requestUrl.searchParams.get("query") ?? "")
+    ,
+    access
   );
 }
 
@@ -223,10 +320,11 @@ async function serveStaticAsset(
   request: IncomingMessage,
   response: ServerResponse,
   requestUrl: URL,
-  distDir: string
+  distDir: string,
+  access: AccessContext
 ) {
   if (request.method !== "GET" && request.method !== "HEAD") {
-    writeApiError(response, 405, "invalid_method", "Static assets only support GET and HEAD.");
+    writeApiError(response, 405, "invalid_method", "Static assets only support GET and HEAD.", access);
     return;
   }
 
@@ -235,14 +333,14 @@ async function serveStaticAsset(
   const assetPath = resolve(join(distDir, requestedPath));
 
   if (!isPathInside(assetPath, distDir)) {
-    writeApiError(response, 403, "not_found", "Static asset was not found.");
+    writeApiError(response, 403, "not_found", "Static asset was not found.", access);
     return;
   }
 
   const resolvedAssetPath = await resolveStaticPath(assetPath, distDir);
 
   if (!resolvedAssetPath) {
-    writeApiError(response, 404, "not_found", "Static asset was not found.");
+    writeApiError(response, 404, "not_found", "Static asset was not found.", access);
     return;
   }
 
@@ -314,39 +412,62 @@ async function readJsonBody(request: IncomingMessage, maxBytes = 2_000_000) {
   }
 }
 
-function writeKnownApiError(response: ServerResponse, error: unknown) {
+function writeKnownApiError(
+  response: ServerResponse,
+  error: unknown,
+  access: AccessContext
+) {
   if (error instanceof ApiBodyError) {
     const status = error.code === "payload_too_large" ? 413 : 400;
-    writeApiError(response, status, error.code, error.message);
+    writeApiError(response, status, error.code, error.message, access);
     return;
   }
 
   if (error instanceof OpenRoadStoreError) {
     const status = error.code === "future_schema" ? 409 : 422;
-    writeApiError(response, status, error.code, error.message);
+    writeApiError(response, status, error.code, error.message, access);
+    return;
+  }
+
+  if (error instanceof AccessDeniedError) {
+    writeApiError(response, error.status, error.code, error.message, access);
     return;
   }
 
   throw error;
 }
 
-function writeJson(response: ServerResponse, status: number, payload: unknown) {
+function writeJson(
+  response: ServerResponse,
+  status: number,
+  payload: unknown,
+  access: AccessContext
+) {
   response.writeHead(status, jsonHeaders);
-  response.end(JSON.stringify(payload));
+  response.end(
+    JSON.stringify({
+      apiVersion: openRoadApiVersion,
+      requestId: access.requestId,
+      ...(isRecord(payload) ? payload : { data: payload })
+    })
+  );
 }
 
 function writeApiError(
   response: ServerResponse,
   status: number,
   code: ApiErrorCode,
-  message: string
+  message: string,
+  access: AccessContext
 ) {
   writeJson(response, status, {
     error: {
       code,
-      message
+      message,
+      requestId: access.requestId,
+      status
     }
-  });
+  }, access);
 }
 
 function isPathInside(targetPath: string, parentPath: string) {
@@ -365,6 +486,25 @@ function isOpenRoadActionPayload(value: unknown): value is { action: OpenRoadAct
     typeof value.action.type === "string" &&
     openRoadActionTypes.has(value.action.type)
   );
+}
+
+function requireActionPermission(access: AccessContext, action: OpenRoadAction) {
+  if (
+    action.type === "create-workspace" ||
+    action.type === "replace-workspace" ||
+    action.type === "replace-state"
+  ) {
+    requirePermission(access, "state:write");
+    return;
+  }
+
+  const workspaceId = "workspaceId" in action ? action.workspaceId : undefined;
+
+  if (!workspaceId) {
+    throw new AccessDeniedError("OpenRoad action is missing a workspace scope.");
+  }
+
+  requirePermission(access, "workspace:write", workspaceId);
 }
 
 class ApiBodyError extends Error {

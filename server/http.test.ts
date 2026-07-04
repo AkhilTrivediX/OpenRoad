@@ -17,6 +17,7 @@ import {
 } from "../src/domain/openroad";
 import { createOpenRoadServer } from "./http";
 import { FileOpenRoadStore } from "./store";
+import type { AuthOptions } from "./access";
 
 const openServers: Server[] = [];
 
@@ -32,10 +33,42 @@ describe("OpenRoad production server", () => {
     const state = await fetchJson(`${url}/api/openroad/state`);
 
     expect(health.status).toBe(200);
-    expect(health.body).toMatchObject({ ok: true, schemaVersion: openRoadSchemaVersion });
+    expect(health.body).toMatchObject({
+      apiVersion: "2026-07-04",
+      ok: true,
+      schemaVersion: openRoadSchemaVersion
+    });
+    expect(health.body.requestId).toBeTruthy();
     expect(state.status).toBe(200);
     expect(state.body.state.schemaVersion).toBe(openRoadSchemaVersion);
     expect(state.body.state.workspaces[0].id).toBe("acme");
+  });
+
+  it("publishes the API auth and tenancy contract", async () => {
+    const { url } = await startTestServer({
+      auth: { adminToken: "secret", singleUserMode: false, trustProxyHeaders: true }
+    });
+
+    const response = await fetchJson(`${url}/api/openroad/contract`);
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      apiVersion: "2026-07-04",
+      contract: {
+        auth: {
+          adminTokenConfigured: true,
+          singleUserMode: false,
+          trustedProxyHeadersEnabled: true
+        },
+        workspaceRoles: ["Owner", "Maintainer", "Contributor", "Viewer"]
+      }
+    });
+    expect(response.body.contract.routeProtections).toContainEqual(
+      expect.objectContaining({
+        path: "/api/openroad/state",
+        permission: "state:read"
+      })
+    );
   });
 
   it("persists valid state replacements", async () => {
@@ -98,12 +131,165 @@ describe("OpenRoad production server", () => {
     const after = await readFile(dataFile, "utf8");
 
     expect(invalidJson.status).toBe(400);
-    expect(invalidJson.body.error.code).toBe("invalid_json");
+    expect(invalidJson.body.error).toMatchObject({
+      code: "invalid_json",
+      status: 400
+    });
+    expect(invalidJson.body.error.requestId).toBe(invalidJson.body.requestId);
     expect(invalidState.status).toBe(422);
     expect(invalidState.body.error.code).toBe("invalid_state");
     expect(futureState.status).toBe(409);
     expect(futureState.body.error.code).toBe("future_schema");
     expect(after).toBe(before);
+  });
+
+  it("protects private state APIs when an admin token is configured", async () => {
+    const { url } = await startTestServer({
+      auth: { adminToken: "secret", singleUserMode: false }
+    });
+    const state = createInitialOpenRoadState();
+
+    const missing = await fetchJson(`${url}/api/openroad/state`);
+    const invalid = await fetchJson(`${url}/api/openroad/state`, {
+      headers: { Authorization: "Bearer wrong" }
+    });
+    const allowed = await fetchJson(`${url}/api/openroad/state`, {
+      headers: { Authorization: "Bearer secret" }
+    });
+    const deniedWrite = await fetchJson(`${url}/api/openroad/state`, {
+      body: JSON.stringify({ state }),
+      headers: { "Content-Type": "application/json" },
+      method: "PUT"
+    });
+
+    expect(missing.status).toBe(403);
+    expect(missing.body.error.code).toBe("forbidden");
+    expect(invalid.status).toBe(403);
+    expect(allowed.status).toBe(200);
+    expect(allowed.body.state.schemaVersion).toBe(openRoadSchemaVersion);
+    expect(deniedWrite.status).toBe(403);
+  });
+
+  it("allows configured admin token to replace state", async () => {
+    const { dataFile, url } = await startTestServer({
+      auth: { adminToken: "secret", singleUserMode: false }
+    });
+    const state = createInitialOpenRoadState();
+    const nextState = {
+      ...state,
+      workspaces: [
+        {
+          ...state.workspaces[0],
+          name: "Admin Workspace"
+        },
+        ...state.workspaces.slice(1)
+      ]
+    };
+
+    const response = await fetchJson(`${url}/api/openroad/state`, {
+      body: JSON.stringify({ state: nextState }),
+      headers: {
+        Authorization: "Bearer secret",
+        "Content-Type": "application/json"
+      },
+      method: "PUT"
+    });
+    const persisted = JSON.parse(await readFile(dataFile, "utf8")) as {
+      workspaces: Array<{ name: string }>;
+    };
+
+    expect(response.status).toBe(200);
+    expect(persisted.workspaces[0].name).toBe("Admin Workspace");
+  });
+
+  it("enforces workspace-scoped reads for trusted member actors", async () => {
+    const { url } = await startTestServer({
+      auth: { singleUserMode: false, trustProxyHeaders: true }
+    });
+
+    const ownWorkspace = await fetchJson(`${url}/api/openroad/workspaces/acme`, {
+      headers: workspaceActorHeaders("acme", "Viewer")
+    });
+    const otherWorkspace = await fetchJson(`${url}/api/openroad/workspaces/maintainer`, {
+      headers: workspaceActorHeaders("acme", "Viewer")
+    });
+
+    expect(ownWorkspace.status).toBe(200);
+    expect(ownWorkspace.body.workspace.id).toBe("acme");
+    expect(otherWorkspace.status).toBe(403);
+    expect(otherWorkspace.body.error.code).toBe("forbidden");
+  });
+
+  it("enforces action permissions by role and workspace scope", async () => {
+    const { store, url } = await startTestServer({
+      auth: { singleUserMode: false, trustProxyHeaders: true }
+    });
+    const state = createInitialOpenRoadState();
+    const request = {
+      ...state.workspaces[0].requests[0],
+      id: "contract-created-request",
+      title: "Contract-created request"
+    };
+
+    const viewerWrite = await fetchJson(`${url}/api/openroad/actions`, {
+      body: JSON.stringify({
+        action: { request, type: "create-request", workspaceId: "acme" }
+      }),
+      headers: {
+        ...workspaceActorHeaders("acme", "Viewer"),
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    const contributorCrossWorkspace = await fetchJson(`${url}/api/openroad/actions`, {
+      body: JSON.stringify({
+        action: { request, type: "create-request", workspaceId: "maintainer" }
+      }),
+      headers: {
+        ...workspaceActorHeaders("acme", "Contributor"),
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    const contributorWrite = await fetchJson(`${url}/api/openroad/actions`, {
+      body: JSON.stringify({
+        action: { request, type: "create-request", workspaceId: "acme" }
+      }),
+      headers: {
+        ...workspaceActorHeaders("acme", "Contributor"),
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    const nextState = await store.load();
+
+    expect(viewerWrite.status).toBe(403);
+    expect(contributorCrossWorkspace.status).toBe(403);
+    expect(contributorWrite.status).toBe(200);
+    expect(
+      nextState.state.workspaces[0].requests.some((item) => item.id === request.id)
+    ).toBe(true);
+  });
+
+  it("requires owner/admin permission for replace-state actions", async () => {
+    const { url } = await startTestServer({
+      auth: { singleUserMode: false, trustProxyHeaders: true }
+    });
+    const state = createInitialOpenRoadState();
+
+    const response = await fetchJson(`${url}/api/openroad/actions`, {
+      body: JSON.stringify({
+        action: { state, type: "replace-state" }
+      }),
+      headers: {
+        ...workspaceActorHeaders("acme", "Owner"),
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+
+    expect(response.status).toBe(403);
+    expect(response.body.error.code).toBe("forbidden");
   });
 
   it("returns public portal data without private workspace details", async () => {
@@ -164,10 +350,12 @@ describe("OpenRoad production server", () => {
 
     expect(response.status).toBe(405);
     expect(response.body.error.code).toBe("invalid_method");
+    expect(response.body.error.status).toBe(405);
+    expect(response.body.error.requestId).toBe(response.body.requestId);
   });
 });
 
-async function startTestServer() {
+async function startTestServer(options: { auth?: AuthOptions } = {}) {
   const directory = await mkdtemp(join(tmpdir(), "openroad-server-"));
   const distDir = join(directory, "dist");
   await mkdir(join(distDir, "assets"), { recursive: true });
@@ -179,6 +367,7 @@ async function startTestServer() {
   const store = new FileOpenRoadStore(dataFile);
   await store.load();
   const server = createOpenRoadServer({
+    auth: options.auth,
     distDir,
     logger: { error: vi.fn(), log: vi.fn() },
     store
@@ -187,6 +376,15 @@ async function startTestServer() {
   openServers.push(server);
 
   return { dataFile, store, url };
+}
+
+function workspaceActorHeaders(workspaceId: string, role: string) {
+  return {
+    "x-openroad-actor-id": `${workspaceId}-${role.toLowerCase()}`,
+    "x-openroad-actor-type": "workspace-member",
+    "x-openroad-workspace-id": workspaceId,
+    "x-openroad-workspace-role": role
+  };
 }
 
 function listen(server: Server) {

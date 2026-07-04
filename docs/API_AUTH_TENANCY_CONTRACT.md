@@ -92,6 +92,7 @@ Public portal responses use the OpenRoad public projection and must not include 
 - `GET /api/openroad/workspaces/:workspaceId/integrations/github/app/setup`
 - `POST /api/openroad/workspaces/:workspaceId/integrations/github/app/installations/verify`
 - `POST /api/openroad/workspaces/:workspaceId/integrations/github/app/installations/:installationId/disconnect`
+- `GET /api/openroad/workspaces/:workspaceId/integrations/status`
 - `POST /api/openroad/workspaces/:workspaceId/integrations/linear/issues/import`
 - `GET /api/openroad/workspaces/:workspaceId/integrations/linear/oauth/setup`
 - `POST /api/openroad/workspaces/:workspaceId/integrations/jira/issues/import`
@@ -110,6 +111,8 @@ Workspace-scoped action responses return the updated workspace and a revision ma
 GitHub issue import is workspace-scoped and requires workspace write permission. It accepts fixture/API payloads only in the current slice; it must not accept GitHub OAuth tokens, App private keys, webhook secrets, or raw credential fields.
 
 GitHub live issue fetch requires workspace write permission or a scoped integration actor. It generates short-lived installation access tokens server-side and must never persist, audit, or return those tokens.
+
+Workspace integration status requires workspace read permission. It returns bounded provider status, active installation counts, linked mapping counts, capability flags, and sanitized recent sync job summaries for the requested workspace only. It must not return credentials, encrypted secrets, installation tokens, webhook payloads, private keys, authorization headers, or cross-workspace records.
 
 GitHub App setup and installation verification require `integration:manage`, which is reserved for local owners/admins and workspace owners. Contributor, viewer, requester, public visitor, and integration actors cannot verify new GitHub App installations.
 

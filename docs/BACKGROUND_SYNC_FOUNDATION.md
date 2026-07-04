@@ -8,6 +8,7 @@ OpenRoad has a provider-neutral background sync job foundation for GitHub, Linea
 - Workspace owners/admins can enqueue sync jobs for active provider installations.
 - A private global sync runner endpoint can claim due jobs and process them through a server-side worker adapter.
 - The built-in production server wires a GitHub worker when GitHub App credentials are configured; otherwise the runner returns `503 not_configured` until a worker is available.
+- Browser Settings can show sanitized provider sync status and run manual GitHub linked-issue sync when a connected GitHub installation and worker are available.
 - Retryable failures stay queued with backoff and attempt metadata.
 - Running jobs have a lease and become claimable again after the lease expires, so a crashed process does not strand work forever.
 - Fatal failures are marked failed without deleting job history.
@@ -54,7 +55,7 @@ Future provider workers must fetch/decrypt credentials server-side through the c
 - Linear/Jira live fetch workers.
 - Provider write-back.
 - OAuth callback token exchange.
-- Browser Settings UI for manual sync controls.
+- Full browser connect/disconnect flows and Linear/Jira manual sync controls.
 - Conflict detection/resolution UI.
 - External queue systems.
 - Distributed locks across multiple Node processes.

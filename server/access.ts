@@ -183,6 +183,12 @@ export const routeProtections: RouteProtection[] = [
     scope: "workspace"
   },
   {
+    methods: ["GET"],
+    path: "/api/openroad/workspaces/:workspaceId/integrations/status",
+    permission: "workspace:read",
+    scope: "workspace"
+  },
+  {
     methods: ["POST"],
     path: "/api/openroad/workspaces/:workspaceId/integrations/linear/issues/import",
     permission: "workspace:write",

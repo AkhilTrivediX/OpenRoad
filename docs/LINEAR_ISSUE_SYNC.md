@@ -97,5 +97,5 @@ Linear issue assignees are preserved in the imported description and tags. OpenR
 - OAuth callback and token exchange.
 - Live GraphQL issue fetch.
 - Linear webhook endpoint with `Linear-Signature` verification.
-- Browser Settings UI for connect, import, disconnect, and sync logs.
+- Full browser connect/import/disconnect flows and Linear sync logs.
 - Background sync and conflict handling.

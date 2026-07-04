@@ -131,10 +131,11 @@ export function parseGitHubIssuePayload(value: unknown): GitHubIssue {
     "GitHub issue id"
   );
   const state = parseIssueState(getString(value.state));
-  const url =
-    getString(value.html_url) ??
-    getString(value.htmlUrl) ??
-    `https://github.com/${repository.fullName}/issues/${number}`;
+  const fallbackUrl = `https://github.com/${repository.fullName}/issues/${number}`;
+  const url = normalizeExternalUrl(
+    getString(value.html_url) ?? getString(value.htmlUrl),
+    fallbackUrl
+  );
 
   return {
     assignees: parseNamedUsers(value.assignees),
@@ -172,10 +173,11 @@ export function parseGitHubPullRequestPayload(value: unknown): GitHubPullRequest
     stateText === "closed" || stateText === "merged" || stateText === "open"
       ? stateText
       : "open";
-  const url =
-    getString(value.html_url) ??
-    getString(value.htmlUrl) ??
-    `https://github.com/${repository.fullName}/pull/${number}`;
+  const fallbackUrl = `https://github.com/${repository.fullName}/pull/${number}`;
+  const url = normalizeExternalUrl(
+    getString(value.html_url) ?? getString(value.htmlUrl),
+    fallbackUrl
+  );
 
   return {
     id,
@@ -334,10 +336,10 @@ function parseGitHubRepository(value: unknown): GitHubRepository {
     id: requireText(getString(value.node_id) ?? getString(value.nodeId) ?? getString(value.id), "GitHub repository id"),
     name: requireText(getString(value.name) ?? nameFromFullName, "GitHub repository name"),
     owner: requireText(parseRepositoryOwner(value.owner) ?? ownerFromFullName, "GitHub repository owner"),
-    url:
-      getString(value.html_url) ??
-      getString(value.htmlUrl) ??
-      `https://github.com/${fullName}`,
+    url: normalizeExternalUrl(
+      getString(value.html_url) ?? getString(value.htmlUrl),
+      `https://github.com/${fullName}`
+    ),
     visibility:
       value.private === true
         ? "private"
@@ -480,6 +482,20 @@ function getString(value: unknown) {
   if (typeof value === "string") return value.trim() || undefined;
   if (typeof value === "number" && Number.isFinite(value)) return String(value);
   return undefined;
+}
+
+function normalizeExternalUrl(value: string | undefined, fallback: string) {
+  if (!value) return fallback;
+
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:" && url.protocol !== "http:") return fallback;
+    url.search = "";
+    url.hash = "";
+    return url.toString();
+  } catch {
+    return fallback;
+  }
 }
 
 function getNumber(value: unknown, label: string) {

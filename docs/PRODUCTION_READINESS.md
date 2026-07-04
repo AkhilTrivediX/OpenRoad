@@ -177,18 +177,18 @@ These are known production gaps after the requester notifications and local assi
 - Backup/restore, local self-host smoke commands, and release candidate manifests exist, but published Docker images and hosted release promotion are not implemented.
 - Observability is limited to process logs; structured operational events and dashboards are pending.
 - Public portal write controls, persisted anonymous visitor vote identity, idempotent vote dedupe, and process-local rate limits exist, but notification preferences, CAPTCHA/external bot checks, and distributed abuse controls are pending.
-- Payload-backed GitHub issue import/link, GitHub App installation verification, live issue fetch, signed webhook handling, safe disconnect APIs, encrypted server-only provider credential storage, provider-neutral background sync job metadata, a GitHub worker for already-linked issue mappings, payload-backed Linear issue import/link, payload-backed Jira issue import/link, requester notification outbox/preferences, and JSONL notification delivery handoff exist, but Linear/Jira live workers, provider write-back, OAuth callback exchange, direct email/provider notification delivery, conflict UI, and browser Settings UI are not implemented yet.
+- Payload-backed GitHub issue import/link, GitHub App installation verification, live issue fetch, signed webhook handling, safe disconnect APIs, encrypted server-only provider credential storage, provider-neutral background sync job metadata, a GitHub worker for already-linked issue mappings, progressive browser Settings integration visibility with GitHub manual sync, payload-backed Linear issue import/link, payload-backed Jira issue import/link, requester notification outbox/preferences, and JSONL notification delivery handoff exist, but Linear/Jira live workers, provider write-back, OAuth callback exchange, full connect/disconnect Settings flows, direct email/provider notification delivery, and conflict UI are not implemented yet.
 - Deterministic local assistant triage exists, but real model-backed adapters, prompt redaction, user consent controls, AI audit logs, and external-provider policy review are not implemented yet.
 - Browser QA is manual rather than automated end-to-end CI.
 
 ## Next Production Move
 
-Next branch: `feat/settings-integrations-ui`
+Next branch: `feat/linear-sync-worker`
 
 Purpose:
 
-- Add a progressive-disclosure Settings surface for GitHub connection state, manual sync enqueue, and sync job visibility.
-- Preserve provider secret boundaries, install scope validation, disconnect behavior, retry behavior, and backup/restore safety.
+- Add a Linear live sync worker for already-linked Linear issue mappings on top of the same provider-neutral queue/runner boundary.
+- Preserve provider secret boundaries, install scope validation, retry behavior, and backup/restore safety.
 - Preserve the existing production gate: feature branch, test plan first, focused tests, `pnpm check`, browser QA when UI changes, smoke test, audit, merge, then push.
 
 Linear/Jira live fetch, Jira webhooks, provider write-back, direct email/provider notification delivery, and conflict UI remain hardening work that should stay behind server-only secret management, background job controls, and/or explicit delivery infrastructure.

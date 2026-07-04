@@ -1410,6 +1410,101 @@ describe("OpenRoad production server", () => {
     expect(integrations.state.syncJobs.map((job) => job.reason).sort()).toEqual(["manual", "scheduled"]);
   });
 
+  it("returns sanitized workspace integration status for settings", async () => {
+    const worker: IntegrationSyncWorker = {
+      async process() {
+        return { kind: "success", summary: "Worker synced installation." };
+      }
+    };
+    const { integrationStore, url } = await startTestServer({
+      auth: { adminToken: "secret", singleUserMode: false, trustProxyHeaders: true },
+      githubAppConfig: completeGitHubAppConfig(),
+      integrationSyncWorker: worker
+    });
+
+    await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/github/issues/import`, {
+      body: JSON.stringify(gitHubImportPayload()),
+      headers: {
+        Authorization: "Bearer secret",
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    const queued = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/github/sync/jobs`, {
+      body: JSON.stringify({ installationId: "github-install", reason: "manual" }),
+      headers: {
+        Authorization: "Bearer secret",
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    const current = await integrationStore.load();
+    await integrationStore.replaceState({
+      ...current.state,
+      syncJobs: current.state.syncJobs.map((job) =>
+        job.id === queued.body.job.id
+          ? {
+              ...job,
+              error: "Bearer raw-token-should-not-leak",
+              resultSummary: "access_token=raw-secret",
+              status: "failed"
+            }
+          : job
+      )
+    });
+
+    const publicStatus = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/status`
+    );
+    const acmeStatus = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/status`,
+      {
+        headers: workspaceActorHeaders("acme", "Viewer")
+      }
+    );
+    const maintainerStatus = await fetchJson(
+      `${url}/api/openroad/workspaces/maintainer/integrations/status`,
+      {
+        headers: workspaceActorHeaders("maintainer", "Viewer")
+      }
+    );
+    const github = acmeStatus.body.providers.find(
+      (provider: { provider: string }) => provider.provider === "github"
+    );
+    const maintainerGithub = maintainerStatus.body.providers.find(
+      (provider: { provider: string }) => provider.provider === "github"
+    );
+    const responseText = JSON.stringify(acmeStatus.body);
+
+    expect(publicStatus.status).toBe(403);
+    expect(acmeStatus.status).toBe(200);
+    expect(github).toMatchObject({
+      activeInstallations: 1,
+      capabilities: {
+        manualSync: true
+      },
+      connection: "connected",
+      linkedIssueMappings: 1,
+      provider: "github",
+      recentJobs: [
+        {
+          error: "Bearer [redacted]",
+          status: "failed"
+        }
+      ],
+      syncWorkerConfigured: true
+    });
+    expect(maintainerStatus.status).toBe(200);
+    expect(maintainerGithub).toMatchObject({
+      activeInstallations: 0,
+      linkedIssueMappings: 0
+    });
+    expect(responseText).not.toContain("raw-token-should-not-leak");
+    expect(responseText).not.toContain("raw-secret");
+    expect(responseText).not.toContain("encryptedSecret");
+    expect(responseText).not.toContain("github-access-secret");
+  });
+
   it("runs integration sync jobs through a private configured worker", async () => {
     const noWorker = await startTestServer({
       auth: { adminToken: "secret", singleUserMode: false, trustProxyHeaders: true },

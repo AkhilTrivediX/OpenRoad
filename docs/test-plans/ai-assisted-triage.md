@@ -106,12 +106,20 @@ As a maintainer, I can open a request and quickly understand likely duplicates, 
 ## Evidence
 
 - Branch: `feat/ai-assisted-triage`
-- Commit SHAs: pending.
+- Commit SHAs: `406cda6` test plan, `eaa827c` implementation.
 - Date: 2026-07-04.
-- Acceptance criteria status: pending.
-- Commands run: pending.
-- Browser/viewports tested: pending.
-- Accessibility checks: pending.
-- Reviewer notes: pending.
+- Acceptance criteria status: passed on branch before final audit and merge.
+- Commands run:
+  - `pnpm vitest run src/app/openroadAssistant.test.ts` passed 5 tests.
+  - `pnpm vitest run src/app/openroadAssistant.test.ts src/App.test.tsx` passed 51 tests.
+  - `pnpm check` passed 18 test files and 216 tests; production client and server builds passed.
+  - `node C:\Users\PC\.agents\skills\impeccable\scripts\detect.mjs --json src\App.tsx src\styles.css` returned no findings.
+  - Built-server smoke passed health, contract, portal, private-denied, and private-token checks with integration environment variables unset.
+- Browser/viewports tested:
+  - Desktop 1280x720 selected-request assistant panel rendered with no horizontal overflow on `body`, `.app-shell`, `.operations-deck`, `.inspector`, or `[aria-label="Assistant triage"]`.
+  - Desktop private draft action created a `Draft` and `Private` changelog entry and did not add the draft to the public changelog.
+  - Mobile 390x844 selected-request assistant panel rendered with no horizontal overflow on `body`, `.app-shell`, `.operations-deck`, `.inspector`, `[aria-label="Assistant triage"]`, or `.assistant-changelog`.
+- Accessibility checks: assistant region has `aria-label="Assistant triage"`; duplicate list has `aria-label="Duplicate suggestions"`; draft suggestion has `aria-label="Assistant changelog suggestion"`; draft creation uses a normal named button.
+- Reviewer notes: local deterministic assistant only; no external AI calls, API keys, prompt logs, telemetry, schema migration, persisted assistant state, or silent source-of-truth mutation. The changelog path requires an explicit maintainer click and creates a normal editable private draft.
 - Known unresolved risks: Real model-backed suggestions, server-side prompt redaction, user consent, AI audit logs, and external-provider policy review remain future slices.
 - Rollback notes: No schema migration expected; rollback by reverting the feature branch if suggestions remain derived-only.

@@ -38,9 +38,10 @@ OpenRoad now has a working standalone product loop, production server foundation
 - Safe Linear OAuth setup plus payload-backed Linear issue import/link.
 - Safe Jira OAuth setup plus payload-backed Jira issue import/link with explicit field mapping.
 - Requester notification preferences plus an internal outbox for status and changelog updates.
+- Deterministic local assistant triage for request summaries, duplicate hints, and private changelog draft suggestions.
 - Docker Compose, backup/restore, and smoke-check commands for self-host operators.
 
-Current production limits are explicit: OAuth/session auth, invitation flows, managed database migrations, hosted release promotion, deeper observability, browser Settings UI for integrations, Linear/Jira token exchange/live fetch/webhooks, background sync jobs, notification delivery adapters, and conflict UI are planned next-stage work.
+Current production limits are explicit: OAuth/session auth, invitation flows, managed database migrations, hosted release promotion, deeper observability, browser Settings UI for integrations, Linear/Jira token exchange/live fetch/webhooks, background sync jobs, notification delivery adapters, real model-backed AI adapters with consent/prompt redaction/audit logs, and conflict UI are planned next-stage work.
 
 Current docs:
 
@@ -55,6 +56,7 @@ Current docs:
 - [Linear issue sync](docs/LINEAR_ISSUE_SYNC.md)
 - [Jira issue sync](docs/JIRA_ISSUE_SYNC.md)
 - [Requester notifications](docs/REQUESTER_NOTIFICATIONS.md)
+- [AI-assisted triage](docs/AI_ASSISTED_TRIAGE.md)
 - [UI concepts](docs/UI_CONCEPTS.md)
 
 ## Working Rule

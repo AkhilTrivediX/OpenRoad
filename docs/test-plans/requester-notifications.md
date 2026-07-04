@@ -96,7 +96,7 @@ As a maintainer, I can see whether requesters want updates, queue useful notific
 ## Evidence
 
 - Branch: `feat/requester-notifications`
-- Commit SHAs: pending first implementation commit.
+- Commit SHAs: `9d06bd6` implementation, pending evidence commit.
 - Date: 2026-07-04.
 - Acceptance criteria status: passed on branch before commit.
 - Commands run:

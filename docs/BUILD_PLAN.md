@@ -10,7 +10,7 @@ Each feature must also satisfy `docs/PRODUCTION_READINESS.md` before merging to 
 
 Current stage: Stage 2 Team Beta foundation in progress.
 
-The standalone loop now covers workspaces, requests, triage, internal work, roadmap planning, changelog drafts, public portal preview, local durability, production APIs, basic tenancy boundaries, file-backed team metadata, audit events, self-host operations, a first app-module boundary, hardened public portal write APIs, the provider-neutral integration adapter contract, a payload-backed GitHub issue import/link API, server-only GitHub App installation verification, live GitHub issue fetch through verified installations, signed GitHub webhooks, and safe disconnect handling. The next production work should extend the adapter boundary to Linear before Jira complexity.
+The standalone loop now covers workspaces, requests, triage, internal work, roadmap planning, changelog drafts, public portal preview, local durability, production APIs, basic tenancy boundaries, file-backed team metadata, audit events, self-host operations, a first app-module boundary, hardened public portal write APIs, the provider-neutral integration adapter contract, a payload-backed GitHub issue import/link API, server-only GitHub App installation verification, live GitHub issue fetch through verified installations, signed GitHub webhooks, safe disconnect handling, and the first Linear issue import/link slice. The next production work should extend the adapter boundary to Jira field mapping.
 
 ## Feature 1: Workspace Shell
 
@@ -422,16 +422,20 @@ Acceptance:
 
 Branch: `feat/linear-issue-sync`
 
+Status: implemented and production-checked.
+
 Build:
 
-- Linear OAuth flow.
-- Import/link Linear issues/projects.
+- Safe Linear OAuth setup URL and state.
+- Payload-backed Linear issue import/link.
+- Linear installation and issue mappings in integration metadata.
 - Sync owner and status.
 
 Acceptance:
 
 - Linear uses the same adapter contract.
 - No Linear-specific logic leaks into core screens.
+- Linear tokens and client secrets are not persisted or returned.
 
 ## Feature 11: Jira Issue Sync
 

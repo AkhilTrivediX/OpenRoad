@@ -35,9 +35,10 @@ OpenRoad now has a working standalone product loop, production server foundation
 - Server-only GitHub App setup and installation verification foundation.
 - Live GitHub issue fetch through verified installations without persisted tokens.
 - Signed GitHub App webhook ingestion, idempotent linked issue sync, and safe disconnect handling.
+- Safe Linear OAuth setup plus payload-backed Linear issue import/link.
 - Docker Compose, backup/restore, and smoke-check commands for self-host operators.
 
-Current production limits are explicit: OAuth/session auth, invitation flows, managed database migrations, hosted release promotion, deeper observability, browser Settings UI for GitHub connect/disconnect, background sync jobs, and Linear/Jira adapters are planned next-stage work.
+Current production limits are explicit: OAuth/session auth, invitation flows, managed database migrations, hosted release promotion, deeper observability, browser Settings UI for integrations, Linear token exchange/live fetch/webhooks, background sync jobs, and Jira adapter work are planned next-stage work.
 
 Current docs:
 
@@ -49,6 +50,7 @@ Current docs:
 - [Integration adapter contract](docs/INTEGRATION_ADAPTER_CONTRACT.md)
 - [GitHub issue sync](docs/GITHUB_ISSUE_SYNC.md)
 - [GitHub App installation](docs/GITHUB_APP_INSTALLATION.md)
+- [Linear issue sync](docs/LINEAR_ISSUE_SYNC.md)
 - [UI concepts](docs/UI_CONCEPTS.md)
 
 ## Working Rule
@@ -110,6 +112,8 @@ The server exposes:
 - `POST /api/openroad/workspaces/:workspaceId/integrations/github/app/installations/verify`
 - `POST /api/openroad/workspaces/:workspaceId/integrations/github/app/installations/:installationId/disconnect`
 - `POST /api/openroad/integrations/github/webhook`
+- `POST /api/openroad/workspaces/:workspaceId/integrations/linear/issues/import`
+- `GET /api/openroad/workspaces/:workspaceId/integrations/linear/oauth/setup`
 - `GET /api/openroad/audit-events`
 - `GET /api/openroad/ops/status`
 - `GET /api/openroad/workspaces/:workspaceId/portal`

@@ -783,7 +783,42 @@ describe("OpenRoad workspace shell", () => {
     render(<App />);
 
     const inspector = screen.getByRole("complementary", { name: "API rate limit visibility" });
-    expect(within(inspector).getAllByRole("button")).toHaveLength(4);
+    expect(within(within(inspector).getByLabelText("Request actions")).getAllByRole("button")).toHaveLength(2);
+    expect(within(within(inspector).getByRole("form", { name: "Triage controls" })).getAllByRole("button")).toHaveLength(1);
+    expect(within(within(inspector).getByRole("form", { name: "Add comment" })).getByRole("button", { name: "Add comment" })).toBeInTheDocument();
+  });
+
+  it("shows assistant triage and creates a private changelog draft only after approval", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    const assistant = screen.getByLabelText("Assistant triage");
+    expect(within(assistant).getByText("Triage assist")).toBeInTheDocument();
+    const assistantToggle = within(assistant).getByRole("checkbox", {
+      name: "Assistant suggestions"
+    });
+    expect(assistantToggle).toBeChecked();
+    expect(within(assistant).getByText("Possible duplicates")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("complementary", {
+        name: "Selected changelog draft Review roadmap item for changelog"
+      })
+    ).not.toBeInTheDocument();
+    await user.click(assistantToggle);
+    expect(within(assistant).getByText("Assistant suggestions are paused for this session.")).toBeInTheDocument();
+    expect(within(assistant).queryByRole("button", { name: "Create private draft" })).not.toBeInTheDocument();
+    await user.click(assistantToggle);
+
+    await user.click(within(assistant).getByRole("button", { name: "Create private draft" }));
+    const changelogDetail = screen.getByRole("complementary", {
+      name: "Selected changelog draft Review roadmap item for changelog"
+    });
+
+    expect(within(changelogDetail).getByLabelText("State for Review roadmap item for changelog")).toHaveValue("Draft");
+    expect(within(changelogDetail).getByLabelText("Visibility for Review roadmap item for changelog")).toHaveValue("Private");
+    expect(within(changelogDetail).getByLabelText("Public wording for Review roadmap item for changelog")).toHaveValue(
+      "A roadmap update may be ready. Review this private draft and write approved public wording before publishing."
+    );
   });
 
   it("archives requests and shows archived requests through the queue filter", async () => {

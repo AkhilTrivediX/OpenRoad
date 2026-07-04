@@ -20,6 +20,7 @@ import {
   Search,
   Settings,
   SlidersHorizontal,
+  Sparkles,
   Tag,
   ThumbsUp,
   Unlink,
@@ -83,6 +84,7 @@ import {
   createChangelogSourceChoices,
   type ChangelogSourceChoice
 } from "./app/openroadChangelog";
+import { createAssistantTriageSuggestion } from "./app/openroadAssistant";
 import {
   emptyChangelogDraft,
   emptyPortalCommentDraft,
@@ -171,6 +173,7 @@ export function App() {
   const [portalCommentDraft, setPortalCommentDraft] =
     useState<PortalCommentDraft>(emptyPortalCommentDraft);
   const [workCommentDraft, setWorkCommentDraft] = useState("");
+  const [isAssistantEnabled, setIsAssistantEnabled] = useState(true);
   const [duplicateMergeTargetId, setDuplicateMergeTargetId] = useState("");
   const [selectedRequestIdByWorkspace, setSelectedRequestIdByWorkspace] = useState<
     Record<string, string | undefined>
@@ -349,6 +352,13 @@ export function App() {
             .slice(0, 4)
         : [],
     [selectedRequest, workspace.notifications.outbox]
+  );
+  const selectedAssistantSuggestion = useMemo(
+    () =>
+      selectedRequest && isAssistantEnabled
+        ? createAssistantTriageSuggestion(workspace, selectedRequest, roadmapItems)
+        : null,
+    [isAssistantEnabled, roadmapItems, selectedRequest, workspace]
   );
   const selectedWorkItem = useMemo(() => {
     const selectedWorkItemId = selectedWorkItemIdByWorkspace[workspace.id];
@@ -601,6 +611,40 @@ export function App() {
       title: sourceChoice.title,
       workItemIds: sourceChoice.workItemIds
     }));
+  }
+
+  function createAssistantChangelogDraft() {
+    if (!selectedAssistantSuggestion) return;
+
+    const suggestion = selectedAssistantSuggestion.changelogSuggestion;
+    const sourceId =
+      suggestion.sourceKey === "manual"
+        ? ""
+        : suggestion.sourceKey.split(":").slice(1).join(":");
+    const createdChangelogItem: ChangelogItem = {
+      createdAt: "just now",
+      id: createEntityId("changelog"),
+      privateNotes: suggestion.privateNotes,
+      publicSummary: suggestion.publicSummary,
+      requestIds: Array.from(new Set(suggestion.requestIds)),
+      roadmapItemIds: Array.from(new Set(suggestion.roadmapItemIds)),
+      sourceId,
+      sourceType: suggestion.sourceType,
+      state: "Draft",
+      title: suggestion.title,
+      updatedAt: "just now",
+      visibility: "Private",
+      workItemIds: Array.from(new Set(suggestion.workItemIds))
+    };
+
+    dispatchOpenRoad({
+      changelogItem: createdChangelogItem,
+      type: "create-changelog-item",
+      workspaceId: workspace.id
+    });
+    setIsAddingChangelogItem(false);
+    setNewChangelogDraft(emptyChangelogDraft);
+    selectChangelogItem(createdChangelogItem.id);
   }
 
   function createWorkspace(event: FormEvent<HTMLFormElement>) {
@@ -1795,6 +1839,87 @@ export function App() {
                     <dd>{selectedRequest.archived ? "Archived" : "Active"}</dd>
                   </div>
                 </dl>
+
+                {selectedRequest ? (
+                  <div className="assistant-panel" aria-label="Assistant triage">
+                    <div className="source-history-header">
+                      <Sparkles aria-hidden="true" size={14} />
+                      <strong>Triage assist</strong>
+                      <label className="assistant-toggle">
+                        <input
+                          checked={isAssistantEnabled}
+                          onChange={(event) => setIsAssistantEnabled(event.target.checked)}
+                          type="checkbox"
+                        />
+                        <span>Assistant suggestions</span>
+                      </label>
+                    </div>
+
+                    {selectedAssistantSuggestion ? (
+                      <>
+                        <div className="assistant-summary">
+                          <div>
+                            <span>Problem</span>
+                            <p>{selectedAssistantSuggestion.summary.problem}</p>
+                          </div>
+                          <div>
+                            <span>Signal</span>
+                            <p>{selectedAssistantSuggestion.summary.signal}</p>
+                          </div>
+                          <div>
+                            <span>Next</span>
+                            <p>{selectedAssistantSuggestion.summary.nextAction}</p>
+                          </div>
+                        </div>
+
+                        <div className="assistant-suggestions" aria-label="Duplicate suggestions">
+                          <strong>Possible duplicates</strong>
+                          {selectedAssistantSuggestion.duplicates.length ? (
+                            selectedAssistantSuggestion.duplicates.map((suggestion) => (
+                              <article
+                                className="assistant-suggestion"
+                                key={suggestion.request.id}
+                              >
+                                <span>
+                                  <strong>{suggestion.request.title}</strong>
+                                  <small>{suggestion.score} match</small>
+                                </span>
+                                <p>{suggestion.reasons.join(". ")}</p>
+                              </article>
+                            ))
+                          ) : (
+                            <small className="quiet-note">No strong duplicate signal.</small>
+                          )}
+                        </div>
+
+                        <div
+                          className="assistant-changelog"
+                          aria-label="Assistant changelog suggestion"
+                        >
+                          <span>
+                            <strong>{selectedAssistantSuggestion.changelogSuggestion.title}</strong>
+                            <small>
+                              {selectedAssistantSuggestion.changelogSuggestion.reasons.join(" / ")}
+                            </small>
+                          </span>
+                          <p>{selectedAssistantSuggestion.changelogSuggestion.publicSummary}</p>
+                          <button
+                            className="secondary-action compact"
+                            onClick={createAssistantChangelogDraft}
+                            type="button"
+                          >
+                            <Plus aria-hidden="true" size={14} />
+                            Create private draft
+                          </button>
+                        </div>
+                      </>
+                    ) : (
+                      <div className="assistant-paused">
+                        <span>Assistant suggestions are paused for this session.</span>
+                      </div>
+                    )}
+                  </div>
+                ) : null}
 
                 {selectedRequestNotificationPreference ? (
                   <div className="notification-panel" aria-label="Requester notifications">

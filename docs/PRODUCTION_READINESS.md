@@ -168,7 +168,7 @@ OpenRoad releases must eventually include:
 
 ## Current Readiness Debt
 
-These are known production gaps after the GitHub Webhook And Disconnect Hardening foundation.
+These are known production gaps after the requester notifications and local assistant triage foundations.
 
 - App-level error boundary is still pending.
 - Some UI orchestration still lives inside `App.tsx`; the first helper/module extraction is complete, but component-level splitting remains future work.
@@ -179,16 +179,17 @@ These are known production gaps after the GitHub Webhook And Disconnect Hardenin
 - Observability is limited to process logs; structured operational events and dashboards are pending.
 - Public portal write controls and process-local rate limits exist, but persistent requester identity, notification preferences, and distributed abuse controls are pending.
 - Payload-backed GitHub issue import/link, GitHub App installation verification, live issue fetch, signed webhook handling, safe disconnect APIs, payload-backed Linear issue import/link, payload-backed Jira issue import/link, and requester notification outbox/preferences exist, but background sync jobs, provider token storage, notification delivery adapters, conflict UI, and browser Settings UI are not implemented yet.
+- Deterministic local assistant triage exists, but real model-backed adapters, prompt redaction, user consent controls, AI audit logs, and external-provider policy review are not implemented yet.
 - Browser QA is manual rather than automated end-to-end CI.
 
 ## Next Production Move
 
-Next branch: `feat/ai-assisted-triage`
+Next branch: `feat/public-release-ops`
 
 Purpose:
 
-- Add AI duplicate suggestions, request summaries, and changelog draft suggestions with inspectable human approval.
-- Keep AI out of source-of-truth mutation unless a maintainer explicitly accepts a suggestion.
-- Preserve standalone OpenRoad workflows and public/private visibility boundaries.
+- Add release candidate discipline, versioning, security patch flow, and self-host upgrade notes.
+- Make `main` promotion more repeatable for SaaS and self-host builds.
+- Preserve the existing production gate: feature branch, test plan first, focused tests, `pnpm check`, browser QA when UI changes, smoke test, audit, merge, then push.
 
 Provider token storage, live Linear/Jira fetch, Jira webhooks, notification delivery adapters, and conflict UI remain hardening work that should stay behind server-only secret management and/or explicit delivery infrastructure.

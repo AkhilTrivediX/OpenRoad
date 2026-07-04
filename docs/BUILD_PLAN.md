@@ -10,7 +10,7 @@ Each feature must also satisfy `docs/PRODUCTION_READINESS.md` before merging to 
 
 Current stage: Stage 2 Team Beta foundation in progress.
 
-The standalone loop now covers workspaces, requests, triage, internal work, roadmap planning, changelog drafts, public portal preview, local durability, production APIs, basic tenancy boundaries, file-backed team metadata, audit events, self-host operations, a first app-module boundary, hardened public portal write APIs, the provider-neutral integration adapter contract, a payload-backed GitHub issue import/link API, server-only GitHub App installation verification, live GitHub issue fetch through verified installations, signed GitHub webhooks, safe disconnect handling, Linear issue import/link, Jira issue import/link with explicit field mapping, and requester notification preferences/outbox events. The next production work should move into AI assistance while provider token storage/live sync and notification delivery adapters remain separate hardening slices.
+The standalone loop now covers workspaces, requests, triage, internal work, roadmap planning, changelog drafts, public portal preview, local durability, production APIs, basic tenancy boundaries, file-backed team metadata, audit events, self-host operations, a first app-module boundary, hardened public portal write APIs, the provider-neutral integration adapter contract, a payload-backed GitHub issue import/link API, server-only GitHub App installation verification, live GitHub issue fetch through verified installations, signed GitHub webhooks, safe disconnect handling, Linear issue import/link, Jira issue import/link with explicit field mapping, requester notification preferences/outbox events, and deterministic local assistant triage. The next production work should move into public release operations while provider token storage/live sync, notification delivery adapters, and real model-backed AI adapters remain separate hardening slices.
 
 ## Feature 1: Workspace Shell
 
@@ -481,17 +481,25 @@ Acceptance:
 
 Branch: `feat/ai-assisted-triage`
 
+Status: implemented and production-checked.
+
 Build:
 
 - Duplicate suggestions.
 - Request summaries.
 - Changelog draft suggestions.
 - Explanation UI for suggestions.
+- Deterministic local-only assistant engine for the first production-safe slice.
+- Explicit approval before creating a private changelog draft.
+- Session-level pause control for assistant suggestions.
+- Generic changelog public fields until a maintainer writes approved copy.
 
 Acceptance:
 
 - AI never silently changes source-of-truth data.
 - Every AI action is inspectable and requires human approval.
+- No assistant suggestion is persisted or sent to external model APIs in this slice.
+- Assistant-generated changelog public fields do not copy private request, work, or roadmap source text.
 
 ## Feature 14: Public Release Operations
 

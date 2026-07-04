@@ -581,6 +581,27 @@ Acceptance:
 - Linked Linear-backed requests refresh without persisting or returning Linear access tokens.
 - GitHub worker behavior, standalone mode, Jira queued jobs, backup/restore, and release checks continue to pass.
 
+## Feature 11F: Jira Sync Worker
+
+Branch: `feat/jira-sync-worker`
+
+Status: planned; implementation must follow `docs/test-plans/jira-sync-worker.md`.
+
+Build:
+
+- Server-side Jira Cloud REST client with injectable fetch and bounded provider errors.
+- Server-side Jira sync worker using encrypted provider credentials from the token vault.
+- Provider sync dispatcher parity across GitHub, Linear, and Jira workers.
+- Refresh of already-linked Jira issue mappings only; no JQL search, project listing, or surprise unmapped issue import.
+- Request updates through the established Jira mapper and mapping `lastSyncedAt` updates.
+- Settings manual sync enablement for Jira only when worker, active credential, active installation, and linked issue mapping are present.
+
+Acceptance:
+
+- Private runner processes Jira jobs when encrypted credentials are ready and stays `503 not_configured` when no provider worker is available.
+- Linked Jira-backed requests refresh without persisting or returning Atlassian access tokens.
+- GitHub and Linear worker behavior, standalone mode, backup/restore, and release checks continue to pass.
+
 ## Feature 12: Requester Notifications
 
 Branch: `feat/requester-notifications`

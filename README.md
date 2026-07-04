@@ -42,6 +42,7 @@ Current docs:
 - [Build plan](docs/BUILD_PLAN.md)
 - [Test strategy](docs/TEST_STRATEGY.md)
 - [Branching and release workflow](docs/BRANCHING_AND_RELEASE.md)
+- [Integration adapter contract](docs/INTEGRATION_ADAPTER_CONTRACT.md)
 - [UI concepts](docs/UI_CONCEPTS.md)
 
 ## Working Rule

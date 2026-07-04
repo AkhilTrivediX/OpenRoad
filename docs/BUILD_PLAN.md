@@ -10,7 +10,7 @@ Each feature must also satisfy `docs/PRODUCTION_READINESS.md` before merging to 
 
 Current stage: Stage 2 Team Beta foundation in progress.
 
-The standalone loop now covers workspaces, requests, triage, internal work, roadmap planning, changelog drafts, public portal preview, local durability, production APIs, basic tenancy boundaries, file-backed team metadata, audit events, self-host operations, a first app-module boundary, and hardened public portal write APIs. The next production work should define the integration adapter boundary before GitHub, Linear, or Jira-specific work.
+The standalone loop now covers workspaces, requests, triage, internal work, roadmap planning, changelog drafts, public portal preview, local durability, production APIs, basic tenancy boundaries, file-backed team metadata, audit events, self-host operations, a first app-module boundary, hardened public portal write APIs, and the provider-neutral integration adapter contract. The next production work should implement the first provider-specific slice on top of that boundary.
 
 ## Feature 1: Workspace Shell
 
@@ -312,14 +312,17 @@ Acceptance:
 
 Branch: `feat/integration-adapter-contract`
 
+Status: implemented and production-checked.
+
 Build:
 
 - Provider adapter interface.
 - External objects and links.
-- Sync state.
+- Sync job/result state.
 - Sync conflict model.
-- Webhook event model.
-- Hidden sync logs in Settings.
+- Deterministic provider object identity.
+- Installation/workspace mapping validation.
+- Provider fixture validation.
 
 Acceptance:
 
@@ -336,6 +339,8 @@ Dependencies:
 ## Feature 9: GitHub Issue Sync
 
 Branch: `feat/github-issue-sync`
+
+Status: next.
 
 Build:
 

@@ -10,7 +10,7 @@ export const requestVisibilities = ["Private", "Public"] as const;
 export const commentVisibilities = ["Internal", "Public", "Hidden"] as const;
 export const notificationEventTypes = ["request-status-change", "changelog-published"] as const;
 export const notificationEventStatuses = ["queued", "held"] as const;
-export const openRoadSchemaVersion = 5;
+export const openRoadSchemaVersion = 6;
 export const openRoadStorageKey = "openroad:state:v1";
 export const openRoadSelectedWorkspaceKey = "openroad:selected-workspace:v1";
 
@@ -55,6 +55,7 @@ export type RequestItem = {
   tags: string[];
   votes: number;
   hasCurrentUserVote: boolean;
+  publicVoterKeys: string[];
   status: RequestStatus;
   owner: RequestOwner;
   visibility: RequestVisibility;
@@ -237,6 +238,11 @@ export type PublicPortalSnapshot = {
   changelogCount: number;
 };
 
+export type PublicPortalSnapshotOptions = {
+  exposeLocalVoteState?: boolean;
+  publicVoterKey?: string;
+};
+
 export type LoadOpenRoadResult = {
   error?: string;
   state: OpenRoadState;
@@ -362,6 +368,7 @@ export const initialWorkspaces: Workspace[] = [
         tags: ["api", "usage"],
         votes: 142,
         hasCurrentUserVote: false,
+        publicVoterKeys: [],
         status: "Needs decision",
         owner: "Unassigned",
         visibility: "Public",
@@ -388,6 +395,7 @@ export const initialWorkspaces: Workspace[] = [
         tags: ["export", "success"],
         votes: 97,
         hasCurrentUserVote: false,
+        publicVoterKeys: [],
         status: "Planned",
         owner: "Support",
         visibility: "Private",
@@ -405,6 +413,7 @@ export const initialWorkspaces: Workspace[] = [
         tags: ["docs", "theme"],
         votes: 89,
         hasCurrentUserVote: false,
+        publicVoterKeys: [],
         status: "New",
         owner: "Unassigned",
         visibility: "Public",
@@ -423,6 +432,7 @@ export const initialWorkspaces: Workspace[] = [
         tags: ["webhooks"],
         votes: 76,
         hasCurrentUserVote: true,
+        publicVoterKeys: [],
         status: "Shipping soon",
         owner: "Akhil",
         visibility: "Private",
@@ -538,6 +548,7 @@ export const initialWorkspaces: Workspace[] = [
         tags: ["community", "docs"],
         votes: 34,
         hasCurrentUserVote: false,
+        publicVoterKeys: [],
         status: "New",
         owner: "Maintainer",
         visibility: "Public",
@@ -555,6 +566,7 @@ export const initialWorkspaces: Workspace[] = [
         tags: ["release", "rss"],
         votes: 21,
         hasCurrentUserVote: false,
+        publicVoterKeys: [],
         status: "Planned",
         owner: "Unassigned",
         visibility: "Private",
@@ -572,6 +584,7 @@ export const initialWorkspaces: Workspace[] = [
         tags: ["community"],
         votes: 19,
         hasCurrentUserVote: false,
+        publicVoterKeys: [],
         status: "Needs decision",
         owner: "Unassigned",
         visibility: "Private",
@@ -1082,7 +1095,8 @@ function createEmptyPublicRoadmap(): Record<RoadmapLane, PublicPortalRoadmapItem
 
 export function createPublicPortalSnapshot(
   workspace: Workspace,
-  query = ""
+  query = "",
+  options: PublicPortalSnapshotOptions = {}
 ): PublicPortalSnapshot {
   const normalizedQuery = normalizeSearchText(query);
   const allPublicRequests = workspace.requests.filter(
@@ -1095,7 +1109,7 @@ export function createPublicPortalSnapshot(
         [request.title, request.description, request.tags.join(" ")].join(" ")
       ).includes(normalizedQuery);
     })
-    .map(publicPortalRequestFromRequest);
+    .map((request) => publicPortalRequestFromRequest(request, options));
 
   const roadmap = createEmptyPublicRoadmap();
   for (const lane of roadmapLanes) {
@@ -1140,7 +1154,10 @@ export function createPublicPortalSnapshot(
   };
 }
 
-function publicPortalRequestFromRequest(request: RequestItem): PublicPortalRequest {
+function publicPortalRequestFromRequest(
+  request: RequestItem,
+  options: PublicPortalSnapshotOptions
+): PublicPortalRequest {
   return {
     age: request.age,
     comments: request.comments
@@ -1152,13 +1169,24 @@ function publicPortalRequestFromRequest(request: RequestItem): PublicPortalReque
         id: comment.id
       })),
     description: request.description,
-    hasCurrentUserVote: request.hasCurrentUserVote,
+    hasCurrentUserVote: getPublicPortalVoteState(request, options),
     id: request.id,
     status: request.status,
     tags: [...request.tags],
     title: request.title,
     votes: request.votes
   };
+}
+
+function getPublicPortalVoteState(
+  request: RequestItem,
+  options: PublicPortalSnapshotOptions
+) {
+  if (options.publicVoterKey) {
+    return request.publicVoterKeys.includes(options.publicVoterKey);
+  }
+
+  return options.exposeLocalVoteState === false ? false : request.hasCurrentUserVote;
 }
 
 export function loadOpenRoadState(storage = getBrowserStorage()): LoadOpenRoadResult {
@@ -1276,6 +1304,7 @@ export function migrateOpenRoadState(value: unknown): OpenRoadState {
       value.schemaVersion === 2 ||
       value.schemaVersion === 3 ||
       value.schemaVersion === 4 ||
+      value.schemaVersion === 5 ||
       value.schemaVersion === 0 ||
       value.schemaVersion === undefined) &&
     Array.isArray(value.workspaces)
@@ -1346,6 +1375,7 @@ function migrateRequestsFromPreviousSchema(value: unknown): RequestItem[] {
     const migrated = {
       ...request,
       comments: migrateRequestCommentsFromPreviousSchema(request.comments),
+      publicVoterKeys: sanitizePublicVoterKeys(request.publicVoterKeys),
       visibility: requestVisibilities.includes(request.visibility as RequestVisibility)
         ? request.visibility
         : request.source === "Portal"
@@ -1359,6 +1389,32 @@ function migrateRequestsFromPreviousSchema(value: unknown): RequestItem[] {
 
     return cloneValue(migrated);
   });
+}
+
+function sanitizePublicVoterKeys(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+
+  return Array.from(
+    new Set(
+      value
+        .filter((item): item is string => typeof item === "string")
+        .map(normalizePublicVoterKey)
+        .filter(Boolean)
+    )
+  );
+}
+
+function normalizePublicVoterKey(value: string) {
+  return value.trim().toLowerCase().replace(/[^a-z0-9_.:@-]+/g, "-").slice(0, 120);
+}
+
+function isPublicVoterKey(value: unknown) {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= 120 &&
+    value === normalizePublicVoterKey(value)
+  );
 }
 
 function migrateRequestCommentsFromPreviousSchema(value: unknown): RequestComment[] {
@@ -1515,6 +1571,8 @@ function isRequestItem(value: unknown): value is RequestItem {
     Array.isArray(value.tags) &&
     typeof value.votes === "number" &&
     typeof value.hasCurrentUserVote === "boolean" &&
+    Array.isArray(value.publicVoterKeys) &&
+    value.publicVoterKeys.every(isPublicVoterKey) &&
     requestStatuses.includes(value.status as RequestStatus) &&
     requestOwners.includes(value.owner as RequestOwner) &&
     requestVisibilities.includes(value.visibility as RequestVisibility) &&

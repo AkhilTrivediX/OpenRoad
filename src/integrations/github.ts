@@ -221,6 +221,7 @@ export function createOpenRoadRequestFromGitHubIssue(
     comments: [createGitHubSyncComment(issue, now)],
     description: createGitHubIssueDescription(issue),
     hasCurrentUserVote: false,
+    publicVoterKeys: [],
     id:
       options.requestId ??
       createGitHubRequestId(issue, new Set(options.existingRequestIds ?? [])),

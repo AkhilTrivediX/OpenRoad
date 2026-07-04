@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
@@ -155,6 +156,9 @@ const jsonHeaders = {
   "X-Content-Type-Options": "nosniff"
 };
 
+const portalVisitorCookieName = "openroad_portal_visitor";
+const portalVisitorCookieMaxAgeSeconds = 60 * 60 * 24 * 365;
+
 const staticMimeTypes: Record<string, string> = {
   ".css": "text/css; charset=utf-8",
   ".html": "text/html; charset=utf-8",
@@ -186,9 +190,12 @@ const openRoadActionTypes = new Set([
 type PortalActionKind = "comment" | "vote";
 
 type PortalRequester = {
+  cookieHeaders: Record<string, string>;
   id: string;
   name: string;
   rateLimitKey: string;
+  visitorId: string;
+  voterKey: string;
 };
 
 export class InMemoryPortalRateLimiter implements PortalRateLimiter {
@@ -2932,12 +2939,17 @@ async function handlePortalRequest(
     return;
   }
 
+  const requester = getPortalRequester(undefined, request, workspaceId);
+
   writeJson(
     response,
     200,
-    createPublicPortalSnapshot(workspace, requestUrl.searchParams.get("query") ?? "")
-    ,
-    access
+    createPublicPortalSnapshot(workspace, requestUrl.searchParams.get("query") ?? "", {
+      exposeLocalVoteState: false,
+      publicVoterKey: requester.voterKey
+    }),
+    access,
+    requester.cookieHeaders
   );
 }
 
@@ -3032,6 +3044,31 @@ async function handlePortalVoteRequest(
     requirePermission(requesterAccess, "portal:interact", workspaceId);
 
     const result = await store.load();
+    const currentRequest = getPublicPortalActionTarget(
+      result.state,
+      workspaceId,
+      requestId,
+      "vote"
+    );
+    consumePortalRateLimit(portalRateLimiter, requester.rateLimitKey);
+
+    if (currentRequest.publicVoterKeys.includes(requester.voterKey)) {
+      writeJson(
+        response,
+        200,
+        getPublicPortalRequestPayload(
+          result.state,
+          workspaceId,
+          requestId,
+          requester.voterKey,
+          "already_saved"
+        ),
+        access,
+        requester.cookieHeaders
+      );
+      return;
+    }
+
     const nextState = updatePublicPortalRequest(
       result.state,
       workspaceId,
@@ -3040,17 +3077,23 @@ async function handlePortalVoteRequest(
       (requestItem) => ({
         ...requestItem,
         hasCurrentUserVote: true,
+        publicVoterKeys: [...requestItem.publicVoterKeys, requester.voterKey],
         votes: requestItem.votes + 1
       })
     );
-    consumePortalRateLimit(portalRateLimiter, requester.rateLimitKey);
     const state = await store.replaceState(nextState);
     await recordAuditEvent(teamStore, state, requesterAccess, {
       summary: `Public portal vote recorded for ${requestId}.`,
       type: "portal.vote",
       workspaceId
     });
-    writeJson(response, 200, getPublicPortalRequestPayload(state, workspaceId, requestId), access);
+    writeJson(
+      response,
+      200,
+      getPublicPortalRequestPayload(state, workspaceId, requestId, requester.voterKey, "saved"),
+      access,
+      requester.cookieHeaders
+    );
   } catch (error) {
     writeKnownApiError(response, error, access);
   }
@@ -3082,6 +3125,8 @@ async function handlePortalCommentRequest(
     requirePermission(requesterAccess, "portal:interact", workspaceId);
 
     const result = await store.load();
+    getPublicPortalActionTarget(result.state, workspaceId, requestId, "comment");
+    consumePortalRateLimit(portalRateLimiter, requester.rateLimitKey);
     const nextState = updatePublicPortalRequest(
       result.state,
       workspaceId,
@@ -3101,14 +3146,19 @@ async function handlePortalCommentRequest(
         ]
       })
     );
-    consumePortalRateLimit(portalRateLimiter, requester.rateLimitKey);
     const state = await store.replaceState(nextState);
     await recordAuditEvent(teamStore, state, requesterAccess, {
       summary: `Public portal comment recorded for ${requestId}.`,
       type: "portal.comment",
       workspaceId
     });
-    writeJson(response, 201, getPublicPortalRequestPayload(state, workspaceId, requestId), access);
+    writeJson(
+      response,
+      201,
+      getPublicPortalRequestPayload(state, workspaceId, requestId, requester.voterKey, "saved"),
+      access,
+      requester.cookieHeaders
+    );
   } catch (error) {
     writeKnownApiError(response, error, access);
   }
@@ -3135,7 +3185,7 @@ function updatePublicPortalRequest(
     throw new PortalActionError("not_found", 404, "Workspace was not found.");
   }
 
-  assertPortalActionAllowed(workspace, requestId, actionKind);
+  getPublicPortalActionTargetFromWorkspace(workspace, requestId, actionKind);
 
   return {
     ...state,
@@ -3152,7 +3202,22 @@ function updatePublicPortalRequest(
   };
 }
 
-function assertPortalActionAllowed(
+function getPublicPortalActionTarget(
+  state: OpenRoadState,
+  workspaceId: string,
+  requestId: string,
+  actionKind: PortalActionKind
+) {
+  const workspace = state.workspaces.find((item) => item.id === workspaceId);
+
+  if (!workspace) {
+    throw new PortalActionError("not_found", 404, "Workspace was not found.");
+  }
+
+  return getPublicPortalActionTargetFromWorkspace(workspace, requestId, actionKind);
+}
+
+function getPublicPortalActionTargetFromWorkspace(
   workspace: Workspace,
   requestId: string,
   actionKind: PortalActionKind
@@ -3174,23 +3239,30 @@ function assertPortalActionAllowed(
   if (!requestItem || requestItem.visibility !== "Public" || requestItem.archived) {
     throw new PortalActionError("not_found", 404, "Public request was not found.");
   }
+
+  return requestItem;
 }
 
 function getPublicPortalRequestPayload(
   state: OpenRoadState,
   workspaceId: string,
-  requestId: string
+  requestId: string,
+  publicVoterKey: string,
+  status: "already_saved" | "saved"
 ) {
   const workspace = state.workspaces.find((item) => item.id === workspaceId);
   const request = workspace
-    ? createPublicPortalSnapshot(workspace).requests.find((item) => item.id === requestId)
+    ? createPublicPortalSnapshot(workspace, "", {
+        exposeLocalVoteState: false,
+        publicVoterKey
+      }).requests.find((item) => item.id === requestId)
     : undefined;
 
   if (!request) {
     throw new PortalActionError("not_found", 404, "Public request was not found.");
   }
 
-  return { request, status: "saved" };
+  return { request, status };
 }
 
 function getPortalRequester(
@@ -3200,22 +3272,75 @@ function getPortalRequester(
 ): PortalRequester {
   const requester = isRecord(payload) && isRecord(payload.requester) ? payload.requester : {};
   const remoteAddress = request.socket.remoteAddress ?? "unknown";
+  const cookieVisitorId = getPortalVisitorCookie(request);
+  const headerVisitorId = getSingleHeader(request.headers, "x-openroad-visitor-id");
   const headerRequesterId = getSingleHeader(request.headers, "x-openroad-requester-id");
-  const rawId =
+  const rawRequesterId =
     getBoundedText(requester.id, 120) ??
-    getBoundedText(headerRequesterId, 120) ??
-    `anonymous-${remoteAddress}`;
-  const normalizedId = normalizeIdentifier(rawId) || normalizeIdentifier(`anonymous-${remoteAddress}`);
+    getBoundedText(headerRequesterId, 120);
+  const visitorId =
+    normalizePortalVisitorId(cookieVisitorId) ??
+    normalizePortalVisitorId(headerVisitorId) ??
+    normalizePortalVisitorId(rawRequesterId) ??
+    createPortalVisitorId();
+  const normalizedId =
+    normalizeIdentifier(rawRequesterId ?? visitorId) || normalizeIdentifier(visitorId);
   const name =
     getBoundedText(requester.name, 80) ??
     getBoundedText(isRecord(payload) ? payload.author : undefined, 80) ??
     "Portal visitor";
 
   return {
+    cookieHeaders: {
+      "Set-Cookie": createPortalVisitorCookie(visitorId),
+      "X-OpenRoad-Visitor-Id": visitorId
+    },
     id: normalizedId,
     name,
-    rateLimitKey: `${workspaceId}:${remoteAddress}:${normalizedId}`
+    rateLimitKey: `${workspaceId}:${remoteAddress}`,
+    visitorId,
+    voterKey: `public-visitor:${visitorId}`
   };
+}
+
+function createPortalVisitorId() {
+  return `opv_${randomUUID().replace(/-/g, "").slice(0, 32)}`;
+}
+
+function normalizePortalVisitorId(value: unknown) {
+  const normalized = getBoundedText(value, 120);
+  if (!normalized) return undefined;
+  const visitorId = normalizeIdentifier(normalized);
+  return visitorId.length >= 8 ? visitorId : undefined;
+}
+
+function createPortalVisitorCookie(visitorId: string) {
+  return [
+    `${portalVisitorCookieName}=${encodeURIComponent(visitorId)}`,
+    "HttpOnly",
+    `Max-Age=${portalVisitorCookieMaxAgeSeconds}`,
+    "Path=/api/openroad",
+    "SameSite=Lax"
+  ].join("; ");
+}
+
+function getPortalVisitorCookie(request: IncomingMessage) {
+  const cookieHeader = getSingleHeader(request.headers, "cookie");
+  if (!cookieHeader) return undefined;
+
+  for (const pair of cookieHeader.split(";")) {
+    const [rawName, ...rawValue] = pair.split("=");
+    if (rawName.trim() !== portalVisitorCookieName) continue;
+
+    const value = rawValue.join("=").trim();
+    try {
+      return decodeURIComponent(value);
+    } catch {
+      return value;
+    }
+  }
+
+  return undefined;
 }
 
 function getPortalCommentBody(payload: unknown) {
@@ -3357,9 +3482,10 @@ function writeJson(
   response: ServerResponse,
   status: number,
   payload: unknown,
-  access: AccessContext
+  access: AccessContext,
+  headers: Record<string, string> = {}
 ) {
-  response.writeHead(status, jsonHeaders);
+  response.writeHead(status, { ...jsonHeaders, ...headers });
   response.end(
     JSON.stringify({
       apiVersion: openRoadApiVersion,

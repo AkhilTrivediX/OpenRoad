@@ -181,6 +181,7 @@ function createRequest(overrides: Partial<RequestItem> = {}): RequestItem {
     comments: [],
     description: "Improve customer exports.",
     hasCurrentUserVote: false,
+    publicVoterKeys: [],
     id: "req-test",
     mergedSources: [],
     owner: "Product",

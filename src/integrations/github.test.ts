@@ -88,6 +88,7 @@ describe("GitHub issue integration", () => {
     expect(request).toMatchObject({
       archived: false,
       hasCurrentUserVote: false,
+      publicVoterKeys: [],
       owner: "Unassigned",
       requester: "akhil",
       source: "GitHub",

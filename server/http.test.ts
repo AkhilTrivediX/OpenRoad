@@ -2030,14 +2030,109 @@ describe("OpenRoad production server", () => {
     const request = persisted.state.workspaces[0].requests.find((item) => item.id === "public-request");
 
     expect(response.status).toBe(200);
+    expect(response.headers.get("set-cookie")).toContain("openroad_portal_visitor=visitor-1");
+    expect(response.headers.get("set-cookie")).toContain("HttpOnly");
+    expect(response.headers.get("set-cookie")).toContain("SameSite=Lax");
+    expect(response.headers.get("set-cookie")).toContain("Path=/api/openroad");
     expect(response.body.request).toMatchObject({
+      hasCurrentUserVote: true,
       id: "public-request",
       votes: state.workspaces[0].requests[0].votes + 1
     });
     expect(JSON.stringify(response.body)).not.toContain("Internal comment");
     expect(JSON.stringify(response.body)).not.toContain("Hidden comment");
     expect(JSON.stringify(response.body)).not.toContain("Secret requester");
+    expect(JSON.stringify(response.body)).not.toContain("publicVoterKeys");
     expect(request?.votes).toBe(state.workspaces[0].requests[0].votes + 1);
+    expect(request?.publicVoterKeys).toEqual(["public-visitor:visitor-1"]);
+  });
+
+  it("keeps public portal vote writes idempotent per visitor", async () => {
+    const { store, url } = await startTestServer();
+    const state = createStateWithPrivatePortalData();
+    await store.replaceState(state);
+    const vote = {
+      body: JSON.stringify({ requester: { id: "repeat-visitor", name: "Repeat visitor" } }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    };
+
+    const first = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/portal/requests/public-request/vote`,
+      vote
+    );
+    const cookie = cookiePair(first.headers.get("set-cookie") ?? "");
+    const repeated = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/portal/requests/public-request/vote`,
+      {
+        body: JSON.stringify({ requester: { id: "spoofed-repeat", name: "Repeat visitor" } }),
+        headers: { Cookie: cookie, "Content-Type": "application/json" },
+        method: "POST"
+      }
+    );
+    const persisted = await store.load();
+    const request = persisted.state.workspaces[0].requests.find((item) => item.id === "public-request");
+
+    expect(first.status).toBe(200);
+    expect(first.body.status).toBe("saved");
+    expect(repeated.status).toBe(200);
+    expect(repeated.body.status).toBe("already_saved");
+    expect(repeated.body.request.hasCurrentUserVote).toBe(true);
+    expect(repeated.body.request.votes).toBe(state.workspaces[0].requests[0].votes + 1);
+    expect(request?.votes).toBe(state.workspaces[0].requests[0].votes + 1);
+    expect(request?.publicVoterKeys).toEqual(["public-visitor:repeat-visitor"]);
+  });
+
+  it("uses public visitor headers for API clients and public read vote state", async () => {
+    const { store, url } = await startTestServer();
+    const state = createStateWithPrivatePortalData();
+    await store.replaceState({
+      ...state,
+      workspaces: [
+        {
+          ...state.workspaces[0],
+          requests: state.workspaces[0].requests.map((request) =>
+            request.id === "public-request"
+              ? {
+                  ...request,
+                  hasCurrentUserVote: true,
+                  publicVoterKeys: ["public-visitor:known-visitor"]
+                }
+              : request
+          )
+        },
+        ...state.workspaces.slice(1)
+      ]
+    });
+
+    const anonymous = await fetchJson(`${url}/api/openroad/workspaces/acme/portal?query=public`);
+    const known = await fetchJson(`${url}/api/openroad/workspaces/acme/portal?query=public`, {
+      headers: { "x-openroad-visitor-id": "known-visitor" }
+    });
+    const headerVote = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/portal/requests/public-request/vote`,
+      {
+        body: JSON.stringify({}),
+        headers: {
+          "Content-Type": "application/json",
+          "x-openroad-visitor-id": "api-visitor-123"
+        },
+        method: "POST"
+      }
+    );
+    const persisted = await store.load();
+    const request = persisted.state.workspaces[0].requests.find((item) => item.id === "public-request");
+
+    expect(anonymous.status).toBe(200);
+    expect(anonymous.body.requests[0].hasCurrentUserVote).toBe(false);
+    expect(anonymous.headers.get("set-cookie")).toContain("openroad_portal_visitor=");
+    expect(JSON.stringify(anonymous.body)).not.toContain("publicVoterKeys");
+    expect(known.body.requests[0].hasCurrentUserVote).toBe(true);
+    expect(headerVote.status).toBe(200);
+    expect(headerVote.body.request.hasCurrentUserVote).toBe(true);
+    expect(request?.publicVoterKeys).toEqual(
+      expect.arrayContaining(["public-visitor:known-visitor", "public-visitor:api-visitor-123"])
+    );
   });
 
   it("records public portal comments without exposing private comments", async () => {
@@ -2434,8 +2529,13 @@ async function fetchJson(url: string, init?: RequestInit) {
   const response = await fetch(url, init);
   return {
     body: (await response.json()) as Record<string, any>,
+    headers: response.headers,
     status: response.status
   };
+}
+
+function cookiePair(value: string) {
+  return value.split(";")[0];
 }
 
 function gitHubImportPayload(overrides: Record<string, unknown> = {}) {

@@ -167,6 +167,7 @@ export function createOpenRoadRequestFromJiraIssue(
     comments: [createJiraSyncComment(issue, now)],
     description: createJiraIssueDescription(issue),
     hasCurrentUserVote: false,
+    publicVoterKeys: [],
     id: options.requestId ?? createJiraRequestId(issue, new Set(options.existingRequestIds ?? [])),
     mergedSources: [],
     owner: mapJiraAssigneeToRequestOwner(issue),

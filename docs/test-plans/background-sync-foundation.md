@@ -126,12 +126,17 @@ As a self-host operator or workspace owner, I can enqueue integration sync jobs 
 ## Evidence
 
 - Branch: `feat/background-sync-foundation`
-- Implementation commit SHA: Pending.
-- Date: Pending.
-- Acceptance criteria status: Pending.
-- Commands run: Pending.
+- Implementation commit SHA: `36c015ad39a395452f5b0c76792a49db0f673c11`.
+- Date: 2026-07-04.
+- Acceptance criteria status: Passed for this slice.
+- Commands run:
+  - `pnpm vitest run server/sync-jobs.test.ts server/http.test.ts server/integrations.test.ts server/access.test.ts scripts/openroad-ops.test.mjs scripts/openroad-release.test.mjs` passed with 109 tests.
+  - `pnpm vitest run server/sync-jobs.test.ts server/http.test.ts server/integrations.test.ts scripts/openroad-ops.test.mjs` passed with 95 tests after the final ops redaction update.
+  - `pnpm check` passed with 262 tests plus production client/server builds.
+  - `pnpm release:verify` passed and reported integration metadata schema `3` rollback notes.
+  - Built server smoke passed with a fresh temporary state directory: `pnpm ops:smoke`, GitHub issue import, sync job enqueue, duplicate dedupe, schema `3` persistence, and expected `503 not_configured` for the runner without a configured worker.
 - Browser/viewports tested: No UI changes planned.
 - Accessibility checks: No UI changes planned.
-- Reviewer notes: Pending.
+- Reviewer notes: Read-only audit found blockers around file-backed mutation races, stuck running jobs, worker error redaction, active queue ordering/trimming, and missing concurrency coverage. The implementation now serializes integration metadata mutations inside one Node process, adds running-job leases and stale recovery, redacts worker failure text before persistence/API/backup, keeps active work bounded, and adds sync-specific enqueue/run concurrency tests. A follow-up audit agent did not return before shutdown; production gates above passed after the fixes.
 - Known unresolved risks: Live provider fetch, provider write-back, OAuth callback exchange, conflict UI, browser Settings UI, external queue systems, distributed locks across multiple Node processes, and scheduler packaging remain later production slices.
-- Rollback notes: Pending.
+- Rollback notes: Back up state, integration, and team files before upgrade. To downgrade before schema `3`, drain/remove sync jobs and credentials or restore a pre-schema-3 integration backup, then rerun `pnpm ops:smoke`.

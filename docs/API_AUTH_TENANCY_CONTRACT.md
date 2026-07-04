@@ -91,6 +91,7 @@ Public portal responses use the OpenRoad public projection and must not include 
 - `GET /api/openroad/workspaces/:workspaceId/integrations/github/issues/live`
 - `GET /api/openroad/workspaces/:workspaceId/integrations/github/app/setup`
 - `POST /api/openroad/workspaces/:workspaceId/integrations/github/app/installations/verify`
+- `POST /api/openroad/workspaces/:workspaceId/integrations/github/app/installations/:installationId/disconnect`
 - `GET /api/openroad/audit-events`
 - `GET /api/openroad/ops/status`
 
@@ -104,6 +105,16 @@ GitHub live issue fetch requires workspace write permission or a scoped integrat
 
 GitHub App setup and installation verification require `integration:manage`, which is reserved for local owners/admins and workspace owners. Contributor, viewer, requester, public visitor, and integration actors cannot verify new GitHub App installations.
 
+GitHub App disconnect also requires `integration:manage`. It marks installation metadata and mappings disconnected without deleting OpenRoad objects.
+
+## Provider-Signature Routes
+
+- `POST /api/openroad/integrations/github/webhook`
+
+The GitHub webhook route is not authorized by OpenRoad actor headers. It is provider-signature protected: the server requires `OPENROAD_GITHUB_APP_WEBHOOK_SECRET` and verifies `X-Hub-Signature-256` against the raw request body with HMAC-SHA256 before parsing JSON or mutating state.
+
+Valid deliveries are processed as integration actor work after the target workspace is derived from existing installation/mapping metadata. Duplicate delivery IDs are idempotent no-ops. Webhook secrets, raw payloads, signatures, and request headers must not be persisted or returned.
+
 ## Environment
 
 ```powershell
@@ -112,6 +123,7 @@ $env:OPENROAD_INTEGRATION_FILE=".openroad/openroad-integrations.json"
 $env:OPENROAD_GITHUB_APP_SLUG="openroad"
 $env:OPENROAD_GITHUB_APP_ID="12345"
 $env:OPENROAD_GITHUB_APP_PRIVATE_KEY_FILE="C:\openroad\github-app.private-key.pem"
+$env:OPENROAD_GITHUB_APP_WEBHOOK_SECRET="replace-with-long-random-secret"
 $env:OPENROAD_TRUST_PROXY_HEADERS="false"
 $env:OPENROAD_SINGLE_USER_MODE="false"
 ```

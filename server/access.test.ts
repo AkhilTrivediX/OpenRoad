@@ -63,6 +63,20 @@ describe("OpenRoad API access contract", () => {
         scope: "workspace"
       })
     );
+    expect(openRoadApiContract.routeProtections).toContainEqual(
+      expect.objectContaining({
+        path: "/api/openroad/integrations/github/webhook",
+        permission: "integration:sync",
+        scope: "provider-signature"
+      })
+    );
+    expect(openRoadApiContract.routeProtections).toContainEqual(
+      expect.objectContaining({
+        path: "/api/openroad/workspaces/:workspaceId/integrations/github/app/installations/:installationId/disconnect",
+        permission: "integration:manage",
+        scope: "workspace"
+      })
+    );
   });
 
   it("defaults to single-user owner mode when no admin token is configured", () => {

@@ -38,6 +38,9 @@ describe("openroad ops", () => {
     await expect(readFile(join(result.backupDir, "openroad-integrations.json"), "utf8")).resolves.toContain(
       "installations"
     );
+    await expect(readFile(join(result.backupDir, "openroad-integrations.json"), "utf8")).resolves.toContain(
+      "delivery-1"
+    );
     await expect(readFile(join(result.backupDir, "openroad-team.json"), "utf8")).resolves.toContain("owner");
   });
 
@@ -110,7 +113,7 @@ describe("openroad ops", () => {
     await writeFile(join(backup, "openroad-state.json"), JSON.stringify({ schemaVersion: 2 }));
     await writeFile(
       join(backup, "openroad-integrations.json"),
-      JSON.stringify({ installations: [], mappings: [], schemaVersion: 1 })
+      JSON.stringify({ installations: [], mappings: [], schemaVersion: 1, syncEvents: [] })
     );
     await writeFile(
       join(backup, "openroad-team.json"),
@@ -202,7 +205,19 @@ async function writeOpenRoadPair(root, workspaceId = "acme") {
       {
         installations: [],
         mappings: [],
-        schemaVersion: 1
+        schemaVersion: 1,
+        syncEvents: [
+          {
+            createdAt: "2026-07-04T00:00:00.000Z",
+            deliveryId: "delivery-1",
+            event: "issues",
+            id: "github-webhook-delivery-1",
+            provider: "github",
+            result: "synced",
+            summary: "Synced one issue.",
+            workspaceId
+          }
+        ]
       },
       null,
       2

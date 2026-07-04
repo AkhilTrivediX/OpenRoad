@@ -10,7 +10,7 @@ Each feature must also satisfy `docs/PRODUCTION_READINESS.md` before merging to 
 
 Current stage: Stage 2 Team Beta foundation in progress.
 
-The standalone loop now covers workspaces, requests, triage, internal work, roadmap planning, changelog drafts, public portal preview, local durability, production APIs, basic tenancy boundaries, file-backed team metadata, audit events, self-host operations, a first app-module boundary, hardened public portal write APIs, the provider-neutral integration adapter contract, a payload-backed GitHub issue import/link API, server-only GitHub App installation verification, and live GitHub issue fetch through verified installations. The next production work should add webhook/disconnect hardening before broader provider rollout.
+The standalone loop now covers workspaces, requests, triage, internal work, roadmap planning, changelog drafts, public portal preview, local durability, production APIs, basic tenancy boundaries, file-backed team metadata, audit events, self-host operations, a first app-module boundary, hardened public portal write APIs, the provider-neutral integration adapter contract, a payload-backed GitHub issue import/link API, server-only GitHub App installation verification, live GitHub issue fetch through verified installations, signed GitHub webhooks, and safe disconnect handling. The next production work should extend the adapter boundary to Linear before Jira complexity.
 
 ## Feature 1: Workspace Shell
 
@@ -357,7 +357,7 @@ Acceptance:
 - GitHub enriches OpenRoad but remains optional.
 - Disconnecting GitHub does not delete or corrupt core OpenRoad objects.
 - GitHub mappings stay outside the core OpenRoad workspace schema.
-- Live OAuth/user tokens and webhooks remain deferred to later GitHub slices.
+- Live OAuth/user tokens, background polling, and conflict UI remain deferred to later GitHub slices.
 
 ## Feature 9A: GitHub App Installation
 
@@ -403,7 +403,7 @@ Acceptance:
 
 Branch: `feat/github-webhook-disconnect`
 
-Status: next.
+Status: implemented and production-checked.
 
 Build:
 

@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
@@ -25,6 +26,7 @@ import {
 } from "../src/domain/openroad.js";
 import {
   createExternalObjectKey,
+  disconnectMapping,
   type ExternalObjectMapping,
   type IntegrationInstallation,
   type IntegrationPermission
@@ -53,8 +55,10 @@ import {
   IntegrationStoreError,
   parseIntegrationState,
   sanitizeIntegrationInstallation,
+  sanitizeIntegrationSyncEvent,
   type IntegrationState,
-  type IntegrationStore
+  type IntegrationStore,
+  type IntegrationSyncEvent
 } from "./integrations.js";
 import {
   FetchGitHubAppClient,
@@ -62,6 +66,7 @@ import {
   createSafeGitHubAppSetup,
   githubAppConfigFromEnv,
   normalizeGitHubAppInstallation,
+  verifyGitHubWebhookSignature,
   type GitHubAppClient,
   type GitHubAppConfig
 } from "./github-app.js";
@@ -417,6 +422,37 @@ async function handleApiRequest(
       integrationStore,
       githubAppClient,
       githubLiveIssueFetchMatch[1]
+    );
+    return;
+  }
+
+  if (requestUrl.pathname === "/api/openroad/integrations/github/webhook") {
+    await handleGitHubWebhookRequest(
+      request,
+      response,
+      store,
+      access,
+      teamStore,
+      integrationStore,
+      githubAppConfig
+    );
+    return;
+  }
+
+  const githubInstallationDisconnectMatch = requestUrl.pathname.match(
+    /^\/api\/openroad\/workspaces\/([^/]+)\/integrations\/github\/app\/installations\/([^/]+)\/disconnect$/
+  );
+
+  if (githubInstallationDisconnectMatch) {
+    await handleGitHubInstallationDisconnectRequest(
+      request,
+      response,
+      store,
+      access,
+      teamStore,
+      integrationStore,
+      githubInstallationDisconnectMatch[1],
+      githubInstallationDisconnectMatch[2]
     );
     return;
   }
@@ -906,6 +942,21 @@ function createGitHubIssueImportState(
     );
   }
 
+  const existingInstallation = integrationState.installations.find(
+    (installation) =>
+      installation.provider === payload.installation.provider &&
+      installation.workspaceId === payload.workspaceId &&
+      doesGitHubInstallationIdMatch(installation.id, payload.installation.id)
+  );
+
+  if (existingInstallation && existingInstallation.status !== "active") {
+    throw new ApiRequestError(
+      "invalid_state",
+      422,
+      "GitHub installation is disconnected or suspended."
+    );
+  }
+
   const issueRef = createGitHubIssueExternalRef(payload.issue);
   const existingMapping = integrationState.mappings.find((mapping) =>
     mapping.installationId === payload.installation.id &&
@@ -1322,6 +1373,621 @@ function createGitHubLiveIssuePreview(issue: GitHubIssue) {
   };
 }
 
+async function handleGitHubWebhookRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  store: OpenRoadStore,
+  access: AccessContext,
+  teamStore: TeamStore | undefined,
+  integrationStore: IntegrationStore | undefined,
+  githubAppConfig: GitHubAppConfig
+) {
+  if (request.method !== "POST") {
+    writeApiError(response, 405, "invalid_method", "This endpoint only supports POST.", access);
+    return;
+  }
+
+  try {
+    if (!integrationStore) {
+      throw new ApiRequestError(
+        "not_configured",
+        503,
+        "OpenRoad integration metadata store is not configured."
+      );
+    }
+
+    if (!githubAppConfig.webhookSecret) {
+      throw new ApiRequestError(
+        "not_configured",
+        503,
+        "OPENROAD_GITHUB_APP_WEBHOOK_SECRET is required before receiving webhooks."
+      );
+    }
+
+    const rawBody = await readRawBody(request, 2_000_000);
+    const signatureHeader = getSingleHeader(request.headers, "x-hub-signature-256");
+    const deliveryId = getRequiredHeaderText(
+      request,
+      "x-github-delivery",
+      "GitHub delivery id is required."
+    );
+    const eventName = getRequiredHeaderText(
+      request,
+      "x-github-event",
+      "GitHub webhook event is required."
+    );
+
+    if (
+      !verifyGitHubWebhookSignature({
+        payload: rawBody,
+        secret: githubAppConfig.webhookSecret,
+        signatureHeader
+      })
+    ) {
+      throw new AccessDeniedError("GitHub webhook signature is invalid.");
+    }
+
+    const payload = parseJsonBuffer(rawBody);
+    const current = await store.load();
+    const integrationResult = await integrationStore.load();
+    const duplicateEvent = integrationResult.state.syncEvents.find(
+      (item) => item.provider === "github" && item.deliveryId === deliveryId
+    );
+
+    if (duplicateEvent) {
+      writeJson(
+        response,
+        200,
+        {
+          event: sanitizeIntegrationSyncEvent({
+            ...duplicateEvent,
+            result: "duplicate",
+            summary: `Duplicate GitHub delivery ${deliveryId} ignored.`
+          }),
+          status: "duplicate"
+        },
+        access
+      );
+      return;
+    }
+
+    const result = processGitHubWebhookDelivery({
+      deliveryId,
+      eventName,
+      integrationState: integrationResult.state,
+      now: new Date().toISOString(),
+      openRoadState: current.state,
+      payload
+    });
+    const state =
+      result.openRoadState === current.state
+        ? current.state
+        : await store.replaceState(result.openRoadState);
+    const integrationState = await integrationStore.replaceState(result.integrationState);
+
+    if (result.audit && result.audit.workspaceId) {
+      await recordAuditEvent(
+        teamStore,
+        state,
+        createIntegrationAccess(access, result.audit.workspaceId, result.audit.installationId),
+        result.audit
+      );
+    }
+
+    writeJson(
+      response,
+      202,
+      {
+        event: sanitizeIntegrationSyncEvent(result.event),
+        status: result.event.result,
+        totals: {
+          installations: integrationState.installations.length,
+          mappings: integrationState.mappings.length,
+          syncEvents: integrationState.syncEvents.length
+        }
+      },
+      access
+    );
+  } catch (error) {
+    writeKnownApiError(response, error, access);
+  }
+}
+
+async function handleGitHubInstallationDisconnectRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  store: OpenRoadStore,
+  access: AccessContext,
+  teamStore: TeamStore | undefined,
+  integrationStore: IntegrationStore | undefined,
+  encodedWorkspaceId: string,
+  encodedInstallationId: string
+) {
+  if (request.method !== "POST") {
+    writeApiError(response, 405, "invalid_method", "This endpoint only supports POST.", access);
+    return;
+  }
+
+  const workspaceId = decodeURIComponent(encodedWorkspaceId);
+  const installationId = decodeURIComponent(encodedInstallationId);
+
+  try {
+    requirePermission(access, "integration:manage", workspaceId);
+
+    if (!integrationStore) {
+      throw new ApiRequestError(
+        "not_configured",
+        503,
+        "OpenRoad integration metadata store is not configured."
+      );
+    }
+
+    const current = await store.load();
+    const workspace = current.state.workspaces.find((item) => item.id === workspaceId);
+
+    if (!workspace) {
+      throw new ApiRequestError("not_found", 404, "Workspace was not found.");
+    }
+
+    const integrationResult = await integrationStore.load();
+    const disconnected = disconnectGitHubInstallationState(
+      integrationResult.state,
+      workspaceId,
+      installationId,
+      new Date().toISOString()
+    );
+    const integrationState = await integrationStore.replaceState(disconnected.integrationState);
+    const auditEvent = await recordAuditEvent(teamStore, current.state, access, {
+      summary: `Disconnected GitHub installation ${disconnected.installation.providerAccountName}.`,
+      type: "integration.github.app.disconnect",
+      workspaceId
+    });
+
+    writeJson(
+      response,
+      200,
+      {
+        disconnectedMappings: disconnected.disconnectedMappings,
+        installation: sanitizeInstallation(disconnected.installation),
+        revision: auditEvent?.id ?? `github-disconnect-${Date.now()}`,
+        status: "disconnected",
+        totals: {
+          installations: integrationState.installations.length,
+          mappings: integrationState.mappings.length,
+          syncEvents: integrationState.syncEvents.length
+        }
+      },
+      access
+    );
+  } catch (error) {
+    writeKnownApiError(response, error, access);
+  }
+}
+
+type GitHubWebhookProcessInput = {
+  deliveryId: string;
+  eventName: string;
+  integrationState: IntegrationState;
+  now: string;
+  openRoadState: OpenRoadState;
+  payload: unknown;
+};
+
+type GitHubWebhookProcessResult = {
+  audit?: Pick<AuditEvent, "summary" | "type" | "workspaceId"> & { installationId: string };
+  event: IntegrationSyncEvent;
+  integrationState: IntegrationState;
+  openRoadState: OpenRoadState;
+};
+
+function processGitHubWebhookDelivery({
+  deliveryId,
+  eventName,
+  integrationState,
+  now,
+  openRoadState,
+  payload
+}: GitHubWebhookProcessInput): GitHubWebhookProcessResult {
+  if (eventName === "issues") {
+    return processGitHubIssueWebhook({
+      deliveryId,
+      eventName,
+      integrationState,
+      now,
+      openRoadState,
+      payload
+    });
+  }
+
+  if (eventName === "installation") {
+    return processGitHubInstallationWebhook({
+      deliveryId,
+      eventName,
+      integrationState,
+      now,
+      openRoadState,
+      payload
+    });
+  }
+
+  const event = createIntegrationSyncEvent({
+    deliveryId,
+    eventName,
+    now,
+    result: "ignored",
+    summary: `GitHub webhook event ${eventName} is not handled yet.`
+  });
+
+  return {
+    event,
+    integrationState: appendIntegrationSyncEvent(integrationState, event),
+    openRoadState
+  };
+}
+
+function processGitHubIssueWebhook(input: GitHubWebhookProcessInput): GitHubWebhookProcessResult {
+  const { deliveryId, eventName, integrationState, now, openRoadState, payload } = input;
+  const installationId = getGitHubWebhookInstallationId(payload);
+  const issue = parseGitHubWebhookIssue(payload);
+  const issueRef = createGitHubIssueExternalRef(issue);
+  const activeInstallations = integrationState.installations.filter(
+    (installation) =>
+      installation.provider === "github" &&
+      installation.status === "active" &&
+      doesGitHubInstallationIdMatch(installation.id, installationId)
+  );
+  const eligibleMappings = integrationState.mappings.filter((mapping) =>
+    activeInstallations.some(
+      (installation) =>
+        mapping.status !== "disconnected" &&
+        mapping.installationId === installation.id &&
+        mapping.openRoad.workspaceId === installation.workspaceId &&
+        isSameExternalObject(mapping, issueRef)
+    )
+  );
+
+  if (eligibleMappings.length === 0) {
+    const event = createIntegrationSyncEvent({
+      deliveryId,
+      eventName,
+      installationId: normalizeGitHubInstallationId(installationId),
+      now,
+      result: "ignored",
+      summary: `No linked OpenRoad request for GitHub issue ${issue.repository.fullName}#${issue.number}.`
+    });
+
+    return {
+      event,
+      integrationState: appendIntegrationSyncEvent(integrationState, event),
+      openRoadState
+    };
+  }
+
+  let nextOpenRoadState = openRoadState;
+  let nextMappings = integrationState.mappings;
+  const workspaceIds = new Set<string>();
+  let syncedCount = 0;
+
+  for (const mapping of eligibleMappings) {
+    const workspace = nextOpenRoadState.workspaces.find(
+      (item) => item.id === mapping.openRoad.workspaceId
+    );
+    const request = workspace?.requests.find((item) => item.id === mapping.openRoad.id);
+
+    if (!workspace || !request || mapping.openRoad.type !== "request") {
+      continue;
+    }
+
+    const nextRequest = syncOpenRoadRequestFromGitHubIssue(request, issue, now);
+    nextOpenRoadState = parseOpenRoadState(
+      openRoadReducer(nextOpenRoadState, {
+        request: nextRequest,
+        type: "replace-request",
+        workspaceId: workspace.id
+      })
+    );
+    nextMappings = upsertById(nextMappings, { ...mapping, lastSyncedAt: now });
+    workspaceIds.add(workspace.id);
+    syncedCount += 1;
+  }
+
+  const result = syncedCount > 0 ? "synced" : "ignored";
+  const summary =
+    syncedCount > 0
+      ? `Synced GitHub issue ${issue.repository.fullName}#${issue.number} to ${syncedCount} OpenRoad request${syncedCount === 1 ? "" : "s"}.`
+      : `Linked GitHub issue ${issue.repository.fullName}#${issue.number} had no matching request to update.`;
+  const event = createIntegrationSyncEvent({
+    deliveryId,
+    eventName,
+    installationId: normalizeGitHubInstallationId(installationId),
+    now,
+    result,
+    summary,
+    workspaceId: [...workspaceIds][0]
+  });
+
+  return {
+    audit:
+      syncedCount > 0
+        ? {
+            installationId: normalizeGitHubInstallationId(installationId),
+            summary,
+            type: "integration.github.webhook.issue",
+            workspaceId: [...workspaceIds][0]
+          }
+        : undefined,
+    event,
+    integrationState: appendIntegrationSyncEvent(
+      parseIntegrationState({
+        ...integrationState,
+        mappings: nextMappings
+      }),
+      event
+    ),
+    openRoadState: nextOpenRoadState
+  };
+}
+
+function processGitHubInstallationWebhook(
+  input: GitHubWebhookProcessInput
+): GitHubWebhookProcessResult {
+  const { deliveryId, eventName, integrationState, now, openRoadState, payload } = input;
+  const installationId = getGitHubWebhookInstallationId(payload);
+  const action = getGitHubWebhookAction(payload);
+  const nextStatus =
+    action === "deleted"
+      ? "disconnected"
+      : action === "suspend"
+        ? "suspended"
+        : action === "unsuspend"
+          ? "active"
+          : undefined;
+
+  if (!nextStatus) {
+    const event = createIntegrationSyncEvent({
+      deliveryId,
+      eventName,
+      installationId: normalizeGitHubInstallationId(installationId),
+      now,
+      result: "ignored",
+      summary: `GitHub installation action ${action ?? "unknown"} is not handled yet.`
+    });
+
+    return {
+      event,
+      integrationState: appendIntegrationSyncEvent(integrationState, event),
+      openRoadState
+    };
+  }
+
+  const matchingInstallations = integrationState.installations.filter(
+    (installation) =>
+      installation.provider === "github" &&
+      doesGitHubInstallationIdMatch(installation.id, installationId)
+  );
+
+  if (matchingInstallations.length === 0) {
+    const event = createIntegrationSyncEvent({
+      deliveryId,
+      eventName,
+      installationId: normalizeGitHubInstallationId(installationId),
+      now,
+      result: "ignored",
+      summary: `No OpenRoad workspace is connected to GitHub installation ${installationId}.`
+    });
+
+    return {
+      event,
+      integrationState: appendIntegrationSyncEvent(integrationState, event),
+      openRoadState
+    };
+  }
+
+  const matchingIds = new Set(matchingInstallations.map((installation) => installation.id));
+  const nextInstallations = integrationState.installations.map((installation) =>
+    matchingIds.has(installation.id) ? { ...installation, status: nextStatus } : installation
+  );
+  const nextMappings =
+    nextStatus === "disconnected"
+      ? integrationState.mappings.map((mapping) =>
+          matchingIds.has(mapping.installationId) && mapping.status !== "disconnected"
+            ? disconnectMapping(mapping, now)
+            : mapping
+        )
+      : integrationState.mappings;
+  const workspaceIds = [...new Set(matchingInstallations.map((installation) => installation.workspaceId))];
+  const disconnectedMappings =
+    nextStatus === "disconnected"
+      ? integrationState.mappings.filter(
+          (mapping) => matchingIds.has(mapping.installationId) && mapping.status !== "disconnected"
+        ).length
+      : 0;
+  const summary =
+    nextStatus === "disconnected"
+      ? `Disconnected GitHub installation ${installationId} from ${matchingInstallations.length} OpenRoad workspace${matchingInstallations.length === 1 ? "" : "s"}.`
+      : `Marked GitHub installation ${installationId} as ${nextStatus}.`;
+  const event = createIntegrationSyncEvent({
+    deliveryId,
+    eventName,
+    installationId: normalizeGitHubInstallationId(installationId),
+    now,
+    result: "synced",
+    summary,
+    workspaceId: workspaceIds[0]
+  });
+
+  return {
+    audit: {
+      installationId: normalizeGitHubInstallationId(installationId),
+      summary:
+        nextStatus === "disconnected"
+          ? `${summary} ${disconnectedMappings} mapping${disconnectedMappings === 1 ? "" : "s"} marked disconnected.`
+          : summary,
+      type: `integration.github.webhook.installation.${nextStatus}`,
+      workspaceId: workspaceIds[0]
+    },
+    event,
+    integrationState: appendIntegrationSyncEvent(
+      parseIntegrationState({
+        ...integrationState,
+        installations: nextInstallations,
+        mappings: nextMappings
+      }),
+      event
+    ),
+    openRoadState
+  };
+}
+
+function disconnectGitHubInstallationState(
+  integrationState: IntegrationState,
+  workspaceId: string,
+  installationId: string,
+  now: string
+) {
+  const installation = integrationState.installations.find(
+    (item) =>
+      item.provider === "github" &&
+      item.workspaceId === workspaceId &&
+      doesGitHubInstallationIdMatch(item.id, installationId)
+  );
+
+  if (!installation) {
+    throw new ApiRequestError("not_found", 404, "GitHub installation was not found.");
+  }
+
+  const nextInstallation = { ...installation, status: "disconnected" as const };
+  let disconnectedMappings = 0;
+  const mappings = integrationState.mappings.map((mapping) => {
+    if (
+      mapping.installationId === installation.id &&
+      mapping.openRoad.workspaceId === workspaceId &&
+      mapping.status !== "disconnected"
+    ) {
+      disconnectedMappings += 1;
+      return disconnectMapping(mapping, now);
+    }
+
+    return mapping;
+  });
+
+  return {
+    disconnectedMappings,
+    installation: nextInstallation,
+    integrationState: parseIntegrationState({
+      ...integrationState,
+      installations: upsertById(integrationState.installations, nextInstallation),
+      mappings
+    })
+  };
+}
+
+function parseGitHubWebhookIssue(payload: unknown) {
+  if (!isRecord(payload) || !isRecord(payload.issue)) {
+    throw new ApiRequestError("invalid_request", 400, "GitHub issue webhook payload is invalid.");
+  }
+
+  try {
+    return parseGitHubIssuePayload({
+      ...payload.issue,
+      repository: payload.repository
+    });
+  } catch (error) {
+    throw new ApiRequestError(
+      "invalid_request",
+      400,
+      error instanceof Error ? error.message : "GitHub issue webhook payload is invalid."
+    );
+  }
+}
+
+function getGitHubWebhookInstallationId(payload: unknown) {
+  if (!isRecord(payload) || !isRecord(payload.installation)) {
+    throw new ApiRequestError("invalid_request", 400, "GitHub installation payload is required.");
+  }
+
+  const installationId = getBoundedIdentifier(payload.installation.id, 160);
+  if (!installationId) {
+    throw new ApiRequestError("invalid_request", 400, "GitHub installation id is required.");
+  }
+
+  return installationId;
+}
+
+function getGitHubWebhookAction(payload: unknown) {
+  if (!isRecord(payload)) return undefined;
+  return getBoundedText(payload.action, 80);
+}
+
+function doesGitHubInstallationIdMatch(storedId: string, candidateId: string) {
+  const normalizedCandidate = normalizeGitHubInstallationId(candidateId);
+  return (
+    storedId === candidateId ||
+    storedId === normalizedCandidate ||
+    normalizeGitHubInstallationId(storedId) === normalizedCandidate
+  );
+}
+
+function appendIntegrationSyncEvent(
+  integrationState: IntegrationState,
+  event: IntegrationSyncEvent
+) {
+  return parseIntegrationState({
+    ...integrationState,
+    syncEvents: [
+      event,
+      ...integrationState.syncEvents.filter(
+        (item) => !(item.provider === event.provider && item.deliveryId === event.deliveryId)
+      )
+    ].slice(0, 1000)
+  });
+}
+
+function createIntegrationSyncEvent({
+  deliveryId,
+  eventName,
+  installationId,
+  now,
+  result,
+  summary,
+  workspaceId
+}: {
+  deliveryId: string;
+  eventName: string;
+  installationId?: string;
+  now: string;
+  result: IntegrationSyncEvent["result"];
+  summary: string;
+  workspaceId?: string;
+}): IntegrationSyncEvent {
+  return {
+    createdAt: now,
+    deliveryId,
+    event: eventName,
+    id: `github-webhook-${normalizeIdentifier(deliveryId)}`,
+    ...(installationId ? { installationId } : {}),
+    provider: "github",
+    result,
+    summary: summary.slice(0, 500),
+    ...(workspaceId ? { workspaceId } : {})
+  };
+}
+
+function createIntegrationAccess(
+  access: AccessContext,
+  workspaceId: string,
+  installationId: string
+): AccessContext {
+  return {
+    ...access,
+    actor: {
+      id: installationId,
+      type: "integration",
+      workspaceId
+    }
+  };
+}
+
 async function handleOpsStatusRequest(
   request: IncomingMessage,
   response: ServerResponse,
@@ -1355,6 +2021,7 @@ async function handleOpsStatusRequest(
           auditEvents: team?.state.auditEvents.length ?? 0,
           integrationInstallations: integrations?.state.installations.length ?? 0,
           integrationMappings: integrations?.state.mappings.length ?? 0,
+          integrationSyncEvents: integrations?.state.syncEvents.length ?? 0,
           memberships: team?.state.memberships.length ?? 0,
           users: team?.state.users.length ?? 0,
           workspaces: result.state.workspaces.length
@@ -1760,6 +2427,10 @@ function createRequesterAccess(
 }
 
 async function readJsonBody(request: IncomingMessage, maxBytes = 2_000_000) {
+  return parseJsonBuffer(await readRawBody(request, maxBytes));
+}
+
+async function readRawBody(request: IncomingMessage, maxBytes = 2_000_000) {
   const chunks: Buffer[] = [];
   let size = 0;
 
@@ -1774,8 +2445,12 @@ async function readJsonBody(request: IncomingMessage, maxBytes = 2_000_000) {
     chunks.push(buffer);
   }
 
+  return Buffer.concat(chunks);
+}
+
+function parseJsonBuffer(body: Buffer) {
   try {
-    return JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
+    return JSON.parse(body.toString("utf8")) as unknown;
   } catch {
     throw new ApiBodyError("invalid_json", "Request body must be valid JSON.");
   }
@@ -1882,11 +2557,22 @@ function getSingleHeader(headers: IncomingMessage["headers"], name: string) {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+function getRequiredHeaderText(request: IncomingMessage, name: string, message: string) {
+  const value = getBoundedText(getSingleHeader(request.headers, name), 200);
+  if (!value) throw new ApiRequestError("invalid_request", 400, message);
+  return value;
+}
+
 function getBoundedText(value: unknown, maxLength: number) {
   if (typeof value !== "string") return undefined;
   const normalized = value.trim();
   if (!normalized) return undefined;
   return normalized.slice(0, maxLength);
+}
+
+function getBoundedIdentifier(value: unknown, maxLength: number) {
+  if (typeof value === "number" && Number.isFinite(value)) return String(value).slice(0, maxLength);
+  return getBoundedText(value, maxLength);
 }
 
 function normalizeIdentifier(value: string) {

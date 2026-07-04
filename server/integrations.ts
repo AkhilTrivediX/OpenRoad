@@ -8,6 +8,7 @@ import {
   openRoadObjectTypes,
   type ExternalObjectMapping,
   type IntegrationInstallation,
+  type IntegrationProvider,
   type IntegrationPermission
 } from "../src/integrations/adapter.js";
 
@@ -17,6 +18,19 @@ export type IntegrationState = {
   installations: IntegrationInstallation[];
   mappings: ExternalObjectMapping[];
   schemaVersion: typeof openRoadIntegrationSchemaVersion;
+  syncEvents: IntegrationSyncEvent[];
+};
+
+export type IntegrationSyncEvent = {
+  createdAt: string;
+  deliveryId: string;
+  event: string;
+  id: string;
+  installationId?: string;
+  provider: IntegrationProvider;
+  result: "accepted" | "duplicate" | "ignored" | "synced";
+  summary: string;
+  workspaceId?: string;
 };
 
 export type IntegrationStoreLoadStatus = "ready" | "seeded" | "recovered";
@@ -126,7 +140,8 @@ export function createInitialIntegrationState(): IntegrationState {
   return {
     installations: [],
     mappings: [],
-    schemaVersion: openRoadIntegrationSchemaVersion
+    schemaVersion: openRoadIntegrationSchemaVersion,
+    syncEvents: []
   };
 }
 
@@ -148,19 +163,25 @@ export function parseIntegrationState(value: unknown): IntegrationState {
   if (
     value.schemaVersion !== openRoadIntegrationSchemaVersion ||
     !Array.isArray(value.installations) ||
-    !Array.isArray(value.mappings)
+    !Array.isArray(value.mappings) ||
+    (value.syncEvents !== undefined && !Array.isArray(value.syncEvents))
   ) {
     throw new IntegrationStoreError("invalid_state", "OpenRoad integration metadata is invalid.");
   }
 
-  if (!value.installations.every(isIntegrationInstallation) || !value.mappings.every(isMapping)) {
+  if (
+    !value.installations.every(isIntegrationInstallation) ||
+    !value.mappings.every(isMapping) ||
+    (Array.isArray(value.syncEvents) && !value.syncEvents.every(isSyncEvent))
+  ) {
     throw new IntegrationStoreError("invalid_state", "OpenRoad integration metadata is invalid.");
   }
 
   return cloneValue({
     installations: value.installations.map(sanitizeIntegrationInstallation),
     mappings: value.mappings.map(sanitizeExternalObjectMapping),
-    schemaVersion: openRoadIntegrationSchemaVersion
+    schemaVersion: openRoadIntegrationSchemaVersion,
+    syncEvents: (value.syncEvents ?? []).map(sanitizeIntegrationSyncEvent).slice(0, 1000)
   });
 }
 
@@ -205,6 +226,20 @@ export function sanitizeExternalObjectMapping(
       workspaceId: mapping.openRoad.workspaceId
     },
     status: mapping.status
+  };
+}
+
+export function sanitizeIntegrationSyncEvent(event: IntegrationSyncEvent): IntegrationSyncEvent {
+  return {
+    createdAt: event.createdAt,
+    deliveryId: event.deliveryId,
+    event: event.event,
+    id: event.id,
+    ...(event.installationId ? { installationId: event.installationId } : {}),
+    provider: event.provider,
+    result: event.result,
+    summary: event.summary,
+    ...(event.workspaceId ? { workspaceId: event.workspaceId } : {})
   };
 }
 
@@ -254,6 +289,24 @@ function isMapping(value: unknown): value is ExternalObjectMapping {
     (value.lastSyncedAt === undefined || typeof value.lastSyncedAt === "string") &&
     isOpenRoadObjectRef(value.openRoad) &&
     (value.status === "active" || value.status === "disconnected" || value.status === "conflicted")
+  );
+}
+
+function isSyncEvent(value: unknown): value is IntegrationSyncEvent {
+  return (
+    isRecord(value) &&
+    typeof value.createdAt === "string" &&
+    typeof value.deliveryId === "string" &&
+    typeof value.event === "string" &&
+    typeof value.id === "string" &&
+    (value.installationId === undefined || typeof value.installationId === "string") &&
+    integrationProviders.includes(value.provider as IntegrationProvider) &&
+    (value.result === "accepted" ||
+      value.result === "duplicate" ||
+      value.result === "ignored" ||
+      value.result === "synced") &&
+    typeof value.summary === "string" &&
+    (value.workspaceId === undefined || typeof value.workspaceId === "string")
   );
 }
 

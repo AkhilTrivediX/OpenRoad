@@ -151,6 +151,7 @@ export function createOpenRoadRequestFromLinearIssue(
     comments: [createLinearSyncComment(issue, now)],
     description: createLinearIssueDescription(issue),
     hasCurrentUserVote: false,
+    publicVoterKeys: [],
     id:
       options.requestId ??
       createLinearRequestId(issue, new Set(options.existingRequestIds ?? [])),

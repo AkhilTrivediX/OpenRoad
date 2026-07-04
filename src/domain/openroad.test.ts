@@ -40,6 +40,7 @@ function sampleRequest(overrides: Partial<RequestItem> = {}): RequestItem {
     tags: ["test"],
     votes: 0,
     hasCurrentUserVote: false,
+    publicVoterKeys: [],
     status: "New",
     owner: "Unassigned",
     visibility: "Private",
@@ -697,6 +698,53 @@ describe("OpenRoad domain state", () => {
       quietWindowHours: 24
     });
     expect(migrated.workspaces[0].notifications.outbox).toEqual([]);
+  });
+
+  it("migrates schema version 5 requests into public voter key records", () => {
+    const state = createInitialOpenRoadState();
+    const previous = {
+      schemaVersion: 5,
+      workspaces: state.workspaces.map((workspace) => ({
+        ...workspace,
+        requests: workspace.requests.map(({ publicVoterKeys: _publicVoterKeys, ...request }) => request)
+      }))
+    };
+
+    const migrated = migrateOpenRoadState(previous);
+
+    expect(migrated.schemaVersion).toBe(openRoadSchemaVersion);
+    expect(migrated.workspaces[0].requests.every((request) => Array.isArray(request.publicVoterKeys))).toBe(
+      true
+    );
+    expect(migrated.workspaces[0].requests[0].publicVoterKeys).toEqual([]);
+  });
+
+  it("creates visitor-aware public portal vote state without leaking local vote state", () => {
+    const workspace = createInitialOpenRoadState().workspaces[0];
+    const publicRequest = sampleRequest({
+      hasCurrentUserVote: true,
+      id: "public-vote",
+      publicVoterKeys: ["public-visitor:known-visitor"],
+      visibility: "Public"
+    });
+    const publicWorkspace = {
+      ...workspace,
+      requests: [publicRequest]
+    };
+
+    const localPreview = createPublicPortalSnapshot(publicWorkspace);
+    const anonymousPublic = createPublicPortalSnapshot(publicWorkspace, "", {
+      exposeLocalVoteState: false
+    });
+    const knownVisitor = createPublicPortalSnapshot(publicWorkspace, "", {
+      exposeLocalVoteState: false,
+      publicVoterKey: "public-visitor:known-visitor"
+    });
+
+    expect(localPreview.requests[0].hasCurrentUserVote).toBe(true);
+    expect(anonymousPublic.requests[0].hasCurrentUserVote).toBe(false);
+    expect(knownVisitor.requests[0].hasCurrentUserVote).toBe(true);
+    expect(JSON.stringify(knownVisitor)).not.toContain("publicVoterKeys");
   });
 
   it("creates public portal snapshots without leaking private workspace data", () => {

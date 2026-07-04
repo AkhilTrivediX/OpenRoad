@@ -94,6 +94,7 @@ function createRequest(overrides: RequestFixtureOverrides = {}): RequestItem {
       })) ?? [],
     description: "Improve customer exports.",
     hasCurrentUserVote: false,
+    publicVoterKeys: [],
     id: "req-test",
     mergedSources:
       mergedSources?.map((source, index) => ({

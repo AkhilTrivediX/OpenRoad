@@ -122,6 +122,7 @@ describe("Jira issue integration", () => {
     expect(request).toMatchObject({
       archived: false,
       hasCurrentUserVote: false,
+      publicVoterKeys: [],
       owner: "Maintainer",
       requester: "Customer Ops",
       source: "Jira",

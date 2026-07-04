@@ -38,6 +38,7 @@ The release manifest includes:
 - Manifest version.
 - Product name, package version, and private package flag.
 - Release version, channel, git commit, generated timestamp, support window, and rollback note.
+- Rollback data-migration note, including the current OpenRoad state schema when source metadata is available.
 - Required gates: `pnpm check`, built-server smoke, feature evidence, and operator release notes.
 - SHA-256 checksums and byte sizes for local build artifacts.
 - Docker publishing mode.

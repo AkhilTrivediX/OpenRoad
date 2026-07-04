@@ -703,6 +703,7 @@ export function App() {
       tags: parseTags(newRequestDraft.tags),
       votes: 0,
       hasCurrentUserVote: false,
+      publicVoterKeys: [],
       status: "New",
       owner: "Unassigned",
       visibility: newRequestDraft.visibility,
@@ -784,6 +785,9 @@ export function App() {
             votes: request.votes + duplicate.votes,
             hasCurrentUserVote:
               request.hasCurrentUserVote || duplicate.hasCurrentUserVote,
+            publicVoterKeys: Array.from(
+              new Set([...request.publicVoterKeys, ...duplicate.publicVoterKeys])
+            ),
             tags: Array.from(new Set([...request.tags, ...duplicate.tags])),
             comments: [
               ...request.comments,

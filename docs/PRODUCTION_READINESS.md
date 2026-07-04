@@ -168,28 +168,28 @@ OpenRoad releases must eventually include:
 
 ## Current Readiness Debt
 
-These are known production gaps after the Team SaaS foundation.
+These are known production gaps after the Self-Host Operations foundation.
 
 - App-level error boundary is still pending.
 - Some UI orchestration still lives inside `App.tsx`; app module decomposition is pending.
-- Product and team persistence are file-backed, not managed SQL with online migrations and restore drills.
+- Product and team persistence are file-backed, not managed SQL with online migrations.
 - Full-state APIs are protected by single-user/admin-token mode, but browser session auth is not implemented.
 - Persistent workspace membership and audit events exist, but OAuth/session auth and invitation flows are not implemented.
-- CI exists for the production gate, but hosted deployment and release promotion are not implemented.
+- Backup/restore and local self-host smoke commands exist, but published Docker images and hosted release promotion are not implemented.
 - Observability is limited to process logs; structured operational events and dashboards are pending.
 - Public portal abuse controls, requester identity, rate limits, and notification preferences are pending.
 - Browser QA is manual rather than automated end-to-end CI.
 
 ## Next Production Move
 
-Next branch: `feat/self-host-ops-foundation`
+Next branch: `feat/app-module-decomposition`
 
 Purpose:
 
-- Add Docker Compose and service configuration.
-- Add backup and restore commands for data and team metadata files.
-- Add admin bootstrap documentation.
-- Add upgrade notes and release checklist.
-- Add production smoke script for self-host operators.
+- Split the monolithic React application into feature modules.
+- Move domain orchestration out of view components.
+- Add shared UI primitives where existing duplication is creating complexity.
+- Preserve the current UX and fixed-shell behavior.
+- Make future public portal, integration, and AI slices easier to implement safely.
 
-Provider integrations, notifications, and public launch work should build on top of this self-hostable operations boundary.
+Provider integrations, notifications, and public launch work should build on top of this cleaner application boundary.

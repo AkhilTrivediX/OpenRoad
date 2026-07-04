@@ -8,9 +8,9 @@ Each feature must also satisfy `docs/PRODUCTION_READINESS.md` before merging to 
 
 ## Current Stage
 
-Current stage: Stage 1 Local-First Alpha with a production server foundation.
+Current stage: Stage 2 Team Beta foundation in progress.
 
-The standalone loop now covers workspaces, requests, triage, internal work, roadmap planning, changelog drafts, public portal preview, local durability, and the first production run path. The next production work should harden the API/auth/tenancy contract before real team collaboration or provider integrations.
+The standalone loop now covers workspaces, requests, triage, internal work, roadmap planning, changelog drafts, public portal preview, local durability, production APIs, basic tenancy boundaries, file-backed team metadata, audit events, and self-host operations. The next production work should reduce application-module risk before adding public portal interaction, provider integrations, or AI assistance.
 
 ## Feature 1: Workspace Shell
 
@@ -136,7 +136,7 @@ Acceptance:
 
 Branch: `feat/api-auth-tenancy-contract`
 
-Status: active.
+Status: merged to `main`.
 
 Build:
 
@@ -157,7 +157,7 @@ Acceptance:
 
 Branch: `feat/team-saas-foundation`
 
-Status: active.
+Status: merged to `main`.
 
 Build:
 
@@ -180,6 +180,8 @@ Acceptance:
 
 Branch: `feat/production-foundation`
 
+Status: merged to `main`.
+
 Build:
 
 - Production Node server.
@@ -200,6 +202,8 @@ Acceptance:
 ### Self-Host Operations Foundation
 
 Branch: `feat/self-host-ops-foundation`
+
+Status: active.
 
 Build:
 

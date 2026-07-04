@@ -23,15 +23,17 @@ External providers attach through external links and sync state. Provider-specif
 
 ## Repository Status
 
-OpenRoad now has a working standalone product loop and a production server foundation:
+OpenRoad now has a working standalone product loop, production server foundation, and first self-host operations path:
 
 - React app shell for requests, work, roadmap, changelog, portal, and settings.
 - Versioned OpenRoad domain state with local persistence, import/export, and recovery.
 - Public/private visibility for requests, comments, roadmap items, and changelog entries.
 - Production Node server that serves the built app and same-origin OpenRoad APIs.
 - File-backed server persistence for a single-tenant self-host or evaluation install.
+- Team metadata, workspace membership, audit events, and private ops status APIs.
+- Docker Compose, backup/restore, and smoke-check commands for self-host operators.
 
-Current production limits are explicit: authentication, team roles, tenant membership, managed database migrations, hosted CI/CD, observability, and provider integrations are planned next-stage work.
+Current production limits are explicit: OAuth/session auth, invitation flows, managed database migrations, hosted release promotion, deeper observability, and provider integrations are planned next-stage work.
 
 Current docs:
 
@@ -71,6 +73,18 @@ $env:PORT="4173"
 pnpm start
 ```
 
+## Self-Host Operations
+
+```powershell
+Copy-Item .env.selfhost.example .env.selfhost
+docker compose --env-file .env.selfhost up --build -d
+$env:OPENROAD_ADMIN_TOKEN = (Get-Content .env.selfhost | Where-Object { $_ -match "^OPENROAD_ADMIN_TOKEN=" }) -replace "^OPENROAD_ADMIN_TOKEN=", ""
+pnpm ops:smoke -- --base-url http://127.0.0.1:4173 --workspace-id acme --admin-token $env:OPENROAD_ADMIN_TOKEN
+pnpm ops:backup -- --output-dir C:\openroad\backups
+```
+
+Keep `.env.selfhost`, `/data`, backup directories, and restore-safety directories private. Backups contain OpenRoad product data, requester information, team metadata, memberships, and audit events.
+
 The server exposes:
 
 - `GET /api/health`
@@ -88,4 +102,4 @@ The server exposes:
 
 When `OPENROAD_ADMIN_TOKEN` is configured, private state APIs require `Authorization: Bearer <token>`. The portal API remains public and returns only the public projection. See [API auth and tenancy contract](docs/API_AUTH_TENANCY_CONTRACT.md).
 
-Deployment details live in [Deployment runbook](docs/DEPLOYMENT_RUNBOOK.md).
+Deployment, backup, restore, smoke, upgrade, and rollback details live in [Deployment runbook](docs/DEPLOYMENT_RUNBOOK.md).

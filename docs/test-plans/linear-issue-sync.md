@@ -94,7 +94,7 @@ As a workspace owner, I can prepare a Linear OAuth connection and import Linear 
 ## Evidence
 
 - Branch: `feat/linear-issue-sync`
-- Commit SHAs: pending.
+- Commit SHAs: `6f83b16`.
 - Date: 2026-07-04.
 - Acceptance criteria status: Passed for safe Linear OAuth setup, payload-backed Linear issue import/link, workspace-scoped metadata, and standalone operation with zero Linear env vars.
 - Commands run:

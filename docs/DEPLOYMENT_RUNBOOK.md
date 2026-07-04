@@ -31,6 +31,8 @@ $env:OPENROAD_OWNER_NAME="Workspace Owner"
 $env:OPENROAD_ADMIN_TOKEN="replace-with-long-random-token"
 $env:OPENROAD_NOTIFICATION_DELIVERY_MODE="disabled"
 $env:OPENROAD_NOTIFICATION_DELIVERY_FILE="C:\openroad\openroad-notification-deliveries.jsonl"
+$env:OPENROAD_TOKEN_ENCRYPTION_KEY=""
+$env:OPENROAD_TOKEN_ENCRYPTION_KEY_ID="primary"
 $env:OPENROAD_PORTAL_RATE_LIMIT_MAX="30"
 $env:OPENROAD_PORTAL_RATE_LIMIT_WINDOW_MS="60000"
 $env:OPENROAD_GITHUB_APP_SLUG=""
@@ -61,6 +63,8 @@ $env:OPENROAD_OWNER_NAME="Workspace Owner"
 $env:OPENROAD_ADMIN_TOKEN="replace-with-long-random-token"
 $env:OPENROAD_NOTIFICATION_DELIVERY_MODE="disabled"
 $env:OPENROAD_NOTIFICATION_DELIVERY_FILE="C:\openroad\openroad-notification-deliveries.jsonl"
+$env:OPENROAD_TOKEN_ENCRYPTION_KEY=""
+$env:OPENROAD_TOKEN_ENCRYPTION_KEY_ID="primary"
 $env:OPENROAD_PORTAL_RATE_LIMIT_MAX="30"
 $env:OPENROAD_PORTAL_RATE_LIMIT_WINDOW_MS="60000"
 $env:OPENROAD_GITHUB_APP_SLUG=""
@@ -81,7 +85,7 @@ $env:PORT="4173"
 
 Do not expose `OPENROAD_ADMIN_TOKEN` to browser JavaScript.
 
-Do not expose GitHub App private keys, GitHub webhook secrets, Linear client secrets, or Jira client secrets to browser JavaScript. Prefer `OPENROAD_GITHUB_APP_PRIVATE_KEY_FILE` for self-host installs.
+Do not expose GitHub App private keys, GitHub webhook secrets, Linear client secrets, Jira client secrets, or `OPENROAD_TOKEN_ENCRYPTION_KEY` to browser JavaScript. Prefer `OPENROAD_GITHUB_APP_PRIVATE_KEY_FILE` for self-host installs.
 
 ## Docker Compose Self-Host
 
@@ -106,6 +110,7 @@ The Compose service:
 - Runs with `OPENROAD_SINGLE_USER_MODE=false`.
 - Requires `OPENROAD_ADMIN_TOKEN` before startup.
 - Keeps requester notification delivery disabled unless `OPENROAD_NOTIFICATION_DELIVERY_MODE=file` is configured.
+- Keeps provider credential storage disabled unless `OPENROAD_TOKEN_ENCRYPTION_KEY` is configured.
 - Applies process-local public portal write limits from `OPENROAD_PORTAL_RATE_LIMIT_MAX` and `OPENROAD_PORTAL_RATE_LIMIT_WINDOW_MS`.
 
 ## Admin Bootstrap
@@ -158,11 +163,26 @@ The backup directory contains:
 - `openroad-team.json`
 - `manifest.json`
 
-The manifest records creation time, app package version, source paths, file sizes, and schema versions. Backups are not encrypted by OpenRoad tooling; use your host, storage, or secret-management system to protect them.
+The manifest records creation time, app package version, source paths, file sizes, and schema versions. Backups are not encrypted by OpenRoad tooling; use your host, storage, or secret-management system to protect them. When provider credentials exist, `openroad-integrations.json` contains encrypted token material and must be treated as sensitive.
 
 ## Data Schema Notes
 
 OpenRoad state schema `7` stores anonymous public portal voter keys and requester notification delivery metadata inside `openroad-state.json`. Upgrade from schema `6` is automatic on load and initializes existing notification events with `deliveryAttempts: 0`. Downgrading to a schema `6` or older build after schema `7` data is written requires restoring a pre-upgrade backup.
+
+Integration metadata schema `2` stores server-only encrypted provider credential records in `openroad-integrations.json`. Upgrade from schema `1` is automatic on load and initializes `credentials: []`. Downgrading to a schema `1` build after credentials are created requires revoking/removing credentials or restoring a pre-upgrade integration backup.
+
+## Provider Token Storage
+
+Provider credential storage is disabled by default. To allow workspace owners/admins to create encrypted provider credential records for later sync workers, configure:
+
+```powershell
+$env:OPENROAD_TOKEN_ENCRYPTION_KEY="replace-with-at-least-32-random-characters"
+$env:OPENROAD_TOKEN_ENCRYPTION_KEY_ID="primary"
+```
+
+Credential APIs require `integration:manage` and return only metadata. They never return access tokens, refresh tokens, ciphertext, IVs, tags, or the encryption key. Manual GitHub disconnects and signed GitHub installation deletion webhooks revoke matching credentials.
+
+Changing the encryption key without re-encrypting credentials will make existing encrypted payloads unreadable to future sync workers. This release does not include external KMS or re-encryption tooling.
 
 ## Requester Notification Delivery
 
@@ -263,7 +283,7 @@ For local single-user mode without `OPENROAD_ADMIN_TOKEN`, omit `--admin-token`;
 - OAuth/session auth is not implemented.
 - Team metadata is file-backed, not managed SQL.
 - Trusted proxy headers are disabled by default.
-- Payload-backed GitHub issue import, GitHub App installation verification, live issue fetch, signed webhooks, safe disconnect APIs, payload-backed Linear issue import, payload-backed Jira issue import, requester notification outbox/preferences, and a server-side JSONL notification delivery handoff exist; background jobs, persisted provider tokens, Linear/Jira live sync/webhooks, direct email/provider notification delivery, conflict UI, and billing are not implemented.
+- Payload-backed GitHub issue import, GitHub App installation verification, live issue fetch, signed webhooks, safe disconnect APIs, encrypted server-only provider credential storage, payload-backed Linear issue import, payload-backed Jira issue import, requester notification outbox/preferences, and a server-side JSONL notification delivery handoff exist; background jobs, OAuth callback exchange, Linear/Jira live sync/webhooks, direct email/provider notification delivery, conflict UI, and billing are not implemented.
 - Docker images are build-local by default; release manifests can record publishing metadata, but registry publishing infrastructure is not bundled yet.
 - Signed artifact infrastructure is not bundled yet; release manifests record signing as not configured unless an operator supplies signing metadata.
 - Named Docker volume backup requires an operator copy step or a future packaged volume helper.

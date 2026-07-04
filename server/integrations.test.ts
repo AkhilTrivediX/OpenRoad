@@ -16,7 +16,10 @@ import {
   IntegrationStoreError,
   createInitialIntegrationState,
   openRoadIntegrationSchemaVersion,
-  parseIntegrationState
+  parseIntegrationState,
+  revokeIntegrationCredential,
+  sanitizeIntegrationCredentialMetadata,
+  type IntegrationCredential
 } from "./integrations";
 
 describe("OpenRoad integration metadata store", () => {
@@ -30,7 +33,8 @@ describe("OpenRoad integration metadata store", () => {
       installations: [],
       mappings: [],
       schemaVersion: openRoadIntegrationSchemaVersion,
-      syncEvents: []
+      syncEvents: [],
+      credentials: []
     });
   });
 
@@ -94,6 +98,7 @@ describe("OpenRoad integration metadata store", () => {
           webhookSecret: "secret"
         }
       ],
+      credentials: [],
       mappings: [],
       schemaVersion: openRoadIntegrationSchemaVersion,
       syncEvents: [
@@ -142,10 +147,99 @@ describe("OpenRoad integration metadata store", () => {
     const state = parseIntegrationState({
       installations: [],
       mappings: [],
-      schemaVersion: openRoadIntegrationSchemaVersion
+      schemaVersion: 1
     });
 
     expect(state.syncEvents).toEqual([]);
+    expect(state.credentials).toEqual([]);
+    expect(state.schemaVersion).toBe(openRoadIntegrationSchemaVersion);
+  });
+
+  it("stores credential metadata while redacting encrypted secret payloads from API metadata", () => {
+    const credential = createCredential();
+    const state = parseIntegrationState({
+      credentials: [
+        {
+          ...credential,
+          accessToken: "secret",
+          token: "secret"
+        }
+      ],
+      installations: [createInstallation()],
+      mappings: [],
+      schemaVersion: openRoadIntegrationSchemaVersion,
+      syncEvents: []
+    });
+    const metadata = sanitizeIntegrationCredentialMetadata(state.credentials[0]);
+
+    expect(state.credentials).toHaveLength(1);
+    expect(JSON.stringify(state)).not.toContain("accessToken");
+    expect(JSON.stringify(metadata)).not.toContain("ciphertext");
+    expect(metadata).toMatchObject({
+      id: "credential-github-install",
+      installationId: "github-install",
+      provider: "github",
+      providerScopes: ["repo", "read:issues"],
+      secretTypes: ["access-token", "refresh-token"],
+      status: "active",
+      workspaceId: "acme"
+    });
+  });
+
+  it("revokes credential records by clearing encrypted secret material", () => {
+    const revoked = revokeIntegrationCredential(
+      createCredential(),
+      "2026-07-04T02:00:00.000Z"
+    );
+
+    expect(revoked).toMatchObject({
+      id: "credential-github-install",
+      revokedAt: "2026-07-04T02:00:00.000Z",
+      status: "revoked",
+      updatedAt: "2026-07-04T02:00:00.000Z"
+    });
+    expect(revoked.encryptedSecret).toBeUndefined();
+  });
+
+  it("rewrites current-schema metadata after sanitizing unknown secret-like fields", async () => {
+    const integrationFile = await temporaryIntegrationFile();
+    await mkdir(dirname(integrationFile), { recursive: true });
+    await writeFile(
+      integrationFile,
+      JSON.stringify(
+        {
+          credentials: [
+            {
+              ...createCredential(),
+              accessToken: "raw-access-token",
+              refreshToken: "raw-refresh-token"
+            }
+          ],
+          installations: [
+            {
+              ...createInstallation(),
+              token: "raw-installation-token"
+            }
+          ],
+          mappings: [],
+          schemaVersion: openRoadIntegrationSchemaVersion,
+          syncEvents: []
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+
+    const result = await new FileIntegrationStore(integrationFile).load();
+    const persisted = await readFile(integrationFile, "utf8");
+
+    expect(result.status).toBe("ready");
+    expect(result.state.credentials).toHaveLength(1);
+    expect(persisted).not.toContain("raw-access-token");
+    expect(persisted).not.toContain("raw-refresh-token");
+    expect(persisted).not.toContain("raw-installation-token");
+    expect(persisted).toContain("ciphertext");
   });
 
   it("recovers corrupt metadata and rejects future schemas", async () => {
@@ -161,6 +255,7 @@ describe("OpenRoad integration metadata store", () => {
     expect(() =>
       parseIntegrationState({
         installations: [],
+        credentials: [],
         mappings: [],
         schemaVersion: openRoadIntegrationSchemaVersion + 1,
         syncEvents: []
@@ -172,6 +267,7 @@ describe("OpenRoad integration metadata store", () => {
     expect(() =>
       parseIntegrationState({
         installations: [{ id: "broken" }],
+        credentials: [],
         mappings: [],
         schemaVersion: openRoadIntegrationSchemaVersion
       })
@@ -179,8 +275,18 @@ describe("OpenRoad integration metadata store", () => {
     expect(() =>
       parseIntegrationState({
         installations: [],
+        credentials: [],
         mappings: [{ id: "broken" }],
         schemaVersion: openRoadIntegrationSchemaVersion
+      })
+    ).toThrow("invalid");
+    expect(() =>
+      parseIntegrationState({
+        credentials: [{ id: "broken" }],
+        installations: [],
+        mappings: [],
+        schemaVersion: openRoadIntegrationSchemaVersion,
+        syncEvents: []
       })
     ).toThrow("invalid");
   });
@@ -199,6 +305,31 @@ function createInstallation() {
     id: "github-install",
     workspaceId: "acme"
   });
+}
+
+function createCredential(): IntegrationCredential {
+  return {
+    createdAt: "2026-07-04T00:00:00.000Z",
+    encryptedSecret: {
+      alg: "aes-256-gcm" as const,
+      ciphertext: "ciphertext",
+      iv: "iv",
+      keyId: "primary",
+      tag: "tag"
+    },
+    expiresAt: "2026-07-04T12:00:00.000Z",
+    id: "credential-github-install",
+    installationId: "github-install",
+    label: "GitHub sync",
+    permissions: ["read:external", "read:openroad"],
+    provider: "github" as const,
+    providerScopes: ["repo", "read:issues", "repo"],
+    secretTypes: ["access-token", "refresh-token"],
+    status: "active" as const,
+    tokenType: "bearer",
+    updatedAt: "2026-07-04T00:00:00.000Z",
+    workspaceId: "acme"
+  };
 }
 
 function gitHubIssuePayload() {

@@ -18,7 +18,10 @@ import {
   type RoadmapItem
 } from "../src/domain/openroad";
 import { InMemoryPortalRateLimiter, createOpenRoadServer, type PortalRateLimiter } from "./http";
-import { FileIntegrationStore } from "./integrations";
+import {
+  FileIntegrationStore,
+  createIntegrationCredentialSecretContext
+} from "./integrations";
 import { FileOpenRoadStore } from "./store";
 import { FileTeamStore } from "./team";
 import type { AuthOptions } from "./access";
@@ -26,6 +29,7 @@ import type { GitHubAppClient, GitHubAppConfig } from "./github-app";
 import type { LinearOAuthConfig } from "./linear";
 import type { JiraOAuthConfig } from "./jira";
 import type { NotificationDeliveryAdapter } from "./notifications";
+import { createIntegrationTokenVault, type IntegrationTokenVault } from "./token-vault";
 
 const openServers: Server[] = [];
 
@@ -977,6 +981,309 @@ describe("OpenRoad production server", () => {
     expect(fetchCount).toBe(0);
   });
 
+  it("stores, lists, and revokes provider credentials without exposing secrets", async () => {
+    const tokenVault = testTokenVault();
+    const { integrationFile, teamFile, url } = await startTestServer({
+      auth: { adminToken: "secret", singleUserMode: false, trustProxyHeaders: true },
+      tokenVault
+    });
+
+    const imported = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/github/issues/import`, {
+      body: JSON.stringify(gitHubImportPayload()),
+      headers: {
+        Authorization: "Bearer secret",
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    const publicList = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/github/credentials`
+    );
+    const viewerCreate = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/github/credentials`,
+      {
+        body: JSON.stringify(gitHubCredentialPayload()),
+        headers: {
+          ...workspaceActorHeaders("acme", "Viewer"),
+          "Content-Type": "application/json"
+        },
+        method: "POST"
+      }
+    );
+    const integrationCreate = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/github/credentials`,
+      {
+        body: JSON.stringify(gitHubCredentialPayload()),
+        headers: {
+          ...integrationActorHeaders("acme", "github:github-install"),
+          "Content-Type": "application/json"
+        },
+        method: "POST"
+      }
+    );
+    const ownerCreate = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/github/credentials`,
+      {
+        body: JSON.stringify(gitHubCredentialPayload()),
+        headers: {
+          ...workspaceActorHeaders("acme", "Owner"),
+          "Content-Type": "application/json"
+        },
+        method: "POST"
+      }
+    );
+    const ownerList = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/github/credentials`,
+      {
+        headers: workspaceActorHeaders("acme", "Owner")
+      }
+    );
+    const createText = JSON.stringify(ownerCreate.body);
+    const listText = JSON.stringify(ownerList.body);
+    const integrationStateText = await readFile(integrationFile, "utf8");
+    const teamStateText = await readFile(teamFile, "utf8");
+    const integrationState = JSON.parse(integrationStateText) as {
+      credentials: Array<{
+        encryptedSecret?: unknown;
+        id: string;
+        status: string;
+      }>;
+    };
+    const persistedCredential = integrationState.credentials[0];
+    const openedSecret = tokenVault.open(persistedCredential.encryptedSecret as any, {
+      associatedData: createIntegrationCredentialSecretContext({
+        ...ownerCreate.body.credential,
+        id: persistedCredential.id
+      })
+    });
+    const revoked = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/github/credentials/${encodeURIComponent(
+        ownerCreate.body.credential.id
+      )}/revoke`,
+      {
+        headers: workspaceActorHeaders("acme", "Owner"),
+        method: "POST"
+      }
+    );
+    const revokedState = JSON.parse(await readFile(integrationFile, "utf8")) as {
+      credentials: Array<{ encryptedSecret?: unknown; status: string }>;
+    };
+
+    expect(imported.status).toBe(201);
+    expect(publicList.status).toBe(403);
+    expect(viewerCreate.status).toBe(403);
+    expect(integrationCreate.status).toBe(403);
+    expect(ownerCreate.status).toBe(201);
+    expect(ownerCreate.body).toMatchObject({
+      credential: {
+        installationId: "github-install",
+        permissions: ["read:external"],
+        provider: "github",
+        providerScopes: ["repo", "issues:read"],
+        secretTypes: ["access-token", "refresh-token"],
+        status: "active",
+        workspaceId: "acme"
+      },
+      status: "stored"
+    });
+    expect(ownerCreate.body.credential.encryptedSecret).toBeUndefined();
+    expect(ownerList.status).toBe(200);
+    expect(ownerList.body.credentials).toHaveLength(1);
+    expect(createText).not.toContain("github-access-secret");
+    expect(createText).not.toContain("github-refresh-secret");
+    expect(createText).not.toContain("ciphertext");
+    expect(listText).not.toContain("github-access-secret");
+    expect(listText).not.toContain("github-refresh-secret");
+    expect(listText).not.toContain("ciphertext");
+    expect(integrationStateText).not.toContain("github-access-secret");
+    expect(integrationStateText).not.toContain("github-refresh-secret");
+    expect(teamStateText).not.toContain("github-access-secret");
+    expect(openedSecret).toEqual({
+      accessToken: "github-access-secret",
+      refreshToken: "github-refresh-secret"
+    });
+    expect(revoked.status).toBe(200);
+    expect(revoked.body.credential).toMatchObject({ status: "revoked" });
+    expect(JSON.stringify(revoked.body)).not.toContain("ciphertext");
+    expect(revokedState.credentials[0]).toMatchObject({ status: "revoked" });
+    expect(revokedState.credentials[0].encryptedSecret).toBeUndefined();
+  });
+
+  it("keeps credential storage configuration-gated and installation-scoped", async () => {
+    const disabled = await startTestServer({
+      auth: { adminToken: "secret", singleUserMode: false, trustProxyHeaders: true },
+      tokenVault: { reason: "Token vault disabled for test.", status: "not_configured" }
+    });
+    await fetchJson(`${disabled.url}/api/openroad/workspaces/acme/integrations/github/issues/import`, {
+      body: JSON.stringify(gitHubImportPayload()),
+      headers: {
+        Authorization: "Bearer secret",
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+
+    const notConfigured = await fetchJson(
+      `${disabled.url}/api/openroad/workspaces/acme/integrations/github/credentials`,
+      {
+        body: JSON.stringify(gitHubCredentialPayload()),
+        headers: {
+          Authorization: "Bearer secret",
+          "Content-Type": "application/json"
+        },
+        method: "POST"
+      }
+    );
+    const configured = await startTestServer({
+      auth: { adminToken: "secret", singleUserMode: false, trustProxyHeaders: true },
+      tokenVault: testTokenVault()
+    });
+    await fetchJson(`${configured.url}/api/openroad/workspaces/acme/integrations/github/issues/import`, {
+      body: JSON.stringify(gitHubImportPayload()),
+      headers: {
+        Authorization: "Bearer secret",
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    const missingInstallation = await fetchJson(
+      `${configured.url}/api/openroad/workspaces/acme/integrations/github/credentials`,
+      {
+        body: JSON.stringify(gitHubCredentialPayload({ installationId: "missing" })),
+        headers: {
+          Authorization: "Bearer secret",
+          "Content-Type": "application/json"
+        },
+        method: "POST"
+      }
+    );
+    const overScoped = await fetchJson(
+      `${configured.url}/api/openroad/workspaces/acme/integrations/github/credentials`,
+      {
+        body: JSON.stringify(gitHubCredentialPayload({ permissions: ["write:external"] })),
+        headers: {
+          Authorization: "Bearer secret",
+          "Content-Type": "application/json"
+        },
+        method: "POST"
+      }
+    );
+    const beforeDisconnect = await configured.integrationStore.load();
+    await configured.integrationStore.replaceState({
+      ...beforeDisconnect.state,
+      installations: beforeDisconnect.state.installations.map((installation) => ({
+        ...installation,
+        status: "disconnected" as const
+      }))
+    });
+    const disconnected = await fetchJson(
+      `${configured.url}/api/openroad/workspaces/acme/integrations/github/credentials`,
+      {
+        body: JSON.stringify(gitHubCredentialPayload()),
+        headers: {
+          Authorization: "Bearer secret",
+          "Content-Type": "application/json"
+        },
+        method: "POST"
+      }
+    );
+
+    expect(notConfigured.status).toBe(503);
+    expect(notConfigured.body.error.code).toBe("not_configured");
+    expect(missingInstallation.status).toBe(404);
+    expect(overScoped.status).toBe(400);
+    expect(disconnected.status).toBe(422);
+    expect(disconnected.body.error.code).toBe("invalid_state");
+  });
+
+  it("revokes matching provider credentials when GitHub installations disconnect", async () => {
+    const { integrationStore, url } = await startTestServer({
+      auth: { adminToken: "secret", singleUserMode: false, trustProxyHeaders: true },
+      tokenVault: testTokenVault()
+    });
+
+    const acmeImport = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/github/issues/import`, {
+      body: JSON.stringify(gitHubImportPayload()),
+      headers: {
+        Authorization: "Bearer secret",
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    const maintainerImport = await fetchJson(
+      `${url}/api/openroad/workspaces/maintainer/integrations/github/issues/import`,
+      {
+        body: JSON.stringify(
+          gitHubImportPayload({
+            issue: gitHubIssuePayload({
+              node_id: "I_maintainer_credentials",
+              number: 102,
+              title: "Maintainer credential issue"
+            })
+          })
+        ),
+        headers: {
+          Authorization: "Bearer secret",
+          "Content-Type": "application/json"
+        },
+        method: "POST"
+      }
+    );
+    const acmeCredential = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/github/credentials`,
+      {
+        body: JSON.stringify(gitHubCredentialPayload()),
+        headers: {
+          Authorization: "Bearer secret",
+          "Content-Type": "application/json"
+        },
+        method: "POST"
+      }
+    );
+    const maintainerCredential = await fetchJson(
+      `${url}/api/openroad/workspaces/maintainer/integrations/github/credentials`,
+      {
+        body: JSON.stringify(gitHubCredentialPayload()),
+        headers: {
+          Authorization: "Bearer secret",
+          "Content-Type": "application/json"
+        },
+        method: "POST"
+      }
+    );
+    const disconnected = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/github/app/installations/github-install/disconnect`,
+      {
+        headers: workspaceActorHeaders("acme", "Owner"),
+        method: "POST"
+      }
+    );
+    const integrations = await integrationStore.load();
+    const acmeStoredCredential = integrations.state.credentials.find(
+      (credential) => credential.id === acmeCredential.body.credential.id
+    );
+    const maintainerStoredCredential = integrations.state.credentials.find(
+      (credential) => credential.id === maintainerCredential.body.credential.id
+    );
+
+    expect(acmeImport.status).toBe(201);
+    expect(maintainerImport.status).toBe(201);
+    expect(acmeCredential.status).toBe(201);
+    expect(maintainerCredential.status).toBe(201);
+    expect(disconnected.status).toBe(200);
+    expect(disconnected.body).toMatchObject({
+      revokedCredentials: 1,
+      status: "disconnected"
+    });
+    expect(acmeStoredCredential).toMatchObject({ status: "revoked", workspaceId: "acme" });
+    expect(acmeStoredCredential?.encryptedSecret).toBeUndefined();
+    expect(maintainerStoredCredential).toMatchObject({
+      status: "active",
+      workspaceId: "maintainer"
+    });
+    expect(maintainerStoredCredential?.encryptedSecret).toBeTruthy();
+  });
+
   it("imports Linear issues into requests and persists mappings outside core state", async () => {
     const { dataFile, integrationFile, teamFile, url } = await startTestServer();
 
@@ -1797,7 +2104,8 @@ describe("OpenRoad production server", () => {
 
   it("disconnects GitHub installations from signed installation webhooks without deleting requests", async () => {
     const { integrationStore, store, url } = await startTestServer({
-      githubAppConfig: testGitHubWebhookConfig()
+      githubAppConfig: testGitHubWebhookConfig(),
+      tokenVault: testTokenVault()
     });
     const created = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/github/issues/import`, {
       body: JSON.stringify(gitHubImportPayload()),
@@ -1842,6 +2150,14 @@ describe("OpenRoad production server", () => {
         }
       ]
     });
+    const credential = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/github/credentials`,
+      {
+        body: JSON.stringify(gitHubCredentialPayload()),
+        headers: { "Content-Type": "application/json" },
+        method: "POST"
+      }
+    );
 
     const response = await fetchJson(
       `${url}/api/openroad/integrations/github/webhook`,
@@ -1889,7 +2205,11 @@ describe("OpenRoad production server", () => {
     const linearMapping = afterUnsuspend.state.mappings.find(
       (mapping) => mapping.external.provider === "linear"
     );
+    const storedCredential = afterUnsuspend.state.credentials.find(
+      (item) => item.id === credential.body.credential.id
+    );
 
+    expect(credential.status).toBe(201);
     expect(response.status).toBe(202);
     expect(response.body.status).toBe("synced");
     expect(integrations.state.installations.find((installation) => installation.provider === "github")).toMatchObject({
@@ -1906,6 +2226,8 @@ describe("OpenRoad production server", () => {
     expect(unsuspend.status).toBe(202);
     expect(unsuspend.body.status).toBe("ignored");
     expect(githubInstallation).toMatchObject({ status: "disconnected" });
+    expect(storedCredential).toMatchObject({ status: "revoked" });
+    expect(storedCredential?.encryptedSecret).toBeUndefined();
     expect(request).toBeTruthy();
     expect(rejectedImport.status).toBe(422);
     expect(rejectedImport.body.error.code).toBe("invalid_state");
@@ -2641,6 +2963,7 @@ async function startTestServer(
     linearOAuthConfig?: LinearOAuthConfig;
     notificationDeliveryAdapter?: NotificationDeliveryAdapter;
     portalRateLimiter?: PortalRateLimiter;
+    tokenVault?: IntegrationTokenVault;
   } = {}
 ) {
   const directory = await mkdtemp(join(tmpdir(), "openroad-server-"));
@@ -2669,7 +2992,8 @@ async function startTestServer(
     notificationDeliveryAdapter: options.notificationDeliveryAdapter,
     portalRateLimiter: options.portalRateLimiter,
     store,
-    teamStore
+    teamStore,
+    tokenVault: options.tokenVault
   });
   const url = await listen(server);
   openServers.push(server);
@@ -2735,6 +3059,20 @@ function gitHubImportPayload(overrides: Record<string, unknown> = {}) {
     },
     issue: gitHubIssuePayload(),
     pullRequests: [gitHubPullRequestPayload()],
+    ...overrides
+  };
+}
+
+function gitHubCredentialPayload(overrides: Record<string, unknown> = {}) {
+  return {
+    accessToken: "github-access-secret",
+    expiresAt: "2026-07-05T00:00:00.000Z",
+    installationId: "github-install",
+    label: "GitHub sync",
+    permissions: ["read:external"],
+    providerScopes: ["repo", "issues:read"],
+    refreshToken: "github-refresh-secret",
+    tokenType: "bearer",
     ...overrides
   };
 }
@@ -2887,6 +3225,19 @@ function testGitHubWebhookConfig(): GitHubAppConfig {
     webhookSecret: "webhook-secret",
     webhookSecretConfigured: true
   };
+}
+
+function testTokenVault() {
+  const vault = createIntegrationTokenVault({
+    encryptionKey: "0123456789abcdef0123456789abcdef",
+    keyId: "primary"
+  });
+
+  if (vault.status !== "ready") {
+    throw new Error("Expected test token vault to be ready.");
+  }
+
+  return vault;
 }
 
 function signedGitHubWebhookRequest(

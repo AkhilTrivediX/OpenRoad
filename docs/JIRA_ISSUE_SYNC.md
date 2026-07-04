@@ -9,6 +9,7 @@ OpenRoad supports a first Jira integration slice that keeps Jira complexity outs
 - Explicit Jira field mapping for issue id, key, summary, Atlassian Document Format description, status category, project, issue type, priority, assignee, reporter, labels, URL, and updated timestamp.
 - Provider-neutral external mappings in `OPENROAD_INTEGRATION_FILE`.
 - Workspace-scoped installation metadata.
+- Encrypted server-only credential records through the provider-neutral credential API when `OPENROAD_TOKEN_ENCRYPTION_KEY` is configured.
 - Provider/id-scoped integration actors, for example `jira:jira-install-jira-cloud-id`.
 - Audit events for Jira issue import/update.
 
@@ -40,6 +41,8 @@ The setup endpoint returns:
 - `authorizeUrl` when fully configured
 
 It never returns `OPENROAD_JIRA_CLIENT_SECRET`, OAuth codes, access tokens, refresh tokens, or webhook secrets.
+
+The setup endpoint still does not exchange OAuth codes. Encrypted credential storage now exists through the provider-neutral credential API, but OAuth callback exchange remains deferred.
 
 Required current scopes:
 
@@ -100,10 +103,15 @@ Add `requestId` to link the Jira issue to an existing OpenRoad request. Re-impor
 - Jira issue body is stored in the OpenRoad request description, not public portal output unless the request is intentionally made public later.
 - OpenRoad core objects do not receive Jira-specific fields.
 
+## Credential Storage
+
+`POST /api/openroad/workspaces/:workspaceId/integrations/jira/credentials`
+
+Credential storage requires `integration:manage`, an active Jira installation in the workspace, and `OPENROAD_TOKEN_ENCRYPTION_KEY`. API responses return only metadata and never return access tokens, refresh tokens, ciphertext, IVs, tags, or key material.
+
 ## Deferred
 
 - OAuth callback and token exchange.
-- Encrypted Atlassian token storage.
 - Live Jira REST fetch.
 - Jira webhook endpoint and signature/idempotency handling.
 - Background sync jobs.

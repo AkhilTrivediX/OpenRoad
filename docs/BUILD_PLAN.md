@@ -10,7 +10,7 @@ Each feature must also satisfy `docs/PRODUCTION_READINESS.md` before merging to 
 
 Current stage: Stage 2 Team Beta foundation in progress.
 
-The standalone loop now covers workspaces, requests, triage, internal work, roadmap planning, changelog drafts, public portal preview, local durability, production APIs, basic tenancy boundaries, file-backed team metadata, audit events, self-host operations, app-level crash recovery, a first app-module boundary, hardened public portal write APIs with persisted visitor vote identity, the provider-neutral integration adapter contract, a payload-backed GitHub issue import/link API, server-only GitHub App installation verification, live GitHub issue fetch through verified installations, signed GitHub webhooks, safe disconnect handling, Linear issue import/link, Jira issue import/link with explicit field mapping, requester notification preferences/outbox events plus JSONL delivery handoff, deterministic local assistant triage, and release candidate manifest tooling. The next production work should move into provider token storage and background sync foundations while direct email/provider notification delivery and real model-backed AI adapters remain separate hardening slices.
+The standalone loop now covers workspaces, requests, triage, internal work, roadmap planning, changelog drafts, public portal preview, local durability, production APIs, basic tenancy boundaries, file-backed team metadata, audit events, self-host operations, app-level crash recovery, a first app-module boundary, hardened public portal write APIs with persisted visitor vote identity, the provider-neutral integration adapter contract, a payload-backed GitHub issue import/link API, server-only GitHub App installation verification, live GitHub issue fetch through verified installations, signed GitHub webhooks, safe disconnect handling, encrypted server-only provider credential storage, Linear issue import/link, Jira issue import/link with explicit field mapping, requester notification preferences/outbox events plus JSONL delivery handoff, deterministic local assistant triage, and release candidate manifest tooling. The next production work should move into background sync foundations while direct email/provider notification delivery and real model-backed AI adapters remain separate hardening slices.
 
 ## Feature 1: Workspace Shell
 
@@ -476,6 +476,27 @@ Acceptance:
 - Jira complexity stays in mapping and Settings.
 - Core UX remains the same as standalone mode.
 - Jira tokens and client secrets are not persisted or returned.
+
+## Feature 11A: Provider Token Storage
+
+Branch: `feat/provider-token-storage`
+
+Status: implemented and production-checked.
+
+Build:
+
+- Integration metadata schema `2` with credential records.
+- AES-256-GCM server-only token sealing behind `OPENROAD_TOKEN_ENCRYPTION_KEY`.
+- Provider-neutral credential create/list/revoke APIs guarded by `integration:manage`.
+- Installation/provider/workspace scope validation.
+- Safe revocation on manual and signed GitHub installation disconnect.
+- Backup, restore, release, and runbook notes for sensitive integration metadata.
+
+Acceptance:
+
+- Standalone mode works with zero credentials and no encryption key.
+- Credential APIs return only metadata and never return tokens or encrypted payload internals.
+- Background sync and provider write-back now have a server-only secret boundary to build on.
 
 ## Feature 12: Requester Notifications
 

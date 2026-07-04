@@ -16,6 +16,7 @@ Official Linear references used for this slice:
 - Link a Linear issue payload to an existing OpenRoad request.
 - Re-import the same Linear issue and update the mapped request instead of creating duplicates.
 - Store Linear installation metadata and mappings in `OPENROAD_INTEGRATION_FILE`, outside OpenRoad core workspace state.
+- Store encrypted server-only credential records through the provider-neutral credential API when `OPENROAD_TOKEN_ENCRYPTION_KEY` is configured.
 - Record audit events for Linear imports and syncs.
 
 ## Environment
@@ -36,7 +37,13 @@ Do not expose Linear client secrets, access tokens, refresh tokens, webhook secr
 
 The endpoint requires `integration:manage`, which is limited to local owners/admins and workspace owners. It returns setup status, required scopes, a CSRF state value, and an authorization URL when the Linear OAuth environment is configured.
 
-This endpoint does not exchange OAuth codes and does not persist Linear tokens. Token exchange is intentionally deferred until OpenRoad has a production secret store.
+This endpoint does not exchange OAuth codes. Encrypted credential storage now exists through the provider-neutral credential API, but the OAuth callback and code exchange flow remains deferred.
+
+## Credential Storage
+
+`POST /api/openroad/workspaces/:workspaceId/integrations/linear/credentials`
+
+Credential storage requires `integration:manage`, an active Linear installation in the workspace, and `OPENROAD_TOKEN_ENCRYPTION_KEY`. API responses return only metadata and never return access tokens, refresh tokens, ciphertext, IVs, tags, or key material.
 
 ## Import Endpoint
 
@@ -81,7 +88,6 @@ Linear issue assignees are preserved in the imported description and tags. OpenR
 ## Deferred Work
 
 - OAuth callback and token exchange.
-- Encrypted token storage.
 - Live GraphQL issue fetch.
 - Linear webhook endpoint with `Linear-Signature` verification.
 - Browser Settings UI for connect, import, disconnect, and sync logs.

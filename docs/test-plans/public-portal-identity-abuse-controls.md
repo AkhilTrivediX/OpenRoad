@@ -93,12 +93,16 @@ As a self-host OpenRoad operator, I can expose a public portal where visitors ca
 ## Evidence
 
 - Branch: `feat/public-portal-identity-abuse-controls`
-- Commit SHA: Pending.
+- Implementation commit SHA: `58763b2`.
 - Date: 2026-07-04.
-- Acceptance criteria status: Pending implementation.
-- Commands run: Pending.
+- Acceptance criteria status: Passed for schema migration, persisted public voter keys, visitor-aware public projections, idempotent duplicate votes, cookie/header visitor identity, existing portal validation, rate limiting, and private-data projection boundaries.
+- Commands run:
+  - `pnpm vitest run src/domain/openroad.test.ts server/http.test.ts server/store.test.ts`: 92 tests passed.
+  - `pnpm check`: 230 tests passed; client and server production builds passed.
+  - `pnpm release:verify`: dry-run release manifest generated for commit `58763b27c04855465896b61afaf922699620f132`.
+  - Built-server smoke on port `4298`: `pnpm ops:smoke` passed; direct public portal read, cookie-backed vote, duplicate vote dedupe, and visitor-header read checks passed.
 - Browser/viewports tested: No UI changes planned.
 - Accessibility checks: No UI changes planned.
-- Reviewer notes: Pending implementation self-review and audit.
-- Known unresolved risks: Distributed abuse control remains out of scope until OpenRoad has shared production infrastructure such as managed SQL/Redis.
-- Rollback notes: Pending final verification.
+- Reviewer notes: Self-review completed against public/private projection boundaries, schema migration, requester identity normalization, duplicate-vote behavior, and rollback notes.
+- Known unresolved risks: Distributed abuse control, CAPTCHA/external bot checks, and public visitor accounts remain out of scope until OpenRoad has shared production infrastructure such as managed SQL/Redis and explicit account/session support.
+- Rollback notes: Revert this branch before migrated data is written, or restore a pre-schema-6 backup when downgrading after deployment.

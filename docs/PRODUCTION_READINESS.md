@@ -176,19 +176,19 @@ These are known production gaps after the requester notifications and local assi
 - Persistent workspace membership and audit events exist, but OAuth/session auth and invitation flows are not implemented.
 - Backup/restore, local self-host smoke commands, and release candidate manifests exist, but published Docker images and hosted release promotion are not implemented.
 - Observability is limited to process logs; structured operational events and dashboards are pending.
-- Public portal write controls and process-local rate limits exist, but persistent requester identity, notification preferences, and distributed abuse controls are pending.
+- Public portal write controls, persisted anonymous visitor vote identity, idempotent vote dedupe, and process-local rate limits exist, but notification preferences, CAPTCHA/external bot checks, and distributed abuse controls are pending.
 - Payload-backed GitHub issue import/link, GitHub App installation verification, live issue fetch, signed webhook handling, safe disconnect APIs, payload-backed Linear issue import/link, payload-backed Jira issue import/link, and requester notification outbox/preferences exist, but background sync jobs, provider token storage, notification delivery adapters, conflict UI, and browser Settings UI are not implemented yet.
 - Deterministic local assistant triage exists, but real model-backed adapters, prompt redaction, user consent controls, AI audit logs, and external-provider policy review are not implemented yet.
 - Browser QA is manual rather than automated end-to-end CI.
 
 ## Next Production Move
 
-Next branch: `feat/public-portal-identity-abuse-controls`
+Next branch: `feat/requester-notification-delivery`
 
 Purpose:
 
-- Add persistent public requester identity and stronger abuse controls before serious public portal exposure.
-- Preserve public/private projection boundaries and the standalone public portal workflow.
+- Add a production-safe requester notification delivery adapter boundary and outbox processing path.
+- Preserve public/private notification body boundaries, preference checks, quiet-window behavior, and auditability.
 - Preserve the existing production gate: feature branch, test plan first, focused tests, `pnpm check`, browser QA when UI changes, smoke test, audit, merge, then push.
 
 Provider token storage, live Linear/Jira fetch, Jira webhooks, notification delivery adapters, and conflict UI remain hardening work that should stay behind server-only secret management and/or explicit delivery infrastructure.

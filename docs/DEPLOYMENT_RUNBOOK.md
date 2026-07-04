@@ -155,6 +155,10 @@ The backup directory contains:
 
 The manifest records creation time, app package version, source paths, file sizes, and schema versions. Backups are not encrypted by OpenRoad tooling; use your host, storage, or secret-management system to protect them.
 
+## Data Schema Notes
+
+OpenRoad state schema `6` stores anonymous public portal voter keys inside `openroad-state.json` so repeated public votes remain idempotent after restart and backup/restore. Upgrade from schema `5` is automatic on load and initializes existing requests with empty voter-key lists. Downgrading to a schema `5` build after schema `6` data is written requires restoring a pre-upgrade backup.
+
 ## Restore
 
 Stop OpenRoad before restoring files.
@@ -190,19 +194,20 @@ For local single-user mode without `OPENROAD_ADMIN_TOKEN`, omit `--admin-token`;
 
 1. Read the release manifest, release notes, and migration notes.
 2. Stop writes to the instance.
-3. Run `pnpm ops:backup` and verify the backup directory has a manifest and both data files.
+3. Run `pnpm ops:backup` and verify the backup directory has a manifest and all three data files.
 4. Deploy the new application version or rebuild the Docker image.
 5. Start OpenRoad.
-6. Run `pnpm ops:smoke`.
-7. Check `/api/openroad/ops/status` with the admin token.
-8. Reopen access.
+6. Confirm automatic state migration succeeds when the release notes mention a schema bump.
+7. Run `pnpm ops:smoke`.
+8. Check `/api/openroad/ops/status` with the admin token.
+9. Reopen access.
 
 ## Rollback
 
 1. Stop the server.
 2. Preserve the current data files as a failed-upgrade backup.
 3. Restore the previous application build or Docker image.
-4. Restore the last known-good data/team backup if the new version changed or damaged runtime data.
+4. Restore the last known-good data/team backup if the new version changed, migrated, or damaged runtime data.
 5. Start OpenRoad.
 6. Run the smoke test before reopening access.
 

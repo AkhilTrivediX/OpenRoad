@@ -1801,7 +1801,7 @@ export function App() {
                     <div className="source-history-header">
                       <Bell aria-hidden="true" size={14} />
                       <strong>Requester updates</strong>
-                      <small>{workspace.notifications.outbox.length} queued</small>
+                      <small>{selectedRequestNotifications.length} queued</small>
                     </div>
                     <div className="notification-toggles">
                       <label className="check-field">

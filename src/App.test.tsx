@@ -580,6 +580,22 @@ describe("OpenRoad workspace shell", () => {
     expect(within(panel).getByText(/moved from New to Planned/)).toBeInTheDocument();
   });
 
+  it("counts requester notifications for the selected request only", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    const inboxRegion = screen.getByRole("region", { name: /Requests needing attention/ });
+
+    await user.click(within(inboxRegion).getByRole("button", { name: /Dark mode for docs site/ }));
+    await user.selectOptions(screen.getByLabelText("Selected request status"), "Planned");
+    expect(within(screen.getByLabelText("Requester notifications")).getByText("1 queued")).toBeInTheDocument();
+
+    await user.click(within(inboxRegion).getByRole("button", { name: /API rate limit visibility/ }));
+    const panel = screen.getByLabelText("Requester notifications");
+
+    expect(within(panel).getByText("0 queued")).toBeInTheDocument();
+    expect(within(panel).getByText(/No queued updates for CLI user/)).toBeInTheDocument();
+  });
+
   it("honors requester status notification opt-outs in the inspector", async () => {
     const user = userEvent.setup();
     render(<App />);

@@ -292,6 +292,49 @@ describe("OpenRoad production server", () => {
     ).toBe(true);
   });
 
+  it("rejects broad notification settings replacement over workspace actions", async () => {
+    const { url } = await startTestServer({
+      auth: { singleUserMode: false, trustProxyHeaders: true }
+    });
+    const workspace = createInitialOpenRoadState().workspaces[0];
+
+    const response = await fetchJson(`${url}/api/openroad/workspaces/acme/actions`, {
+      body: JSON.stringify({
+        action: {
+          notifications: {
+            ...workspace.notifications,
+            outbox: [
+              {
+                body: "Untrusted injected delivery body.",
+                createdAt: "2026-07-04T00:00:00.000Z",
+                dedupeKey: "request-status-change:dark-mode-docs:Planned",
+                id: "injected-event",
+                nextStatus: "Planned",
+                previousStatus: "New",
+                requestId: "dark-mode-docs",
+                requestTitle: "Dark mode for docs site",
+                requester: "Docs feedback",
+                status: "queued",
+                title: "Injected event",
+                type: "request-status-change"
+              }
+            ]
+          },
+          type: "replace-notification-settings",
+          workspaceId: "acme"
+        }
+      }),
+      headers: {
+        ...workspaceActorHeaders("acme", "Contributor"),
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error.code).toBe("invalid_state");
+  });
+
   it("requires owner/admin permission for replace-state actions", async () => {
     const { url } = await startTestServer({
       auth: { singleUserMode: false, trustProxyHeaders: true }

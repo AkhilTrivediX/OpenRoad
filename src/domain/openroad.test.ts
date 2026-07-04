@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearOpenRoadState,
   createPublicPortalSnapshot,
@@ -24,6 +24,10 @@ import {
 
 beforeEach(() => {
   localStorage.clear();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 function sampleRequest(overrides: Partial<RequestItem> = {}): RequestItem {
@@ -319,6 +323,50 @@ describe("OpenRoad domain state", () => {
     });
   });
 
+  it("keeps same-tick notification event ids unique by event discriminator", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-04T00:00:00.000Z"));
+    const state = createInitialOpenRoadState();
+    const workspace = state.workspaces[0];
+    const request = workspace.requests.find((item) => item.id === "dark-mode-docs");
+    if (!request) throw new Error("Fixture request missing.");
+
+    const planned = openRoadReducer(state, {
+      request: {
+        ...request,
+        status: "Planned"
+      },
+      type: "replace-request",
+      workspaceId: workspace.id
+    });
+    const backToNew = openRoadReducer(planned, {
+      request: {
+        ...request,
+        status: "New"
+      },
+      type: "replace-request",
+      workspaceId: workspace.id
+    });
+    const shipping = openRoadReducer(backToNew, {
+      request: {
+        ...request,
+        status: "Shipping soon"
+      },
+      type: "replace-request",
+      workspaceId: workspace.id
+    });
+    const ids = shipping.workspaces[0].notifications.outbox.map((event) => event.id);
+
+    expect(ids).toHaveLength(2);
+    expect(new Set(ids).size).toBe(2);
+    expect(ids).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("request-status-change-dark-mode-docs-planned"),
+        expect.stringContaining("request-status-change-dark-mode-docs-shipping-soon")
+      ])
+    );
+  });
+
   it("honors workspace-level notification disablement", () => {
     const state = createInitialOpenRoadState();
     const workspace = state.workspaces[0];
@@ -453,6 +501,55 @@ describe("OpenRoad domain state", () => {
     });
     expect(JSON.stringify(event)).toContain("Dark mode is now available in docs.");
     expect(JSON.stringify(event)).not.toContain("Private rollout evidence.");
+  });
+
+  it("does not queue changelog notifications for draft or private releases", () => {
+    const state = createInitialOpenRoadState();
+    const workspace = state.workspaces[0];
+    const publicDraft = sampleChangelogItem({
+      id: "draft-release-note",
+      requestIds: ["dark-mode-docs"],
+      state: "Draft",
+      title: "Draft release note",
+      visibility: "Public"
+    });
+    const privateDraft = sampleChangelogItem({
+      id: "private-release-note",
+      requestIds: ["dark-mode-docs"],
+      state: "Draft",
+      title: "Private release note",
+      visibility: "Private"
+    });
+
+    const withPublicDraft = openRoadReducer(state, {
+      changelogItem: publicDraft,
+      type: "create-changelog-item",
+      workspaceId: workspace.id
+    });
+    const stillDraft = openRoadReducer(withPublicDraft, {
+      changelogItem: {
+        ...publicDraft,
+        publicSummary: "Still only a draft."
+      },
+      type: "replace-changelog-item",
+      workspaceId: workspace.id
+    });
+    const withPrivateDraft = openRoadReducer(stillDraft, {
+      changelogItem: privateDraft,
+      type: "create-changelog-item",
+      workspaceId: workspace.id
+    });
+    const privateReady = openRoadReducer(withPrivateDraft, {
+      changelogItem: {
+        ...privateDraft,
+        state: "Ready",
+        visibility: "Private"
+      },
+      type: "replace-changelog-item",
+      workspaceId: workspace.id
+    });
+
+    expect(privateReady.workspaces[0].notifications.outbox).toEqual([]);
   });
 
   it("saves and loads current schema state", () => {

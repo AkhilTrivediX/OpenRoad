@@ -920,13 +920,15 @@ function queueStatusChangeNotification(
   const preference = resolveRequesterNotificationPreference(workspace.notifications, nextRequest);
   if (!workspace.notifications.enabled || !preference.statusUpdates) return workspace;
 
+  const dedupeKey = createStatusNotificationDedupeKey(nextRequest.id, nextRequest.status);
+
   return appendNotificationEvent(
     workspace,
     {
       body: `${nextRequest.title} moved from ${previousRequest.status} to ${nextRequest.status}.`,
       createdAt: now,
-      dedupeKey: createStatusNotificationDedupeKey(nextRequest.id, nextRequest.status),
-      id: createNotificationEventId("request-status", now, nextRequest.id),
+      dedupeKey,
+      id: createNotificationEventId("request-status", now, nextRequest.id, dedupeKey),
       nextStatus: nextRequest.status,
       previousStatus: previousRequest.status,
       requestId: nextRequest.id,
@@ -957,6 +959,8 @@ function queueChangelogPublishNotifications(
     const preference = resolveRequesterNotificationPreference(nextWorkspace.notifications, request);
     if (!nextWorkspace.notifications.enabled || !preference.changelogUpdates) return nextWorkspace;
 
+    const dedupeKey = createChangelogNotificationDedupeKey(request.id, nextChangelogItem.id);
+
     return appendNotificationEvent(
       nextWorkspace,
       {
@@ -964,8 +968,8 @@ function queueChangelogPublishNotifications(
         changelogId: nextChangelogItem.id,
         changelogTitle: nextChangelogItem.title,
         createdAt: now,
-        dedupeKey: createChangelogNotificationDedupeKey(request.id, nextChangelogItem.id),
-        id: createNotificationEventId("changelog", now, request.id),
+        dedupeKey,
+        id: createNotificationEventId("changelog", now, request.id, dedupeKey),
         requestId: request.id,
         requestTitle: request.title,
         requester: request.requester,
@@ -1047,8 +1051,13 @@ function createNotificationPreferenceId(request: Pick<RequestItem, "id" | "reque
   return `notification-pref-${slugify(request.id)}-${slugify(request.requester)}`;
 }
 
-function createNotificationEventId(prefix: string, now: string, requestId: string) {
-  return `${prefix}-${slugify(requestId)}-${slugify(now)}`;
+function createNotificationEventId(
+  prefix: string,
+  now: string,
+  requestId: string,
+  discriminator: string
+) {
+  return `${prefix}-${slugify(requestId)}-${slugify(discriminator)}-${slugify(now)}`;
 }
 
 function normalizePreferenceIdentity(value: string) {

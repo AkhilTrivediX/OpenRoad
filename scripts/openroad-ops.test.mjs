@@ -17,23 +17,47 @@ describe("openroad ops", () => {
     );
   });
 
-  it("creates a backup with state, team metadata, and manifest", async ({ task }) => {
+  it("creates a backup with state, team metadata, integration metadata, and manifest", async ({ task }) => {
     const root = await createTempRoot(task.name);
-    const { dataFile, teamFile } = await writeOpenRoadPair(root);
+    const { dataFile, integrationFile, teamFile } = await writeOpenRoadPair(root);
 
     const result = await createBackup({
       dataFile,
+      integrationFile,
       name: "snapshot",
       outputDir: join(root, "backups"),
       teamFile
     });
 
     const manifest = JSON.parse(await readFile(join(result.backupDir, "manifest.json"), "utf8"));
-    expect(manifest.type).toBe("openroad-file-pair");
+    expect(manifest.type).toBe("openroad-file-snapshot");
     expect(manifest.files.data.schemaVersion).toBe(2);
+    expect(manifest.files.integration.schemaVersion).toBe(1);
     expect(manifest.files.team.schemaVersion).toBe(1);
     await expect(readFile(join(result.backupDir, "openroad-state.json"), "utf8")).resolves.toContain("acme");
+    await expect(readFile(join(result.backupDir, "openroad-integrations.json"), "utf8")).resolves.toContain(
+      "installations"
+    );
     await expect(readFile(join(result.backupDir, "openroad-team.json"), "utf8")).resolves.toContain("owner");
+  });
+
+  it("backs up an empty integration snapshot when the integration file does not exist yet", async ({ task }) => {
+    const root = await createTempRoot(task.name);
+    const { dataFile, teamFile } = await writeOpenRoadPair(root);
+
+    const result = await createBackup({
+      dataFile,
+      integrationFile: join(root, "missing-integrations.json"),
+      name: "snapshot",
+      outputDir: join(root, "backups"),
+      teamFile
+    });
+    const manifest = JSON.parse(await readFile(join(result.backupDir, "manifest.json"), "utf8"));
+
+    expect(manifest.files.integration.sourceStatus).toBe("default-empty");
+    await expect(readFile(join(result.backupDir, "openroad-integrations.json"), "utf8")).resolves.toContain(
+      "mappings"
+    );
   });
 
   it("fails backup when a required source file is missing", async ({ task }) => {
@@ -53,9 +77,10 @@ describe("openroad ops", () => {
     const root = await createTempRoot(task.name);
     const source = join(root, "source");
     const target = join(root, "target");
-    const { dataFile, teamFile } = await writeOpenRoadPair(source, "acme");
+    const { dataFile, integrationFile, teamFile } = await writeOpenRoadPair(source, "acme");
     const backup = await createBackup({
       dataFile,
+      integrationFile,
       name: "snapshot",
       outputDir: join(root, "backups"),
       teamFile
@@ -65,11 +90,13 @@ describe("openroad ops", () => {
     const result = await restoreBackup({
       dataFile: targetPair.dataFile,
       inputDir: backup.backupDir,
+      integrationFile: targetPair.integrationFile,
       safetyDir: join(root, "safety"),
       teamFile: targetPair.teamFile
     });
 
     await expect(readFile(targetPair.dataFile, "utf8")).resolves.toContain("acme");
+    await expect(readFile(targetPair.integrationFile, "utf8")).resolves.toContain("installations");
     await expect(readFile(join(result.safetyDir, "openroad-state.json"), "utf8")).resolves.toContain(
       "old-workspace"
     );
@@ -81,6 +108,10 @@ describe("openroad ops", () => {
     await mkdir(backup, { recursive: true });
     await writeFile(join(backup, "manifest.json"), JSON.stringify({ manifestVersion: 1, type: "openroad-file-pair" }));
     await writeFile(join(backup, "openroad-state.json"), JSON.stringify({ schemaVersion: 2 }));
+    await writeFile(
+      join(backup, "openroad-integrations.json"),
+      JSON.stringify({ installations: [], mappings: [], schemaVersion: 1 })
+    );
     await writeFile(
       join(backup, "openroad-team.json"),
       JSON.stringify({ auditEvents: [], memberships: [], schemaVersion: 1, users: [] })
@@ -148,6 +179,7 @@ async function createTempRoot(name) {
 async function writeOpenRoadPair(root, workspaceId = "acme") {
   await mkdir(root, { recursive: true });
   const dataFile = join(root, "openroad-state.json");
+  const integrationFile = join(root, "openroad-integrations.json");
   const teamFile = join(root, "openroad-team.json");
   await writeFile(
     dataFile,
@@ -159,6 +191,18 @@ async function writeOpenRoadPair(root, workspaceId = "acme") {
         schemaVersion: 2,
         workItems: [],
         workspaces: [{ id: workspaceId, name: workspaceId }]
+      },
+      null,
+      2
+    )
+  );
+  await writeFile(
+    integrationFile,
+    JSON.stringify(
+      {
+        installations: [],
+        mappings: [],
+        schemaVersion: 1
       },
       null,
       2
@@ -177,7 +221,7 @@ async function writeOpenRoadPair(root, workspaceId = "acme") {
       2
     )
   );
-  return { dataFile, teamFile };
+  return { dataFile, integrationFile, teamFile };
 }
 
 async function startSmokeServer({ token, tokenMode }) {

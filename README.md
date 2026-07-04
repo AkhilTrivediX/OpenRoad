@@ -31,9 +31,10 @@ OpenRoad now has a working standalone product loop, production server foundation
 - Production Node server that serves the built app and same-origin OpenRoad APIs.
 - File-backed server persistence for a single-tenant self-host or evaluation install.
 - Team metadata, workspace membership, audit events, and private ops status APIs.
+- Provider-neutral integration mappings plus a payload-backed GitHub issue import/link API.
 - Docker Compose, backup/restore, and smoke-check commands for self-host operators.
 
-Current production limits are explicit: OAuth/session auth, invitation flows, managed database migrations, hosted release promotion, deeper observability, and provider integrations are planned next-stage work.
+Current production limits are explicit: OAuth/session auth, invitation flows, managed database migrations, hosted release promotion, deeper observability, live GitHub App OAuth/webhooks, and Linear/Jira adapters are planned next-stage work.
 
 Current docs:
 
@@ -43,6 +44,7 @@ Current docs:
 - [Test strategy](docs/TEST_STRATEGY.md)
 - [Branching and release workflow](docs/BRANCHING_AND_RELEASE.md)
 - [Integration adapter contract](docs/INTEGRATION_ADAPTER_CONTRACT.md)
+- [GitHub issue sync](docs/GITHUB_ISSUE_SYNC.md)
 - [UI concepts](docs/UI_CONCEPTS.md)
 
 ## Working Rule
@@ -69,6 +71,7 @@ pnpm dev
 pnpm install --frozen-lockfile
 pnpm build
 $env:OPENROAD_DATA_FILE="C:\openroad\openroad-state.json"
+$env:OPENROAD_INTEGRATION_FILE="C:\openroad\openroad-integrations.json"
 $env:OPENROAD_TEAM_FILE="C:\openroad\openroad-team.json"
 $env:PORT="4173"
 pnpm start
@@ -84,7 +87,7 @@ pnpm ops:smoke -- --base-url http://127.0.0.1:4173 --workspace-id acme --admin-t
 pnpm ops:backup -- --output-dir C:\openroad\backups
 ```
 
-Keep `.env.selfhost`, `/data`, backup directories, and restore-safety directories private. Backups contain OpenRoad product data, requester information, team metadata, memberships, and audit events.
+Keep `.env.selfhost`, `/data`, backup directories, and restore-safety directories private. Backups contain OpenRoad product data, requester information, integration metadata, team metadata, memberships, and audit events.
 
 The server exposes:
 
@@ -97,6 +100,7 @@ The server exposes:
 - `GET /api/openroad/workspaces`
 - `GET /api/openroad/workspaces/:workspaceId`
 - `POST /api/openroad/workspaces/:workspaceId/actions`
+- `POST /api/openroad/workspaces/:workspaceId/integrations/github/issues/import`
 - `GET /api/openroad/audit-events`
 - `GET /api/openroad/ops/status`
 - `GET /api/openroad/workspaces/:workspaceId/portal`

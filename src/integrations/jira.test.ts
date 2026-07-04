@@ -20,6 +20,7 @@ describe("Jira issue integration", () => {
     expect(issue).toMatchObject({
       assignee: "Akhil Trivedi",
       body: "Users need Jira context.\nKeep the roadmap calm.",
+      cloudId: "cloud-123",
       id: "10042",
       issueType: "Story",
       key: "OPEN-42",
@@ -181,7 +182,8 @@ describe("Jira issue integration", () => {
         fields: jiraFields({
           project: { id: "project-other", key: "OPEN", name: "Other OpenRoad" }
         }),
-        id: "20042"
+        id: "10042",
+        self: "https://api.atlassian.com/ex/jira/cloud-other/rest/api/3/issue/10042"
       })
     );
     const openRoad = {
@@ -205,9 +207,18 @@ describe("Jira issue integration", () => {
 
   it("validates Jira installation capabilities and provider fixtures", () => {
     const installation = createInstallation();
+    const secondSiteInstallation = createJiraInstallation({
+      accountId: "jira-cloud-other",
+      accountName: "Other OpenRoad Jira",
+      createdAt: "2026-07-04T00:00:00.000Z",
+      id: "jira-install",
+      workspaceId: "acme"
+    });
     const issue = parseJiraIssuePayload(jiraIssuePayload());
     const fixture = createJiraIssueFixture(issue, installation, "request-1");
 
+    expect(installation.id).toBe("jira-install-jira-cloud");
+    expect(secondSiteInstallation.id).toBe("jira-install-jira-cloud-other");
     expect(getJiraInstallationCapabilities(installation)).toMatchObject({
       canImportIssues: true,
       canReceiveWebhooks: false,

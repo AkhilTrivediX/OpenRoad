@@ -36,6 +36,7 @@ export type JiraIssueStatus = {
 export type JiraIssue = {
   assignee?: string;
   body: string;
+  cloudId?: string;
   id: string;
   issueType?: string;
   key: string;
@@ -74,6 +75,7 @@ export type JiraInstallationCapabilities = {
 
 export function createJiraInstallation(input: JiraInstallationInput): IntegrationInstallation {
   const permissions = normalizePermissions(input.permissions ?? jiraRequiredInstallationPermissions);
+  const accountId = requireText(input.accountId, "Jira account id");
 
   assertHasPermission(permissions, "read:external");
   assertHasPermission(permissions, "read:openroad");
@@ -81,10 +83,10 @@ export function createJiraInstallation(input: JiraInstallationInput): Integratio
 
   return {
     createdAt: input.createdAt ?? new Date().toISOString(),
-    id: requireText(input.id, "Jira installation id"),
+    id: createJiraInstallationId(input.id, accountId),
     permissions,
     provider: "jira",
-    providerAccountId: requireText(input.accountId, "Jira account id"),
+    providerAccountId: accountId,
     providerAccountName: requireText(input.accountName, "Jira account name"),
     status: input.status ?? "active",
     workspaceId: requireText(input.workspaceId, "OpenRoad workspace id")
@@ -120,6 +122,7 @@ export function parseJiraIssuePayload(value: unknown): JiraIssue {
   return {
     assignee: parseJiraPerson(fields.assignee ?? value.assignee),
     body: parseJiraDescription(fields.description ?? value.description),
+    cloudId: getJiraCloudId(value),
     id,
     issueType: parseNamedObject(fields.issuetype ?? fields.issueType ?? value.issueType),
     key,
@@ -137,11 +140,18 @@ export function parseJiraIssuePayload(value: unknown): JiraIssue {
 
 export function createJiraIssueExternalRef(issue: JiraIssue): ExternalObjectRef {
   return {
-    id: issue.id,
+    id: issue.cloudId ? `${issue.cloudId}:${issue.id}` : issue.id,
     key: issue.key,
     provider: "jira",
     type: "issue",
     url: issue.url
+  };
+}
+
+export function scopeJiraIssueToCloudId(issue: JiraIssue, cloudId: string): JiraIssue {
+  return {
+    ...issue,
+    cloudId: requireText(issue.cloudId ?? cloudId, "Jira cloud id")
   };
 }
 
@@ -203,6 +213,7 @@ export function createJiraIssueFixture(
   return {
     external: createJiraIssueExternalRef(issue),
     fields: {
+      cloudId: issue.cloudId,
       issueType: issue.issueType,
       key: issue.key,
       labels: issue.labels,
@@ -287,6 +298,24 @@ function parseJiraStatusCategory(value: unknown) {
     key: getString(value.key),
     name: getString(value.name)
   };
+}
+
+function getJiraCloudId(value: Record<string, unknown>) {
+  return (
+    getString(value.cloudId) ??
+    getString(value.cloudID) ??
+    getString(value.providerAccountId) ??
+    getString(value.accountId) ??
+    getString(value.siteId) ??
+    parseCloudIdFromUrl(getString(value.self))
+  );
+}
+
+function parseCloudIdFromUrl(value: string | undefined) {
+  if (!value) return undefined;
+
+  const match = value.match(/\/ex\/jira\/([^/]+)\//);
+  return match?.[1] ? decodeURIComponent(match[1]) : undefined;
 }
 
 function parseJiraDescription(value: unknown) {
@@ -466,6 +495,18 @@ function assertHasPermission(
   if (!permissions.includes(permission)) {
     throw new Error(`Jira installation must include ${permission} permission.`);
   }
+}
+
+function createJiraInstallationId(id: string, accountId: string) {
+  const base = requireText(id, "Jira installation id");
+  const scope = normalizeIdentifier(accountId);
+  const normalizedBase = base.toLowerCase();
+
+  if (normalizedBase.includes(scope)) {
+    return base;
+  }
+
+  return `${base}-${scope}`.slice(0, 160);
 }
 
 function getString(value: unknown) {

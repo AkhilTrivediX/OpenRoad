@@ -66,6 +66,7 @@ import {
   getJiraInstallationCapabilities,
   jiraRequiredInstallationPermissions,
   parseJiraIssuePayload,
+  scopeJiraIssueToCloudId,
   syncOpenRoadRequestFromJiraIssue,
   type JiraInstallationInput,
   type JiraIssue
@@ -1236,9 +1237,12 @@ function parseJiraIssueImportPayload(
   }
 
   try {
-    const issue = parseJiraIssuePayload(payload.issue);
     const installation = createJiraInstallation(
       parseJiraInstallationPayload(payload.installation, workspaceId)
+    );
+    const issue = scopeJiraIssueToCloudId(
+      parseJiraIssuePayload(payload.issue),
+      installation.providerAccountId
     );
     const requestId = getBoundedText(payload.requestId, 120);
 
@@ -1733,9 +1737,7 @@ function parseJiraIntegrationPermissions(value: unknown): IntegrationPermission[
   return value
     .map((permission) => getBoundedText(permission, 80))
     .filter((permission): permission is IntegrationPermission =>
-      jiraRequiredInstallationPermissions.includes(permission as IntegrationPermission) ||
-      permission === "write:external" ||
-      permission === "webhook:receive"
+      jiraRequiredInstallationPermissions.includes(permission as IntegrationPermission)
     );
 }
 

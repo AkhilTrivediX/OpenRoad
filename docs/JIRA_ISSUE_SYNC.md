@@ -9,7 +9,7 @@ OpenRoad supports a first Jira integration slice that keeps Jira complexity outs
 - Explicit Jira field mapping for issue id, key, summary, Atlassian Document Format description, status category, project, issue type, priority, assignee, reporter, labels, URL, and updated timestamp.
 - Provider-neutral external mappings in `OPENROAD_INTEGRATION_FILE`.
 - Workspace-scoped installation metadata.
-- Provider/id-scoped integration actors, for example `jira:jira-install`.
+- Provider/id-scoped integration actors, for example `jira:jira-install-jira-cloud-id`.
 - Audit events for Jira issue import/update.
 
 ## Official Platform References
@@ -93,8 +93,9 @@ Add `requestId` to link the Jira issue to an existing OpenRoad request. Re-impor
 
 ## Mapping Rules
 
-- Jira provider `id` is the external identity.
+- Jira provider `id` plus Atlassian cloud/site id is the external identity.
 - Jira `key` is a display key only.
+- Raw installation ids are canonicalized with the Jira cloud/site id so two Jira sites cannot overwrite each other when an importer reuses the same local installation label.
 - Imported requests are private by default.
 - Jira issue body is stored in the OpenRoad request description, not public portal output unless the request is intentionally made public later.
 - OpenRoad core objects do not receive Jira-specific fields.

@@ -1259,10 +1259,16 @@ describe("OpenRoad production server", () => {
     });
     expect(response.body.mapping).toMatchObject({
       external: {
+        id: "cloud-123:10042",
         provider: "jira",
         type: "issue"
       }
     });
+    expect(response.body.installation.permissions).toEqual([
+      "read:external",
+      "read:openroad",
+      "write:openroad"
+    ]);
     expect(integrationState.installations).toEqual([
       expect.objectContaining({ provider: "jira", workspaceId: "acme" })
     ]);
@@ -1413,7 +1419,7 @@ describe("OpenRoad production server", () => {
           })
         ),
         headers: {
-          ...integrationActorHeaders("acme", "jira:jira-install"),
+          ...integrationActorHeaders("acme", "jira:jira-install-jira-cloud"),
           "Content-Type": "application/json"
         },
         method: "POST"
@@ -1428,7 +1434,7 @@ describe("OpenRoad production server", () => {
           })
         ),
         headers: {
-          ...integrationActorHeaders("acme", "jira:jira-install"),
+          ...integrationActorHeaders("acme", "jira:jira-install-jira-cloud"),
           "Content-Type": "application/json"
         },
         method: "POST"
@@ -1492,6 +1498,62 @@ describe("OpenRoad production server", () => {
         "OPENROAD_JIRA_REDIRECT_URI"
       ]
     });
+  });
+
+  it("keeps Jira issue identity scoped to the Atlassian cloud site", async () => {
+    const { integrationStore, url } = await startTestServer();
+
+    const first = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/jira/issues/import`, {
+      body: JSON.stringify(jiraImportPayload()),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const second = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/jira/issues/import`, {
+      body: JSON.stringify(
+        jiraImportPayload({
+          installation: {
+            accountId: "jira-cloud-other",
+            accountName: "Other OpenRoad Jira",
+            id: "jira-install",
+            permissions: [
+              "read:external",
+              "read:openroad",
+              "write:openroad",
+              "write:external",
+              "webhook:receive"
+            ]
+          },
+          issue: jiraIssuePayload({
+            id: "10042",
+            self: "https://api.atlassian.com/ex/jira/cloud-other/rest/api/3/issue/10042",
+            url: "https://other.atlassian.net/browse/OPEN-42"
+          })
+        })
+      ),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const integrations = await integrationStore.load();
+    const jiraInstallations = integrations.state.installations.filter(
+      (installation) => installation.provider === "jira"
+    );
+    const jiraMappings = integrations.state.mappings.filter(
+      (mapping) => mapping.external.provider === "jira"
+    );
+
+    expect(first.status).toBe(201);
+    expect(second.status).toBe(201);
+    expect(second.body.request.id).not.toBe(first.body.request.id);
+    expect(jiraInstallations.map((installation) => installation.id).sort()).toEqual([
+      "jira-install-jira-cloud",
+      "jira-install-jira-cloud-other"
+    ]);
+    expect(jiraMappings.map((mapping) => mapping.external.id).sort()).toEqual([
+      "cloud-123:10042",
+      "cloud-other:10042"
+    ]);
+    expect(second.body.installation.permissions).not.toContain("write:external");
+    expect(second.body.installation.permissions).not.toContain("webhook:receive");
   });
 
   it("rejects invalid or disconnected Jira imports without mutating core state", async () => {

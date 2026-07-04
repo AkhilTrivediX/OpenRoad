@@ -11,6 +11,8 @@
     "ops:backup": "node scripts/openroad-ops.mjs backup",
     "ops:restore": "node scripts/openroad-ops.mjs restore",
     "ops:smoke": "node scripts/openroad-ops.mjs smoke",
+    "release:plan": "node scripts/openroad-release.mjs candidate",
+    "release:verify": "node scripts/openroad-release.mjs candidate --dry-run --json",
     "start": "node server-dist/server/index.js",
     "test": "vitest",
     "test:run": "vitest run",

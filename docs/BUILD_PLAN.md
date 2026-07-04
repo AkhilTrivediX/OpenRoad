@@ -505,6 +505,8 @@ Acceptance:
 
 Branch: `feat/public-release-ops`
 
+Status: implemented and production-checked.
+
 Build:
 
 - Release candidates.
@@ -515,6 +517,8 @@ Build:
 - Support windows.
 - Billing/admin hardening if hosted subscription is enabled.
 - Self-host upgrade documentation.
+- Release candidate manifest helper with artifact checksums.
+- CI dry-run release verification.
 
 Acceptance:
 
@@ -522,3 +526,4 @@ Acceptance:
 - Free self-host remains useful.
 - Hosted and self-host paths share the same core product behavior.
 - Security patches have an explicit release path.
+- Docker publishing and signing are represented honestly as dry-run/not-configured unless external infrastructure is supplied.

@@ -175,7 +175,7 @@ These are known production gaps after the requester notifications and local assi
 - Product, integration, and team persistence are file-backed, not managed SQL with online migrations.
 - Full-state APIs are protected by single-user/admin-token mode, but browser session auth is not implemented.
 - Persistent workspace membership and audit events exist, but OAuth/session auth and invitation flows are not implemented.
-- Backup/restore and local self-host smoke commands exist, but published Docker images and hosted release promotion are not implemented.
+- Backup/restore, local self-host smoke commands, and release candidate manifests exist, but published Docker images and hosted release promotion are not implemented.
 - Observability is limited to process logs; structured operational events and dashboards are pending.
 - Public portal write controls and process-local rate limits exist, but persistent requester identity, notification preferences, and distributed abuse controls are pending.
 - Payload-backed GitHub issue import/link, GitHub App installation verification, live issue fetch, signed webhook handling, safe disconnect APIs, payload-backed Linear issue import/link, payload-backed Jira issue import/link, and requester notification outbox/preferences exist, but background sync jobs, provider token storage, notification delivery adapters, conflict UI, and browser Settings UI are not implemented yet.
@@ -184,12 +184,12 @@ These are known production gaps after the requester notifications and local assi
 
 ## Next Production Move
 
-Next branch: `feat/public-release-ops`
+Next branch: `feat/error-boundary-recovery`
 
 Purpose:
 
-- Add release candidate discipline, versioning, security patch flow, and self-host upgrade notes.
-- Make `main` promotion more repeatable for SaaS and self-host builds.
+- Add an app-level error boundary and recovery path so runtime UI failures do not strand users.
+- Preserve local data recovery, import/export, and reset paths.
 - Preserve the existing production gate: feature branch, test plan first, focused tests, `pnpm check`, browser QA when UI changes, smoke test, audit, merge, then push.
 
 Provider token storage, live Linear/Jira fetch, Jira webhooks, notification delivery adapters, and conflict UI remain hardening work that should stay behind server-only secret management and/or explicit delivery infrastructure.

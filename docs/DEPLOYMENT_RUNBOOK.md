@@ -124,6 +124,17 @@ pnpm ops:smoke -- --base-url http://127.0.0.1:4173 --workspace-id acme --admin-t
 
 For Docker Compose, run the same commands from the repository checkout on the host. Point `OPENROAD_DATA_FILE`, `OPENROAD_INTEGRATION_FILE`, and `OPENROAD_TEAM_FILE` at bind-mounted files if you manage data outside the named Docker volume. For named volumes, use `docker compose cp` or a temporary helper container to copy `/data/openroad-state.json`, `/data/openroad-integrations.json`, and `/data/openroad-team.json` before running host-side restore operations.
 
+## Release Candidate Manifest
+
+After `pnpm check` builds the production client and server, generate or verify a release manifest:
+
+```powershell
+pnpm release:verify
+pnpm release:plan -- --version 0.1.0-rc.1 --channel rc --output .openroad\releases\openroad-0.1.0-rc.1.json
+```
+
+The manifest records the release version, channel, git commit, required gates, support window, rollback note, and SHA-256 checksums for local build artifacts. Docker registry publishing and artifact signing remain dry-run/not-configured unless an operator supplies external publishing or signing metadata. Do not publish a release as signed or registry-published unless the generated manifest says that mode is configured.
+
 ## Backup
 
 Back up the product, integration, and team files together. They form one logical data snapshot.
@@ -177,7 +188,7 @@ For local single-user mode without `OPENROAD_ADMIN_TOKEN`, omit `--admin-token`;
 
 ## Upgrade Procedure
 
-1. Read the release notes and migration notes.
+1. Read the release manifest, release notes, and migration notes.
 2. Stop writes to the instance.
 3. Run `pnpm ops:backup` and verify the backup directory has a manifest and both data files.
 4. Deploy the new application version or rebuild the Docker image.
@@ -212,6 +223,7 @@ For local single-user mode without `OPENROAD_ADMIN_TOKEN`, omit `--admin-token`;
 - Do not publish `/data`, backup directories, or restore-safety directories.
 - Treat backup archives as sensitive because they contain requester, workspace, membership, and audit data.
 - Tune public portal rate limits for the deployment shape. Current limits are process-local and reset on restart.
+- Review release manifests before sharing them; they should contain checksums and release metadata, not secrets or product data.
 
 ## Current Limits
 
@@ -219,6 +231,7 @@ For local single-user mode without `OPENROAD_ADMIN_TOKEN`, omit `--admin-token`;
 - Team metadata is file-backed, not managed SQL.
 - Trusted proxy headers are disabled by default.
 - Payload-backed GitHub issue import, GitHub App installation verification, live issue fetch, signed webhooks, safe disconnect APIs, payload-backed Linear issue import, payload-backed Jira issue import, and requester notification outbox/preferences exist; background jobs, persisted provider tokens, Linear/Jira live sync/webhooks, notification delivery adapters, conflict UI, and billing are not implemented.
-- Docker images are build-local only; publishing and signed release artifacts are future release work.
+- Docker images are build-local by default; release manifests can record publishing metadata, but registry publishing infrastructure is not bundled yet.
+- Signed artifact infrastructure is not bundled yet; release manifests record signing as not configured unless an operator supplies signing metadata.
 - Named Docker volume backup requires an operator copy step or a future packaged volume helper.
 - Public portal rate limits are in-memory per Node process; distributed deployments need a shared limiter in a future slice.

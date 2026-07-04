@@ -95,7 +95,7 @@ As an OpenRoad workspace owner, I can see whether GitHub App connection is confi
 ## Evidence
 
 - Branch: `feat/github-app-installation`
-- Commit SHAs: pending commit.
+- Commit SHAs: `f38a160`.
 - Date: 2026-07-04.
 - Acceptance criteria status: Passed for server-only GitHub App setup and installation verification scope.
 - Commands run:

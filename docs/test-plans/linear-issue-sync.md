@@ -94,7 +94,7 @@ As a workspace owner, I can prepare a Linear OAuth connection and import Linear 
 ## Evidence
 
 - Branch: `feat/linear-issue-sync`
-- Commit SHAs: `6f83b16`.
+- Commit SHAs: `6f83b16`, `7db8bbe`.
 - Date: 2026-07-04.
 - Acceptance criteria status: Passed for safe Linear OAuth setup, payload-backed Linear issue import/link, workspace-scoped metadata, and standalone operation with zero Linear env vars.
 - Commands run:
@@ -103,6 +103,6 @@ As a workspace owner, I can prepare a Linear OAuth connection and import Linear 
   - Built-server smoke with GitHub and Linear env unset and admin-token mode - passed `health`, `contract`, `portal`, `private-denied`, and `private-token`.
 - Browser/viewports tested: No UI changes planned.
 - Accessibility checks: No UI changes planned.
-- Reviewer notes: Official Linear docs confirm GraphQL endpoint `https://api.linear.app/graphql`, OAuth authorization/token shape, OAuth scopes, and webhook signature requirements. This branch intentionally avoids token persistence until a production secret-store slice exists.
+- Reviewer notes: Official Linear docs confirm GraphQL endpoint `https://api.linear.app/graphql`, OAuth authorization/token shape, OAuth scopes, and webhook signature requirements. This branch intentionally avoids token persistence until a production secret-store slice exists. Read-only audit found integration actors needed provider/id scoping; fixed in `7db8bbe` with regression coverage.
 - Known unresolved risks: OAuth callback/token exchange, encrypted token storage, live GraphQL fetch, Linear webhooks, browser Settings UI, and conflict UI remain later production slices.
 - Rollback notes: Revert this branch; existing Linear metadata can remain in `OPENROAD_INTEGRATION_FILE` for a later retry or be removed by an operator after backup.

@@ -113,12 +113,18 @@ As a self-host operator or workspace owner, I can register provider credentials 
 ## Evidence
 
 - Branch: `feat/provider-token-storage`
-- Implementation commit SHA: Pending.
-- Date: Pending.
-- Acceptance criteria status: Pending.
-- Commands run: Pending.
+- Implementation commit SHA: `65904d47d252bf2dcff51e83eaec16774ea3b8a3`.
+- Date: 2026-07-04.
+- Acceptance criteria status: Passed for integration metadata schema `2`, server-only AES-256-GCM credential sealing, credential API auth, metadata-only responses, installation/provider/workspace scope validation, explicit revoke, GitHub manual/webhook disconnect revoke, sanitized current-schema load, backup/restore credential sanitization, release schema reporting, and standalone no-key behavior.
+- Commands run:
+  - `pnpm vitest run server/integrations.test.ts server/token-vault.test.ts server/access.test.ts server/http.test.ts scripts/openroad-ops.test.mjs`: 93 tests passed before release docs were added.
+  - `pnpm vitest run server/integrations.test.ts server/token-vault.test.ts server/access.test.ts server/http.test.ts scripts/openroad-ops.test.mjs scripts/openroad-release.test.mjs`: 99 tests passed after release schema reporting.
+  - `pnpm vitest run server/integrations.test.ts server/token-vault.test.ts server/http.test.ts scripts/openroad-ops.test.mjs scripts/openroad-release.test.mjs`: 93 tests passed after audit hardening for current-schema sanitization, AAD-bound secrets, and credential-bearing backup/restore.
+  - `pnpm check`: 251 tests passed; production client and server builds passed.
+  - Built-server smoke on port `4347`: `pnpm ops:smoke -- --admin-token smoke-admin-token` passed `health`, `contract`, `portal`, `private-denied`, and `private-token`; direct credential create/list/revoke and GitHub disconnect revoke checks passed against temporary file-backed state.
+  - `pnpm release:verify`: dry-run release manifest generated with OpenRoad state schema `7`, integration metadata schema `2`, rollback notes, 4 artifact checksums, Docker `dry-run`, and signing `not-configured`.
 - Browser/viewports tested: No UI changes planned.
 - Accessibility checks: No UI changes planned.
-- Reviewer notes: Pending.
-- Known unresolved risks: OAuth callbacks, live Linear/Jira fetch, provider write-back, background sync, browser Settings UI, external KMS, and multi-process credential mutation locking remain later production slices.
-- Rollback notes: Pending.
+- Reviewer notes: Read-only subagent audit found one high issue and three lower issues. The high issue, current-schema metadata with unknown raw secret-like fields remaining on disk/backups, was fixed by rewriting sanitized current-schema integration metadata on load and sanitizing integration metadata during normal backup/restore. The medium AAD issue was fixed by authenticating encrypted payloads against credential/provider/workspace/installation context. The credential-bearing backup/restore coverage gap was fixed with ops tests. The smoke gap was closed with a built-server credential API smoke.
+- Known unresolved risks: OAuth callbacks, live Linear/Jira fetch, provider write-back, background sync, browser Settings UI, external KMS, multi-key re-encryption tooling, and multi-process credential mutation locking remain later production slices.
+- Rollback notes: Restore a pre-schema-2 integration metadata backup before downgrading to a schema `1` build. If credentials were created, revoke/remove them or restore a pre-credential backup before rollback. Changing `OPENROAD_TOKEN_ENCRYPTION_KEY` without re-encryption makes existing encrypted credential payloads unreadable to future sync workers.

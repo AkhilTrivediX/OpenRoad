@@ -25,7 +25,7 @@ import {
 import { FileOpenRoadStore } from "./store";
 import { FileTeamStore } from "./team";
 import type { AuthOptions } from "./access";
-import type { GitHubAppClient, GitHubAppConfig } from "./github-app";
+import { GitHubAppClientError, type GitHubAppClient, type GitHubAppConfig } from "./github-app";
 import type { LinearOAuthConfig } from "./linear";
 import type { JiraOAuthConfig } from "./jira";
 import type { NotificationDeliveryAdapter } from "./notifications";
@@ -1412,7 +1412,8 @@ describe("OpenRoad production server", () => {
 
   it("runs integration sync jobs through a private configured worker", async () => {
     const noWorker = await startTestServer({
-      auth: { adminToken: "secret", singleUserMode: false, trustProxyHeaders: true }
+      auth: { adminToken: "secret", singleUserMode: false, trustProxyHeaders: true },
+      githubAppConfig: incompleteGitHubAppConfig()
     });
     const notConfigured = await fetchJson(`${noWorker.url}/api/openroad/integrations/sync/run`, {
       body: JSON.stringify({}),
@@ -1555,6 +1556,162 @@ describe("OpenRoad production server", () => {
     expect(JSON.stringify(retryable)).not.toContain("github-access-secret");
     expect(JSON.stringify(thrownRun.body)).not.toContain("github-access-secret");
     expect(JSON.stringify(thrown)).not.toContain("github-access-secret");
+  });
+
+  it("auto-configures the GitHub sync worker when GitHub App config is complete", async () => {
+    const githubIssueFetches: Parameters<GitHubAppClient["getRepositoryIssue"]>[0][] = [];
+    const { integrationStore, store, url } = await startTestServer({
+      auth: { adminToken: "secret", singleUserMode: false, trustProxyHeaders: true },
+      githubAppClient: {
+        ...fakeGitHubAppClient(),
+        async getRepositoryIssue(options) {
+          githubIssueFetches.push(options);
+          return {
+            ...(await fakeGitHubAppClient().getRepositoryIssue(options)),
+            labels: ["planned"],
+            title: "Updated from live GitHub"
+          };
+        }
+      },
+      githubAppConfig: completeGitHubAppConfig()
+    });
+
+    await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/github/issues/import`, {
+      body: JSON.stringify(
+        gitHubImportPayload({
+          issue: gitHubIssuePayload({ title: "Original imported title" })
+        })
+      ),
+      headers: {
+        Authorization: "Bearer secret",
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    const queued = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/github/sync/jobs`, {
+      body: JSON.stringify({ installationId: "github-install", reason: "manual" }),
+      headers: {
+        Authorization: "Bearer secret",
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    const run = await fetchJson(`${url}/api/openroad/integrations/sync/run`, {
+      body: JSON.stringify({ limit: 5, workspaceId: "acme" }),
+      headers: {
+        Authorization: "Bearer secret",
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    const [openRoad, integrations] = await Promise.all([store.load(), integrationStore.load()]);
+    const request = openRoad.state.workspaces[0].requests.find(
+      (item) => item.id === "github-akhiltrivedix-openroad-42"
+    );
+    const issueMapping = integrations.state.mappings.find((mapping) => mapping.external.type === "issue");
+    const syncJob = integrations.state.syncJobs.find((job) => job.id === queued.body.job.id);
+
+    expect(run.status).toBe(200);
+    expect(run.body).toMatchObject({
+      claimed: 1,
+      processed: [{ id: queued.body.job.id, kind: "success", status: "succeeded" }],
+      status: "processed"
+    });
+    expect(githubIssueFetches).toEqual([
+      {
+        installationId: "github-install",
+        issueNumber: 42,
+        owner: "AkhilTrivediX",
+        repo: "OpenRoad"
+      }
+    ]);
+    expect(request?.title).toBe("Updated from live GitHub");
+    expect(issueMapping?.lastSyncedAt).toBeTruthy();
+    expect(syncJob).toMatchObject({ status: "succeeded" });
+    expect(JSON.stringify(run.body)).not.toContain("installation-token");
+  });
+
+  it("maps auto-configured GitHub sync worker failures through the private runner", async () => {
+    const failures = [
+      new GitHubAppClientError("github_api_error", "raw-token-should-not-leak", 429),
+      new GitHubAppClientError("invalid_response", "raw-token-should-not-leak")
+    ];
+    const { integrationStore, url } = await startTestServer({
+      auth: { adminToken: "secret", singleUserMode: false, trustProxyHeaders: true },
+      githubAppClient: {
+        ...fakeGitHubAppClient(),
+        async getRepositoryIssue() {
+          throw failures.shift() ?? new GitHubAppClientError("invalid_response", "unexpected");
+        }
+      },
+      githubAppConfig: completeGitHubAppConfig()
+    });
+
+    await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/github/issues/import`, {
+      body: JSON.stringify(gitHubImportPayload()),
+      headers: {
+        Authorization: "Bearer secret",
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    const retryQueued = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/github/sync/jobs`, {
+      body: JSON.stringify({ installationId: "github-install", reason: "manual" }),
+      headers: {
+        Authorization: "Bearer secret",
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    const retryRun = await fetchJson(`${url}/api/openroad/integrations/sync/run`, {
+      body: JSON.stringify({ limit: 5, workspaceId: "acme" }),
+      headers: {
+        Authorization: "Bearer secret",
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    const fatalQueued = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/github/sync/jobs`, {
+      body: JSON.stringify({ installationId: "github-install", reason: "scheduled" }),
+      headers: {
+        Authorization: "Bearer secret",
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    const fatalRun = await fetchJson(`${url}/api/openroad/integrations/sync/run`, {
+      body: JSON.stringify({ limit: 5, workspaceId: "acme" }),
+      headers: {
+        Authorization: "Bearer secret",
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    const integrations = await integrationStore.load();
+    const retryJob = integrations.state.syncJobs.find((job) => job.id === retryQueued.body.job.id);
+    const fatalJob = integrations.state.syncJobs.find((job) => job.id === fatalQueued.body.job.id);
+
+    expect(retryRun.body).toMatchObject({
+      claimed: 1,
+      remainingQueued: 1,
+      status: "processed"
+    });
+    expect(fatalRun.body).toMatchObject({
+      claimed: 1,
+      status: "processed"
+    });
+    expect(retryJob).toMatchObject({
+      error: "GitHub API request failed with retryable status 429.",
+      reason: "retry",
+      status: "queued"
+    });
+    expect(fatalJob).toMatchObject({
+      error: "GitHub API response was invalid.",
+      status: "failed"
+    });
+    expect(JSON.stringify({ fatalJob, fatalRun: fatalRun.body, retryJob, retryRun: retryRun.body })).not.toContain(
+      "raw-token-should-not-leak"
+    );
   });
 
   it("serializes concurrent integration sync runs without double-processing jobs", async () => {
@@ -3674,6 +3831,29 @@ function fakeGitHubAppClient(): GitHubAppClient {
         repository_selection: "selected"
       };
     },
+    async getRepositoryIssue() {
+      return {
+        assignees: ["maintainer"],
+        author: "akhil",
+        body: "Expose GitHub issue context.",
+        createdAt: "2026-07-04T00:00:00Z",
+        id: "I_kwDOGH123",
+        labels: ["planned"],
+        number: 42,
+        repository: {
+          fullName: "AkhilTrivediX/OpenRoad",
+          id: "R_kwDOR123",
+          name: "OpenRoad",
+          owner: "AkhilTrivediX",
+          url: "https://github.com/AkhilTrivediX/OpenRoad",
+          visibility: "public"
+        },
+        state: "open",
+        title: "Import GitHub issues",
+        updatedAt: "2026-07-04T00:30:00Z",
+        url: "https://github.com/AkhilTrivediX/OpenRoad/issues/42"
+      };
+    },
     async listRepositoryIssues() {
       return [
         {
@@ -3699,6 +3879,25 @@ function fakeGitHubAppClient(): GitHubAppClient {
         }
       ];
     }
+  };
+}
+
+function completeGitHubAppConfig(): GitHubAppConfig {
+  return {
+    apiBaseUrl: "https://api.github.test",
+    appBaseUrl: "https://github.test",
+    appId: "12345",
+    privateKey: "test-private-key",
+    slug: "openroad-test",
+    webhookSecretConfigured: false
+  };
+}
+
+function incompleteGitHubAppConfig(): GitHubAppConfig {
+  return {
+    apiBaseUrl: "https://api.github.test",
+    appBaseUrl: "https://github.test",
+    webhookSecretConfigured: false
   };
 }
 

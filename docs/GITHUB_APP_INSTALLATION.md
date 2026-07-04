@@ -1,6 +1,6 @@
 # OpenRoad GitHub App Installation
 
-OpenRoad now has a server-only GitHub App installation foundation, live issue fetch path, signed webhook ingestion, safe disconnect handling, and encrypted provider credential storage primitives. It does not run background polling yet; webhooks update already-linked issues and installation state.
+OpenRoad now has a server-only GitHub App installation foundation, live issue fetch path, signed webhook ingestion, safe disconnect handling, encrypted provider credential storage primitives, and a private background sync worker for already-linked GitHub issues.
 
 Official GitHub references used for this slice:
 
@@ -111,10 +111,10 @@ Provider-neutral sync jobs can be queued at:
 
 `POST /api/openroad/workspaces/:workspaceId/integrations/github/sync/jobs`
 
-The private runner is `POST /api/openroad/integrations/sync/run`. It is disabled until a future GitHub sync worker adapter is configured.
+The private runner is `POST /api/openroad/integrations/sync/run`. When GitHub App credentials are configured, the production server auto-wires a GitHub sync worker that refreshes already-linked GitHub issue mappings by targeted issue number. It does not import unmapped repository issues or write back to GitHub.
 
 ## Deferred Work
 
 - Browser Settings UI for connect/disconnect and sync logs.
 - Setup callback page that carries workspace context from GitHub back into OpenRoad.
-- Live background sync worker and conflict handling.
+- Conflict handling and provider write-back.

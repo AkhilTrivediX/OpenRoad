@@ -12,7 +12,7 @@ import {
 
 describe("OpenRoad API access contract", () => {
   it("documents actor types, roles, permissions, and route protections", () => {
-    expect(openRoadApiContract.version).toBe("2026-07-04");
+    expect(openRoadApiContract.version).toBe("2026-07-05");
     expect(openRoadApiContract.actorTypes).toContain("workspace-member");
     expect(openRoadApiContract.workspaceRoles).toEqual([
       "Owner",
@@ -26,6 +26,13 @@ describe("OpenRoad API access contract", () => {
         path: "/api/openroad/state",
         permission: "state:read",
         scope: "global"
+      })
+    );
+    expect(openRoadApiContract.routeProtections).toContainEqual(
+      expect.objectContaining({
+        path: "/api/openroad/auth/login",
+        permission: "contract:read",
+        scope: "public"
       })
     );
     expect(openRoadApiContract.routeProtections).toContainEqual(
@@ -160,6 +167,23 @@ describe("OpenRoad API access contract", () => {
 
     expect(context.actor).toMatchObject({
       source: "admin-token",
+      type: "local-owner"
+    });
+    expect(hasPermission(context.actor, "state:read")).toBe(true);
+  });
+
+  it("uses server-resolved sessions for owner browser access", () => {
+    const context = createAccessContext(
+      { headers: {} },
+      {
+        adminToken: "secret",
+        sessionActor: { id: "local-owner", source: "session", type: "local-owner" },
+        singleUserMode: false
+      }
+    );
+
+    expect(context.actor).toMatchObject({
+      source: "session",
       type: "local-owner"
     });
     expect(hasPermission(context.actor, "state:read")).toBe(true);

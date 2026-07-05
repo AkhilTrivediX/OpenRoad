@@ -263,7 +263,7 @@ async function resolveDataMigrationNote(rootDir) {
   }
 
   if (schemaNotes.length > 0) {
-    return `${schemaNotes.join("; ")}; automatic migrations may run on load. Back up state, integration, and team files before upgrade, and restore a pre-upgrade backup when rolling back across schema versions.`;
+    return `${schemaNotes.join("; ")}; automatic migrations may run on load. Back up state, integration, session, and team files before upgrade, and restore a pre-upgrade backup when rolling back across schema versions.`;
   }
 
   return "Review feature evidence and operator notes for data migration requirements before deploy.";

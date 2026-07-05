@@ -1,7 +1,7 @@
 import type { IncomingHttpHeaders, IncomingMessage } from "node:http";
 import { randomUUID } from "node:crypto";
 
-export const openRoadApiVersion = "2026-07-04";
+export const openRoadApiVersion = "2026-07-05";
 
 export const actorTypes = [
   "local-owner",
@@ -33,7 +33,7 @@ export type Permission = (typeof permissions)[number];
 export type OpenRoadActor =
   | {
       id: "local-owner";
-      source: "admin-token" | "single-user";
+      source: "admin-token" | "session" | "single-user";
       type: "local-owner";
     }
   | {
@@ -70,6 +70,7 @@ export type AccessContext = {
 
 export type AuthOptions = {
   adminToken?: string;
+  sessionActor?: OpenRoadActor;
   singleUserMode?: boolean;
   trustProxyHeaders?: boolean;
 };
@@ -109,6 +110,18 @@ export const routeProtections: RouteProtection[] = [
     path: "/api/openroad/state",
     permission: "state:read",
     scope: "global"
+  },
+  {
+    methods: ["POST"],
+    path: "/api/openroad/auth/login",
+    permission: "contract:read",
+    scope: "public"
+  },
+  {
+    methods: ["POST"],
+    path: "/api/openroad/auth/logout",
+    permission: "contract:read",
+    scope: "public"
   },
   {
     methods: ["PUT"],
@@ -276,6 +289,10 @@ export function createAccessContext(
       actor: { id: "local-owner", source: "admin-token", type: "local-owner" },
       requestId
     };
+  }
+
+  if (auth.sessionActor) {
+    return { actor: auth.sessionActor, requestId };
   }
 
   if (auth.trustProxyHeaders) {

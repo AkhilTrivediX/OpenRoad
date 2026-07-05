@@ -15,6 +15,8 @@ FROM node:22-alpine AS runtime
 ENV NODE_ENV=production \
     OPENROAD_DATA_FILE=/data/openroad-state.json \
     OPENROAD_INTEGRATION_FILE=/data/openroad-integrations.json \
+    OPENROAD_SESSION_FILE=/data/openroad-sessions.json \
+    OPENROAD_SESSION_TTL_MS=604800000 \
     OPENROAD_TEAM_FILE=/data/openroad-team.json \
     OPENROAD_DIST_DIR=/app/dist \
     OPENROAD_NOTIFICATION_DELIVERY_MODE=disabled \

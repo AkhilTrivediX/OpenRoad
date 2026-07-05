@@ -84,10 +84,17 @@ As a self-hosted OpenRoad owner, I need the app to tell me when server sign-in i
 
 - Branch: `feat/owner-login-experience`
 - Commit SHA: pending.
-- Date: pending.
-- Commands run: pending.
-- Browser/viewports tested: pending.
-- Accessibility checks: pending.
-- Reviewer notes: pending.
+- Date: 2026-07-05.
+- Commands run:
+  - `pnpm vitest run src/persistence/openroadServer.test.ts src/App.test.tsx`: 60 tests passed.
+  - `node C:\Users\PC\.agents\skills\impeccable\scripts\detect.mjs --json src\App.tsx src\styles.css`: no findings.
+  - `pnpm check`: 323 tests passed; client and server production builds passed.
+  - `pnpm release:verify`: dry-run release manifest generated.
+- Browser/viewports tested:
+  - Built server with `OPENROAD_ADMIN_TOKEN` and `OPENROAD_SINGLE_USER_MODE=false`, desktop `1440x900`: owner sign-in rendered, password input focused, no body overflow, no text overflow.
+  - Built server with `OPENROAD_ADMIN_TOKEN` and `OPENROAD_SINGLE_USER_MODE=false`, compact `390x844`: owner sign-in rendered, no body overflow, no text overflow.
+  - Interaction QA: wrong token showed bounded error; correct token created session, loaded app shell, showed `Server storage connected.`, and neither token appeared in page text.
+- Accessibility checks: Password input has a visible label, submit button has text plus icon, error uses `role="alert"`, focus outline is visible, and no text overflow was detected in browser QA.
+- Reviewer notes: The auth-required state owns the viewport and preserves the existing local fallback for non-auth server failures.
 - Known unresolved risks: Full user accounts, invitations, session management UI, and OAuth login remain future production slices.
 - Rollback notes: Revert branch; backend session-auth foundation remains usable via API.

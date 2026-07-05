@@ -152,6 +152,6 @@ The server exposes:
 - `POST /api/openroad/workspaces/:workspaceId/portal/requests/:requestId/vote`
 - `POST /api/openroad/workspaces/:workspaceId/portal/requests/:requestId/comments`
 
-When `OPENROAD_ADMIN_TOKEN` is configured, private state APIs require either `Authorization: Bearer <token>` or an owner session cookie created by `POST /api/openroad/auth/login`. The portal API remains public and returns only the public projection. See [API auth and tenancy contract](docs/API_AUTH_TENANCY_CONTRACT.md).
+When `OPENROAD_ADMIN_TOKEN` is configured, private state APIs require either `Authorization: Bearer <token>` or an owner session cookie created by the browser sign-in flow or `POST /api/openroad/auth/login`. The portal API remains public and returns only the public projection. See [API auth and tenancy contract](docs/API_AUTH_TENANCY_CONTRACT.md).
 
 Deployment, backup, restore, smoke, upgrade, and rollback details live in [Deployment runbook](docs/DEPLOYMENT_RUNBOOK.md).

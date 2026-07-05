@@ -118,6 +118,73 @@ describe("OpenRoad workspace shell", () => {
     expect(screen.getAllByText("Optional")).toHaveLength(3);
   });
 
+  it("shows owner sign-in when server state requires authentication", async () => {
+    vi.stubEnv("VITE_OPENROAD_SERVER_SYNC", "on");
+    const fetchMock = createOwnerLoginFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "Sign in to continue" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Admin token")).toBeInTheDocument();
+    expect(screen.queryByText("Server storage is unavailable. Local browser data is active.")).not.toBeInTheDocument();
+  });
+
+  it("creates an owner session and loads server state from the sign-in surface", async () => {
+    vi.stubEnv("VITE_OPENROAD_SERVER_SYNC", "on");
+    const fetchMock = createOwnerLoginFetchMock({ loginSucceeds: true });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await user.type(await screen.findByLabelText("Admin token"), "server-admin-token");
+    await user.click(screen.getByRole("button", { name: "Create owner session" }));
+
+    expect(await screen.findByText("Server storage connected.")).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Workspace" })).toHaveDisplayValue("Server Workspace");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/openroad/auth/login",
+      expect.objectContaining({
+        body: JSON.stringify({ adminToken: "server-admin-token" }),
+        credentials: "same-origin",
+        method: "POST"
+      })
+    );
+    expect(document.body.textContent).not.toContain("server-admin-token");
+  });
+
+  it("keeps owner sign-in focused after a wrong admin token", async () => {
+    vi.stubEnv("VITE_OPENROAD_SERVER_SYNC", "on");
+    const fetchMock = createOwnerLoginFetchMock({ loginSucceeds: false });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await user.type(await screen.findByLabelText("Admin token"), "wrong-token");
+    await user.click(screen.getByRole("button", { name: "Create owner session" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Token was not accepted. Check the server admin token and try again."
+    );
+    expect(screen.getByRole("heading", { name: "Sign in to continue" })).toBeInTheDocument();
+    expect(document.body.textContent).not.toContain("wrong-token");
+  });
+
+  it("keeps generic server failures on local browser fallback", async () => {
+    vi.stubEnv("VITE_OPENROAD_SERVER_SYNC", "on");
+    const fetchMock = createOwnerLoginFetchMock({ stateFailureStatus: 500 });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+
+    expect(
+      await screen.findByText("Server storage is unavailable. Local browser data is active.")
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Sign in to continue" })).not.toBeInTheDocument();
+  });
+
   it("renders server integration status in Settings without exposing logs by default", async () => {
     vi.stubEnv("VITE_OPENROAD_SERVER_SYNC", "on");
     const fetchMock = createSettingsIntegrationFetchMock();
@@ -1239,6 +1306,76 @@ describe("OpenRoad workspace shell", () => {
     expect(within(importedPortal).getByText("Public comments disabled")).toBeInTheDocument();
   }, 10_000);
 });
+
+function createOwnerLoginFetchMock(
+  options: { loginSucceeds?: boolean; stateFailureStatus?: number } = {}
+) {
+  const localState = createInitialOpenRoadState();
+  const serverState = {
+    ...localState,
+    workspaces: [
+      {
+        ...localState.workspaces[0],
+        name: "Server Workspace"
+      },
+      ...localState.workspaces.slice(1)
+    ]
+  };
+  let isAuthenticated = false;
+
+  return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input.toString();
+    const method = init?.method ?? "GET";
+
+    if (url === "/api/openroad/state") {
+      if (method === "PUT") {
+        return jsonResponse({ state: serverState, status: "saved" });
+      }
+
+      if (options.stateFailureStatus && !isAuthenticated) {
+        return jsonResponse(
+          { error: { code: "server_error", message: "Server failed." } },
+          options.stateFailureStatus
+        );
+      }
+
+      if (!isAuthenticated) {
+        return jsonResponse(
+          {
+            error: {
+              code: "forbidden",
+              message: "Actor does not have permission to access this OpenRoad resource."
+            }
+          },
+          403
+        );
+      }
+
+      return jsonResponse({ state: serverState, status: "ready" });
+    }
+
+    if (url === "/api/openroad/auth/login") {
+      if (options.loginSucceeds) {
+        isAuthenticated = true;
+        return jsonResponse({ authenticated: true, status: "authenticated" });
+      }
+
+      return jsonResponse(
+        { error: { code: "forbidden", message: "Admin token is invalid." } },
+        403
+      );
+    }
+
+    if (url.includes("/integrations/status")) {
+      return jsonResponse(
+        { error: { code: "forbidden", message: "Integration status requires access." } },
+        403
+      );
+    }
+
+    return jsonResponse({ error: { message: "Unhandled test request." } }, 404);
+  });
+}
 
 function createSettingsIntegrationFetchMock(options: { jiraReady?: boolean; linearReady?: boolean } = {}) {
   const state = createInitialOpenRoadState();

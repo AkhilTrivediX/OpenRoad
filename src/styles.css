@@ -426,6 +426,115 @@ h3 {
   max-width: 65ch;
 }
 
+.owner-auth-shell {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.owner-auth-rail {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.owner-auth-rail-copy {
+  align-self: end;
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 8px;
+  padding: 14px 12px;
+}
+
+.owner-auth-rail-copy strong {
+  font-family: var(--label-font);
+  font-size: 15px;
+}
+
+.owner-auth-rail-copy p {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  margin: 0;
+}
+
+.owner-auth-deck {
+  align-items: center;
+  background: var(--deck);
+  display: grid;
+  min-height: 0;
+  overflow: hidden;
+  padding: 24px;
+}
+
+.owner-auth-panel {
+  background: var(--rail);
+  border: 1px solid var(--line-strong);
+  display: grid;
+  gap: 18px;
+  max-width: 560px;
+  min-width: 0;
+  padding: 22px;
+  position: relative;
+}
+
+.owner-auth-panel::after {
+  border-bottom: 1px solid var(--line);
+  border-right: 1px solid var(--line);
+  content: "";
+  height: 22px;
+  position: absolute;
+  right: 8px;
+  top: 8px;
+  width: 44px;
+}
+
+.owner-auth-heading {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+}
+
+.owner-auth-icon {
+  background: var(--plate);
+  border: 1px solid var(--line);
+  color: var(--route);
+  display: inline-grid;
+  height: 38px;
+  place-items: center;
+  width: 38px;
+}
+
+.owner-auth-panel > p {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+  max-width: 62ch;
+}
+
+.owner-token-field {
+  display: grid;
+  gap: 7px;
+}
+
+.owner-token-field span {
+  color: var(--muted);
+  font-family: var(--label-font);
+  font-size: 12px;
+}
+
+.owner-auth-message {
+  background: color-mix(in oklch, var(--coral) 16%, transparent);
+  border: 1px solid color-mix(in oklch, var(--coral) 58%, var(--line));
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.45;
+  padding: 9px 11px;
+}
+
+.owner-auth-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
 .brief-instruments {
   border: 1px solid var(--line);
   display: grid;
@@ -574,6 +683,7 @@ h3 {
 }
 
 .workspace-form input,
+.owner-token-field input,
 .request-composer input,
 .request-composer textarea,
 .work-composer input,
@@ -2642,6 +2752,30 @@ dd {
     border-top: 1px solid var(--line);
     padding-left: 0;
     padding-top: 12px;
+  }
+
+  .owner-auth-shell {
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .owner-auth-rail {
+    display: grid;
+    grid-template-rows: auto;
+  }
+
+  .owner-auth-rail-copy {
+    display: none;
+  }
+
+  .owner-auth-deck {
+    align-items: start;
+    overflow: auto;
+    padding: 12px;
+  }
+
+  .owner-auth-panel {
+    max-width: none;
+    padding: 16px;
   }
 
   .provider-details li {

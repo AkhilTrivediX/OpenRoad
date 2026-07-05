@@ -10,7 +10,7 @@ Each feature must also satisfy `docs/PRODUCTION_READINESS.md` before merging to 
 
 Current stage: Stage 2 Team Beta foundation in progress.
 
-The standalone loop now covers workspaces, requests, triage, internal work, roadmap planning, changelog drafts, public portal preview, local durability, production APIs, basic tenancy boundaries, file-backed team metadata, audit events, self-host operations, owner browser sessions for admin-token deployments, app-level crash recovery, a first app-module boundary, hardened public portal write APIs with persisted visitor vote identity, the provider-neutral integration adapter contract, a payload-backed GitHub issue import/link API, server-only GitHub App installation verification, live GitHub issue fetch through verified installations, signed GitHub webhooks, safe disconnect handling, encrypted server-only provider credential storage, provider-neutral background sync job foundations, GitHub/Linear/Jira workers for already-linked issue mappings, progressive Settings visibility with GitHub/Linear/Jira manual sync controls, Linear issue import/link, Jira issue import/link with explicit field mapping, requester notification preferences/outbox events plus JSONL delivery handoff, deterministic local assistant triage, and release candidate manifest tooling. The next production work should build on sessions with invitations/account access, while provider connect/disconnect, webhooks, direct email/provider notification delivery, and real model-backed AI adapters remain separate hardening slices.
+The standalone loop now covers workspaces, requests, triage, internal work, roadmap planning, changelog drafts, public portal preview, local durability, production APIs, basic tenancy boundaries, file-backed team metadata, audit events, self-host operations, owner browser sessions and owner sign-in for admin-token deployments, app-level crash recovery, a first app-module boundary, hardened public portal write APIs with persisted visitor vote identity, the provider-neutral integration adapter contract, a payload-backed GitHub issue import/link API, server-only GitHub App installation verification, live GitHub issue fetch through verified installations, signed GitHub webhooks, safe disconnect handling, encrypted server-only provider credential storage, provider-neutral background sync job foundations, GitHub/Linear/Jira workers for already-linked issue mappings, progressive Settings visibility with GitHub/Linear/Jira manual sync controls, Linear issue import/link, Jira issue import/link with explicit field mapping, requester notification preferences/outbox events plus JSONL delivery handoff, deterministic local assistant triage, and release candidate manifest tooling. The next production work should build on sessions with invitations/account access, while provider connect/disconnect, webhooks, direct email/provider notification delivery, and real model-backed AI adapters remain separate hardening slices.
 
 ## Feature 1: Workspace Shell
 
@@ -200,6 +200,28 @@ Acceptance:
 - Bearer-token scripts, trusted proxy actors, single-user mode, and public portal access still work.
 - Session secrets are not returned, logged, or persisted as raw token material.
 - Deleting the session file signs out browsers without touching product, team, or integration data.
+
+### Owner Login Experience
+
+Branch: `feat/owner-login-experience`
+
+Status: implemented and production-checked.
+
+Build:
+
+- Typed auth-required client path for server persistence.
+- Owner sign-in surface for admin-token browser sessions.
+- Admin-token login request with same-origin credentials.
+- Server-state retry after successful login.
+- Wrong-token and server-unavailable error states.
+- Responsive Map Room sign-in plate with no page-level overflow.
+
+Acceptance:
+
+- Admin-token deployments show a focused browser sign-in instead of silently falling back to local data.
+- Successful sign-in creates the owner session and opens the normal app shell.
+- Wrong tokens stay on the sign-in surface without rendering token text.
+- Non-auth server failures still preserve local browser fallback behavior.
 
 ### Production Server Foundation
 

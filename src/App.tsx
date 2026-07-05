@@ -6,6 +6,7 @@ import {
   ChevronDown,
   CircleDot,
   Command,
+  Copy,
   GitMerge,
   Globe2,
   Inbox,
@@ -20,11 +21,13 @@ import {
   RotateCcw,
   Search,
   Settings,
+  ShieldCheck,
   SlidersHorizontal,
   Sparkles,
   Tag,
   ThumbsUp,
   Unlink,
+  UserPlus,
   Waypoints
 } from "lucide-react";
 import {
@@ -124,6 +127,15 @@ import {
   type IntegrationProviderStatus,
   type WorkspaceIntegrationStatus
 } from "./persistence/openroadIntegrations";
+import {
+  acceptWorkspaceInvitationToken,
+  createStandaloneInvitationAccess,
+  createWorkspaceInvitation,
+  loadWorkspaceInvitations,
+  revokeWorkspaceInvitation,
+  type WorkspaceInvitationAccess,
+  type WorkspaceRole as InvitationWorkspaceRole
+} from "./persistence/openroadInvitations";
 
 type NavItem = {
   label: "Inbox" | "Work" | "Roadmap" | "Changelog" | "Portal" | "Settings";
@@ -141,6 +153,7 @@ const baseNavItems: NavItem[] = [
 
 const workNavItem: NavItem = { label: "Work", icon: ListChecks };
 const navTargets = new Set(["inbox", "work", "roadmap", "changelog", "portal", "settings"]);
+const invitationRoles: InvitationWorkspaceRole[] = ["Viewer", "Contributor", "Maintainer", "Owner"];
 
 function getActiveNavTarget() {
   if (typeof window === "undefined") return "inbox";
@@ -176,6 +189,24 @@ export function App() {
   );
   const [integrationActionMessage, setIntegrationActionMessage] = useState("");
   const [syncingProvider, setSyncingProvider] = useState<"github" | "jira" | "linear" | undefined>();
+  const [invitationAccess, setInvitationAccess] = useState<WorkspaceInvitationAccess>(() =>
+    createStandaloneInvitationAccess(resolveInitialWorkspaceId(loadResult.state, loadSelectedWorkspaceId()))
+  );
+  const [invitationDraft, setInvitationDraft] = useState<{
+    email: string;
+    name: string;
+    role: InvitationWorkspaceRole;
+  }>({ email: "", name: "", role: "Viewer" });
+  const [invitationActionMessage, setInvitationActionMessage] = useState("");
+  const [invitationErrorMessage, setInvitationErrorMessage] = useState("");
+  const [createdInvitationToken, setCreatedInvitationToken] = useState<{
+    email: string;
+    token: string;
+  } | null>(null);
+  const [isCreatingInvitation, setIsCreatingInvitation] = useState(false);
+  const [revokingInvitationId, setRevokingInvitationId] = useState<string | undefined>();
+  const [acceptTokenDraft, setAcceptTokenDraft] = useState({ name: "", token: "" });
+  const [isAcceptingInvitation, setIsAcceptingInvitation] = useState(false);
   const [exportPreview, setExportPreview] = useState("");
   const [importDraft, setImportDraft] = useState("");
   const [isCreatingWorkspace, setIsCreatingWorkspace] = useState(false);
@@ -335,6 +366,11 @@ export function App() {
       return;
     }
 
+    if (ownerLoginState !== "idle") {
+      setIntegrationStatus(createStandaloneIntegrationStatus(workspaceId));
+      return;
+    }
+
     loadWorkspaceIntegrationStatus(workspaceId).then((status) => {
       if (isCancelled) return;
       setIntegrationStatus(status);
@@ -343,7 +379,38 @@ export function App() {
     return () => {
       isCancelled = true;
     };
-  }, [serverPersistenceEnabled, workspaceId]);
+  }, [ownerLoginState, serverPersistenceEnabled, workspaceId]);
+  useEffect(() => {
+    let isCancelled = false;
+
+    setInvitationActionMessage("");
+    setInvitationErrorMessage("");
+    setCreatedInvitationToken(null);
+
+    if (!serverPersistenceEnabled) {
+      setInvitationAccess(createStandaloneInvitationAccess(workspaceId));
+      return;
+    }
+
+    if (ownerLoginState !== "idle") {
+      setInvitationAccess(
+        createStandaloneInvitationAccess(
+          workspaceId,
+          "Team invitations require an owner session before they can be managed."
+        )
+      );
+      return;
+    }
+
+    loadWorkspaceInvitations(workspaceId).then((access) => {
+      if (isCancelled) return;
+      setInvitationAccess(access);
+    });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [ownerLoginState, serverPersistenceEnabled, workspaceId]);
   useEffect(() => {
     saveSelectedWorkspaceId(workspaceId);
   }, [workspaceId]);
@@ -644,6 +711,119 @@ export function App() {
       }
     } finally {
       setSyncingProvider(undefined);
+    }
+  }
+
+  async function refreshWorkspaceInvitations() {
+    if (!serverPersistenceEnabled) {
+      setInvitationAccess(createStandaloneInvitationAccess(workspace.id));
+      return;
+    }
+
+    const access = await loadWorkspaceInvitations(workspace.id);
+    setInvitationAccess(access);
+  }
+
+  async function createInvitation(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (isCreatingInvitation) return;
+
+    const email = invitationDraft.email.trim();
+    if (!email) {
+      setInvitationErrorMessage("Email is required before creating an invitation.");
+      return;
+    }
+
+    setIsCreatingInvitation(true);
+    setInvitationActionMessage("");
+    setInvitationErrorMessage("");
+    setCreatedInvitationToken(null);
+
+    try {
+      const result = await createWorkspaceInvitation(workspace.id, {
+        email,
+        name: invitationDraft.name,
+        role: invitationDraft.role
+      });
+
+      if (result.status !== "created" || !result.invitation || !result.acceptToken) {
+        setInvitationErrorMessage(result.message);
+        return;
+      }
+
+      setInvitationDraft({ email: "", name: "", role: "Viewer" });
+      setCreatedInvitationToken({
+        email: result.invitation.email,
+        token: result.acceptToken
+      });
+      setInvitationActionMessage(result.message);
+      await refreshWorkspaceInvitations();
+    } finally {
+      setIsCreatingInvitation(false);
+    }
+  }
+
+  async function revokeInvitation(invitationId: string) {
+    if (revokingInvitationId) return;
+
+    setRevokingInvitationId(invitationId);
+    setInvitationActionMessage("");
+    setInvitationErrorMessage("");
+
+    try {
+      const result = await revokeWorkspaceInvitation(workspace.id, invitationId);
+
+      if (result.status !== "revoked") {
+        setInvitationErrorMessage(result.message);
+        return;
+      }
+
+      setInvitationActionMessage(result.message);
+      setCreatedInvitationToken(null);
+      await refreshWorkspaceInvitations();
+    } finally {
+      setRevokingInvitationId(undefined);
+    }
+  }
+
+  async function acceptInvitationToken(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    const token = acceptTokenDraft.token.trim();
+    if (!token || isAcceptingInvitation) return;
+
+    setIsAcceptingInvitation(true);
+    setInvitationActionMessage("");
+    setInvitationErrorMessage("");
+
+    try {
+      const result = await acceptWorkspaceInvitationToken(token, acceptTokenDraft.name);
+
+      if (result.status !== "accepted") {
+        setInvitationErrorMessage(result.message);
+        return;
+      }
+
+      setAcceptTokenDraft({ name: "", token: "" });
+      setInvitationActionMessage(result.message);
+      await refreshWorkspaceInvitations();
+    } finally {
+      setIsAcceptingInvitation(false);
+    }
+  }
+
+  async function copyCreatedInvitationToken() {
+    if (!createdInvitationToken) return;
+
+    try {
+      if (!navigator.clipboard) {
+        throw new Error("Clipboard API unavailable.");
+      }
+
+      await navigator.clipboard.writeText(createdInvitationToken.token);
+      setInvitationActionMessage("Invitation token copied.");
+    } catch {
+      setInvitationActionMessage("Select the token field to copy it.");
     }
   }
 
@@ -3777,6 +3957,193 @@ export function App() {
             </div>
 
             <div className="settings-grid">
+              <section className="access-control" aria-label="Team access">
+                <div className="settings-section-header">
+                  <div>
+                    <div className="source-history-header">
+                      <ShieldCheck aria-hidden="true" size={14} />
+                      <strong>Access</strong>
+                    </div>
+                    <p>
+                      Invite workspace members without changing the standalone product loop.
+                    </p>
+                  </div>
+                  <span className={`status-badge ${getInvitationAccessTone(invitationAccess)}`}>
+                    {getInvitationAccessLabel(invitationAccess)}
+                  </span>
+                </div>
+
+                {invitationActionMessage ? (
+                  <p className="invitation-message" role="status">
+                    {invitationActionMessage}
+                  </p>
+                ) : null}
+                {invitationErrorMessage ? (
+                  <p className="invitation-message error" role="alert">
+                    {invitationErrorMessage}
+                  </p>
+                ) : null}
+
+                {invitationAccess.status === "ready" ? (
+                  <>
+                    <form
+                      className="invitation-form"
+                      aria-label="Create team invitation"
+                      onSubmit={createInvitation}
+                    >
+                      <label>
+                        <span>Email</span>
+                        <input
+                          aria-label="Invitation email"
+                          onChange={(event) =>
+                            setInvitationDraft((draft) => ({ ...draft, email: event.target.value }))
+                          }
+                          placeholder="teammate@example.com"
+                          type="email"
+                          value={invitationDraft.email}
+                        />
+                      </label>
+                      <label>
+                        <span>Name</span>
+                        <input
+                          aria-label="Invitation name"
+                          onChange={(event) =>
+                            setInvitationDraft((draft) => ({ ...draft, name: event.target.value }))
+                          }
+                          placeholder="Optional"
+                          value={invitationDraft.name}
+                        />
+                      </label>
+                      <label>
+                        <span>Role</span>
+                        <select
+                          aria-label="Invitation role"
+                          onChange={(event) =>
+                            setInvitationDraft((draft) => ({
+                              ...draft,
+                              role: event.target.value as InvitationWorkspaceRole
+                            }))
+                          }
+                          value={invitationDraft.role}
+                        >
+                          {invitationRoles.map((role) => (
+                            <option key={role} value={role}>
+                              {role}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <button
+                        className="primary-action compact"
+                        disabled={isCreatingInvitation || !invitationDraft.email.trim()}
+                        type="submit"
+                      >
+                        <UserPlus aria-hidden="true" size={14} />
+                        {isCreatingInvitation ? "Creating..." : "Create invitation"}
+                      </button>
+                    </form>
+
+                    {createdInvitationToken ? (
+                      <div className="invitation-token" aria-label="Created invitation token">
+                        <div>
+                          <strong>One-time token</strong>
+                          <span>{createdInvitationToken.email}</span>
+                        </div>
+                        <label>
+                          <span>One-time accept token</span>
+                          <input
+                            aria-label="Created invitation accept token"
+                            readOnly
+                            value={createdInvitationToken.token}
+                          />
+                        </label>
+                        <button
+                          className="secondary-action compact"
+                          onClick={() => void copyCreatedInvitationToken()}
+                          type="button"
+                        >
+                          <Copy aria-hidden="true" size={14} />
+                          Copy token
+                        </button>
+                      </div>
+                    ) : null}
+
+                    <div className="invitation-list" aria-label="Workspace invitations">
+                      {invitationAccess.invitations.length ? (
+                        invitationAccess.invitations.map((invitation) => (
+                          <article className="invitation-row" key={invitation.id}>
+                            <div>
+                              <strong>{invitation.email}</strong>
+                              <span>
+                                {invitation.invitedName ? `${invitation.invitedName} / ` : ""}
+                                {invitation.role}
+                              </span>
+                            </div>
+                            <span className={`status-badge ${getInvitationStatusTone(invitation.status)}`}>
+                              {getInvitationStatusLabel(invitation.status)}
+                            </span>
+                            <button
+                              className="secondary-action compact"
+                              disabled={invitation.status !== "pending" || revokingInvitationId === invitation.id}
+                              onClick={() => void revokeInvitation(invitation.id)}
+                              type="button"
+                            >
+                              {revokingInvitationId === invitation.id ? "Revoking..." : "Revoke"}
+                            </button>
+                          </article>
+                        ))
+                      ) : (
+                        <div className="empty-state compact-empty">
+                          <strong>No invitations yet</strong>
+                          <p>Create one only when a teammate needs workspace access.</p>
+                        </div>
+                      )}
+                    </div>
+
+                    <form
+                      className="invitation-accept-form"
+                      aria-label="Accept invitation token"
+                      onSubmit={acceptInvitationToken}
+                    >
+                      <label>
+                        <span>Accept token</span>
+                        <input
+                          aria-label="Invitation accept token"
+                          onChange={(event) =>
+                            setAcceptTokenDraft((draft) => ({ ...draft, token: event.target.value }))
+                          }
+                          placeholder="Paste token"
+                          value={acceptTokenDraft.token}
+                        />
+                      </label>
+                      <label>
+                        <span>Name</span>
+                        <input
+                          aria-label="Accepted member name"
+                          onChange={(event) =>
+                            setAcceptTokenDraft((draft) => ({ ...draft, name: event.target.value }))
+                          }
+                          placeholder="Optional"
+                          value={acceptTokenDraft.name}
+                        />
+                      </label>
+                      <button
+                        className="secondary-action compact"
+                        disabled={isAcceptingInvitation || !acceptTokenDraft.token.trim()}
+                        type="submit"
+                      >
+                        {isAcceptingInvitation ? "Checking..." : "Accept token"}
+                      </button>
+                    </form>
+                  </>
+                ) : (
+                  <div className="empty-state compact-empty">
+                    <strong>Server access required</strong>
+                    <p>{invitationAccess.message ?? "Team invitation APIs are not available."}</p>
+                  </div>
+                )}
+              </section>
+
               <section className="integration-control" aria-label="Optional integrations">
                 <div className="settings-section-header">
                   <div>
@@ -3976,6 +4343,32 @@ function getProviderMetric(provider: IntegrationProviderStatus) {
     (provider.setupConfigured ? "Setup configured" : "Setup not configured");
 
   return `${account} / ${linked} / ${queue}`;
+}
+
+function getInvitationAccessTone(access: WorkspaceInvitationAccess) {
+  if (access.status === "ready") return "success";
+  if (access.status === "forbidden") return "warning";
+  return "neutral";
+}
+
+function getInvitationAccessLabel(access: WorkspaceInvitationAccess) {
+  if (access.status === "ready") return "Ready";
+  if (access.status === "forbidden") return "Owner only";
+  return "Server off";
+}
+
+function getInvitationStatusTone(status: string) {
+  if (status === "accepted") return "success";
+  if (status === "pending") return "info";
+  if (status === "expired") return "warning";
+  return "neutral";
+}
+
+function getInvitationStatusLabel(status: string) {
+  if (status === "accepted") return "Accepted";
+  if (status === "pending") return "Pending";
+  if (status === "expired") return "Expired";
+  return "Revoked";
 }
 
 function formatIntegrationTime(value: string | undefined) {

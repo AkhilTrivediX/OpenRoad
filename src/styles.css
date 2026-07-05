@@ -676,7 +676,10 @@ h3 {
 .request-tools label span,
 .portal-settings label span,
 .portal-comment-form label span,
-.portal-search span {
+.portal-search span,
+.invitation-form label span,
+.invitation-token label span,
+.invitation-accept-form label span {
   color: var(--muted);
   font-family: var(--label-font);
   font-size: 12px;
@@ -704,6 +707,10 @@ h3 {
 .comment-form textarea,
 .work-comment-form textarea,
 .data-tools textarea,
+.invitation-form input,
+.invitation-form select,
+.invitation-token input,
+.invitation-accept-form input,
 .changelog-form input,
 .changelog-form select,
 .changelog-form textarea,
@@ -1519,23 +1526,30 @@ dd {
 .settings-grid {
   display: grid;
   gap: 12px;
-  grid-template-columns: minmax(0, 1.28fr) minmax(280px, 0.72fr);
+  grid-template-columns: minmax(310px, 0.82fr) minmax(0, 1.18fr);
 }
 
+.access-control,
 .integration-control,
 .data-tools {
   display: grid;
   gap: 10px;
 }
 
+.access-control,
 .integration-control {
   align-content: start;
 }
 
 .data-tools {
   align-content: start;
-  border-left: 1px solid var(--line);
-  padding-left: 12px;
+  grid-column: 2;
+}
+
+.access-control {
+  border-right: 1px solid var(--line);
+  grid-row: span 2;
+  padding-right: 12px;
 }
 
 .settings-section-header {
@@ -1571,6 +1585,111 @@ dd {
   font-size: 13px;
   line-height: 1.45;
   padding: 8px 10px;
+}
+
+.invitation-message {
+  background: var(--plate);
+  border: 1px solid var(--line);
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.45;
+  padding: 8px 10px;
+}
+
+.invitation-message.error {
+  border-color: color-mix(in oklch, var(--coral), var(--line) 55%);
+  color: var(--coral);
+}
+
+.invitation-form,
+.invitation-accept-form {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 0.82fr);
+}
+
+.invitation-form label,
+.invitation-token label,
+.invitation-accept-form label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.invitation-form label:first-child,
+.invitation-token,
+.invitation-accept-form label:first-child {
+  grid-column: 1 / -1;
+}
+
+.invitation-form .primary-action,
+.invitation-accept-form .secondary-action {
+  align-self: end;
+  min-height: 38px;
+}
+
+.invitation-token {
+  background: var(--plate);
+  border: 1px solid var(--line-strong);
+  display: grid;
+  gap: 9px;
+  padding: 10px;
+}
+
+.invitation-token > div {
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.invitation-token strong,
+.invitation-row strong {
+  font-family: var(--label-font);
+}
+
+.invitation-token span,
+.invitation-row span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.invitation-token input {
+  font-family: var(--mono-font);
+  font-size: 12px;
+}
+
+.invitation-list {
+  border: 1px solid var(--line);
+  display: grid;
+  overflow: hidden;
+}
+
+.invitation-row {
+  align-items: center;
+  background: var(--plate);
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  padding: 10px;
+}
+
+.invitation-row + .invitation-row {
+  border-top: 1px solid var(--line);
+}
+
+.invitation-row > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.invitation-row strong,
+.invitation-row span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .provider-list {
@@ -2730,6 +2849,7 @@ dd {
 
   .settings-section-header,
   .provider-row,
+  .invitation-row,
   .provider-controls {
     align-items: flex-start;
     display: grid;
@@ -2747,11 +2867,35 @@ dd {
     width: 100%;
   }
 
-  .data-tools {
-    border-left: 0;
+  .access-control {
+    border-right: 0;
+    padding-right: 0;
+  }
+
+  .data-tools,
+  .integration-control {
     border-top: 1px solid var(--line);
-    padding-left: 0;
     padding-top: 12px;
+  }
+
+  .data-tools {
+    grid-column: auto;
+  }
+
+  .invitation-form,
+  .invitation-accept-form {
+    grid-template-columns: 1fr;
+  }
+
+  .invitation-form label:first-child,
+  .invitation-token,
+  .invitation-accept-form label:first-child {
+    grid-column: auto;
+  }
+
+  .invitation-row .secondary-action {
+    min-height: 44px;
+    width: 100%;
   }
 
   .owner-auth-shell {

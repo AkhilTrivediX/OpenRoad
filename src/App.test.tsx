@@ -154,6 +154,29 @@ describe("OpenRoad workspace shell", () => {
     expect(document.body.textContent).not.toContain("server-admin-token");
   });
 
+  it("refreshes invitation access after owner sign-in", async () => {
+    vi.stubEnv("VITE_OPENROAD_SERVER_SYNC", "on");
+    const fetchMock = createOwnerLoginFetchMock({ loginSucceeds: true });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await user.type(await screen.findByLabelText("Admin token"), "server-admin-token");
+    await user.click(screen.getByRole("button", { name: "Create owner session" }));
+
+    const access = await screen.findByLabelText("Team access");
+    expect(await within(access).findByText("Ready")).toBeInTheDocument();
+    expect(within(access).getByRole("form", { name: "Create team invitation" })).toBeInTheDocument();
+    expect(within(access).queryByText("Owner only")).not.toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/openroad/workspaces/acme/invitations",
+      expect.objectContaining({
+        credentials: "same-origin"
+      })
+    );
+  });
+
   it("keeps owner sign-in focused after a wrong admin token", async () => {
     vi.stubEnv("VITE_OPENROAD_SERVER_SYNC", "on");
     const fetchMock = createOwnerLoginFetchMock({ loginSucceeds: false });
@@ -270,6 +293,78 @@ describe("OpenRoad workspace shell", () => {
       })
     );
     expect(document.body.textContent).not.toContain("jira-access-secret");
+  });
+
+  it("creates and revokes team invitations from Settings without exporting accept tokens", async () => {
+    vi.stubEnv("VITE_OPENROAD_SERVER_SYNC", "on");
+    const fetchMock = createSettingsInvitationFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    const access = await screen.findByLabelText("Team access");
+    expect(within(access).getByText("Ready")).toBeInTheDocument();
+
+    await user.type(within(access).getByLabelText("Invitation email"), "New.Member@example.com");
+    await user.type(within(access).getByLabelText("Invitation name"), "New Member");
+    await user.selectOptions(within(access).getByLabelText("Invitation role"), "Contributor");
+    await user.click(within(access).getByRole("button", { name: "Create invitation" }));
+
+    expect(await within(access).findByText("Invitation created for new.member@example.com.")).toBeInTheDocument();
+    expect(within(access).getByLabelText("Created invitation accept token")).toHaveValue(
+      "oinv_ui-one-time-token"
+    );
+    expect(within(access).getAllByText("new.member@example.com")).toHaveLength(2);
+    expect(within(access).getByText("Pending")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Export workspace" }));
+    expect((screen.getByLabelText("Workspace export JSON") as HTMLTextAreaElement).value).not.toContain(
+      "oinv_ui-one-time-token"
+    );
+
+    await user.click(within(access).getByRole("button", { name: "Revoke" }));
+
+    expect(await within(access).findByText("Invitation revoked for new.member@example.com.")).toBeInTheDocument();
+    expect(within(access).getByText("Revoked")).toBeInTheDocument();
+    expect(within(access).queryByLabelText("Created invitation accept token")).not.toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/openroad/workspaces/acme/invitations",
+      expect.objectContaining({
+        body: JSON.stringify({
+          email: "New.Member@example.com",
+          name: "New Member",
+          role: "Contributor"
+        }),
+        credentials: "same-origin",
+        method: "POST"
+      })
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/openroad/workspaces/acme/invitations/invitation-ui-1/revoke",
+      expect.objectContaining({
+        credentials: "same-origin",
+        method: "POST"
+      })
+    );
+  });
+
+  it("accepts an invitation token from Settings without echoing failed tokens", async () => {
+    vi.stubEnv("VITE_OPENROAD_SERVER_SYNC", "on");
+    const fetchMock = createSettingsInvitationFetchMock({ acceptFails: true });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    const access = await screen.findByLabelText("Team access");
+    await user.type(within(access).getByLabelText("Invitation accept token"), "oinv_bad-secret");
+    await user.click(within(access).getByRole("button", { name: "Accept token" }));
+
+    expect(await within(access).findByRole("alert")).toHaveTextContent(
+      "Invitation token is invalid, expired, or no longer active."
+    );
+    expect(document.body.textContent).not.toContain("oinv_bad-secret");
   });
 
   it("switches workspaces", async () => {
@@ -1366,7 +1461,31 @@ function createOwnerLoginFetchMock(
       );
     }
 
+    if (url === "/api/openroad/workspaces/acme/invitations") {
+      if (!isAuthenticated) {
+        return jsonResponse(
+          {
+            error: {
+              code: "forbidden",
+              message: "Actor does not have permission to access this OpenRoad resource."
+            }
+          },
+          403
+        );
+      }
+
+      return jsonResponse({ invitations: [] });
+    }
+
     if (url.includes("/integrations/status")) {
+      if (isAuthenticated) {
+        return jsonResponse({
+          providers: [],
+          status: "ready",
+          workspaceId: "acme"
+        });
+      }
+
       return jsonResponse(
         { error: { code: "forbidden", message: "Integration status requires access." } },
         403
@@ -1546,6 +1665,103 @@ function createSettingsIntegrationFetchMock(options: { jiraReady?: boolean; line
 
     return jsonResponse({ error: { message: "Unhandled test request." } }, 404);
   });
+}
+
+function createSettingsInvitationFetchMock(options: { acceptFails?: boolean } = {}) {
+  const state = createInitialOpenRoadState();
+  let invitation: ReturnType<typeof invitationResponse> | undefined;
+
+  return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input.toString();
+    const method = init?.method ?? "GET";
+
+    if (url === "/api/openroad/state") {
+      return jsonResponse({
+        state,
+        status: method === "PUT" ? "saved" : "ready"
+      });
+    }
+
+    if (url === "/api/openroad/workspaces/acme/integrations/status") {
+      return jsonResponse({
+        providers: [],
+        status: "ready",
+        workspaceId: "acme"
+      });
+    }
+
+    if (url === "/api/openroad/workspaces/acme/invitations" && method === "GET") {
+      return jsonResponse({
+        invitations: invitation ? [invitation] : []
+      });
+    }
+
+    if (url === "/api/openroad/workspaces/acme/invitations" && method === "POST") {
+      const body = JSON.parse(String(init?.body ?? "{}")) as {
+        email: string;
+        name?: string;
+        role: string;
+      };
+      invitation = invitationResponse({
+        email: body.email.toLowerCase(),
+        invitedName: body.name,
+        role: body.role,
+        status: "pending"
+      });
+      return jsonResponse(
+        {
+          acceptToken: "oinv_ui-one-time-token",
+          invitation,
+          status: "pending"
+        },
+        201
+      );
+    }
+
+    if (url === "/api/openroad/workspaces/acme/invitations/invitation-ui-1/revoke") {
+      invitation = invitationResponse({ email: invitation?.email ?? "new.member@example.com", status: "revoked" });
+      return jsonResponse({
+        invitation,
+        status: "revoked"
+      });
+    }
+
+    if (url === "/api/openroad/invitations/accept") {
+      if (options.acceptFails) {
+        return jsonResponse(
+          {
+            error: {
+              code: "invalid_request",
+              message: "Invitation token is invalid, expired, or no longer active."
+            }
+          },
+          400
+        );
+      }
+
+      invitation = invitationResponse({ email: "accepted@example.com", status: "accepted" });
+      return jsonResponse({
+        invitation,
+        status: "accepted"
+      });
+    }
+
+    return jsonResponse({ error: { message: "Unhandled test request." } }, 404);
+  });
+}
+
+function invitationResponse(overrides: Record<string, unknown> = {}) {
+  return {
+    createdAt: "2026-07-05T00:00:00.000Z",
+    createdByActorId: "local-owner",
+    email: "existing@example.com",
+    expiresAt: "2026-07-19T00:00:00.000Z",
+    id: "invitation-ui-1",
+    role: "Viewer",
+    status: "pending",
+    workspaceId: "acme",
+    ...overrides
+  };
 }
 
 function jsonResponse(body: unknown, status = 200) {

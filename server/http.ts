@@ -13,7 +13,8 @@ import {
   openRoadApiVersion,
   requirePermission,
   type AccessContext,
-  type AuthOptions
+  type AuthOptions,
+  type WorkspaceRole
 } from "./access.js";
 import {
   createPublicPortalSnapshot,
@@ -161,7 +162,12 @@ import {
   canConfigureJiraIntegrationSyncWorker,
   createJiraIntegrationSyncWorker
 } from "./jira-sync-worker.js";
-import type { AuditEvent, TeamStore } from "./team.js";
+import {
+  TeamStoreError,
+  type AuditEvent,
+  type TeamInvitationSummary,
+  type TeamStore
+} from "./team.js";
 import {
   SessionStoreError,
   getSessionCookieValue,
@@ -512,6 +518,11 @@ async function handleApiRequest(
 
   if (requestUrl.pathname === "/api/openroad/auth/logout") {
     await handleLogoutRequest(request, response, store, access, auth, sessionStore, teamStore);
+    return;
+  }
+
+  if (requestUrl.pathname === "/api/openroad/invitations/accept") {
+    await handleInvitationAcceptRequest(request, response, store, access, teamStore);
     return;
   }
 
@@ -871,6 +882,39 @@ async function handleApiRequest(
     return;
   }
 
+  const workspaceInvitationsMatch = requestUrl.pathname.match(
+    /^\/api\/openroad\/workspaces\/([^/]+)\/invitations$/
+  );
+
+  if (workspaceInvitationsMatch) {
+    await handleWorkspaceInvitationCollectionRequest(
+      request,
+      response,
+      store,
+      access,
+      teamStore,
+      workspaceInvitationsMatch[1]
+    );
+    return;
+  }
+
+  const workspaceInvitationRevokeMatch = requestUrl.pathname.match(
+    /^\/api\/openroad\/workspaces\/([^/]+)\/invitations\/([^/]+)\/revoke$/
+  );
+
+  if (workspaceInvitationRevokeMatch) {
+    await handleWorkspaceInvitationRevokeRequest(
+      request,
+      response,
+      store,
+      access,
+      teamStore,
+      workspaceInvitationRevokeMatch[1],
+      workspaceInvitationRevokeMatch[2]
+    );
+    return;
+  }
+
   const workspaceActionMatch = requestUrl.pathname.match(
     /^\/api\/openroad\/workspaces\/([^/]+)\/actions$/
   );
@@ -1220,6 +1264,172 @@ async function handleAuditEventsRequest(
     });
 
     writeJson(response, 200, { auditEvents }, access);
+  } catch (error) {
+    writeKnownApiError(response, error, access);
+  }
+}
+
+async function handleWorkspaceInvitationCollectionRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  store: OpenRoadStore,
+  access: AccessContext,
+  teamStore: TeamStore | undefined,
+  encodedWorkspaceId: string
+) {
+  if (request.method !== "GET" && request.method !== "POST") {
+    writeApiError(response, 405, "invalid_method", "This endpoint only supports GET and POST.", access);
+    return;
+  }
+
+  if (!teamStore) {
+    writeKnownApiError(
+      response,
+      new ApiRequestError("not_configured", 503, "OpenRoad team metadata store is not configured."),
+      access
+    );
+    return;
+  }
+
+  const workspaceId = decodeURIComponent(encodedWorkspaceId);
+
+  try {
+    requirePermission(access, "integration:manage", workspaceId);
+    const current = await store.load();
+
+    if (request.method === "GET") {
+      const invitations = await teamStore.listInvitations(current.state, workspaceId);
+      writeJson(response, 200, { invitations: invitations.map(sanitizeInvitationForJson) }, access);
+      return;
+    }
+
+    const payload = await readJsonBody(request, 8192);
+    const invitationPayload = getInvitationCreatePayload(payload);
+    const result = await teamStore.createInvitation(current.state, {
+      ...invitationPayload,
+      createdByActorId: access.actor.id,
+      workspaceId
+    });
+
+    await recordAuditEvent(teamStore, current.state, access, {
+      summary: `Created invitation for ${result.invitation.email} as ${result.invitation.role}.`,
+      type: "team.invitation.create",
+      workspaceId
+    });
+
+    writeJson(
+      response,
+      201,
+      {
+        acceptToken: result.acceptToken,
+        invitation: sanitizeInvitationForJson(result.invitation),
+        status: "pending"
+      },
+      access
+    );
+  } catch (error) {
+    writeKnownApiError(response, error, access);
+  }
+}
+
+async function handleWorkspaceInvitationRevokeRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  store: OpenRoadStore,
+  access: AccessContext,
+  teamStore: TeamStore | undefined,
+  encodedWorkspaceId: string,
+  encodedInvitationId: string
+) {
+  if (request.method !== "POST") {
+    writeApiError(response, 405, "invalid_method", "This endpoint only supports POST.", access);
+    return;
+  }
+
+  if (!teamStore) {
+    writeKnownApiError(
+      response,
+      new ApiRequestError("not_configured", 503, "OpenRoad team metadata store is not configured."),
+      access
+    );
+    return;
+  }
+
+  const workspaceId = decodeURIComponent(encodedWorkspaceId);
+  const invitationId = decodeURIComponent(encodedInvitationId);
+
+  try {
+    requirePermission(access, "integration:manage", workspaceId);
+    const current = await store.load();
+    const invitation = await teamStore.revokeInvitation(current.state, {
+      invitationId,
+      revokedByActorId: access.actor.id,
+      workspaceId
+    });
+
+    await recordAuditEvent(teamStore, current.state, access, {
+      summary: `Revoked invitation for ${invitation.email}.`,
+      type: "team.invitation.revoke",
+      workspaceId
+    });
+
+    writeJson(
+      response,
+      200,
+      { invitation: sanitizeInvitationForJson(invitation), status: "revoked" },
+      access
+    );
+  } catch (error) {
+    writeKnownApiError(response, error, access);
+  }
+}
+
+async function handleInvitationAcceptRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  store: OpenRoadStore,
+  access: AccessContext,
+  teamStore: TeamStore | undefined
+) {
+  if (request.method !== "POST") {
+    writeApiError(response, 405, "invalid_method", "This endpoint only supports POST.", access);
+    return;
+  }
+
+  if (!teamStore) {
+    writeKnownApiError(
+      response,
+      new ApiRequestError("not_configured", 503, "OpenRoad team metadata store is not configured."),
+      access
+    );
+    return;
+  }
+
+  try {
+    const payload = await readJsonBody(request, 8192);
+    const invitationPayload = getInvitationAcceptPayload(payload);
+    const current = await store.load();
+    const result = await teamStore.acceptInvitation(current.state, invitationPayload);
+
+    await recordAuditEvent(teamStore, current.state, access, {
+      summary: `Accepted invitation for ${result.invitation.email}.`,
+      type: "team.invitation.accept",
+      workspaceId: result.invitation.workspaceId
+    });
+
+    writeJson(
+      response,
+      200,
+      {
+        createdMembership: result.createdMembership,
+        createdUser: result.createdUser,
+        invitation: sanitizeInvitationForJson(result.invitation),
+        membership: sanitizeMembership(result.membership),
+        status: "accepted",
+        user: sanitizeTeamUser(result.user)
+      },
+      access
+    );
   } catch (error) {
     writeKnownApiError(response, error, access);
   }
@@ -5157,6 +5367,19 @@ function writeKnownApiError(
     return;
   }
 
+  if (error instanceof TeamStoreError) {
+    const status =
+      error.code === "future_schema"
+        ? 409
+        : error.code === "not_found"
+          ? 404
+          : error.code === "invalid_request"
+            ? 400
+            : 422;
+    writeApiError(response, status, error.code, error.message, access);
+    return;
+  }
+
   if (error instanceof AccessDeniedError) {
     writeApiError(response, error.status, error.code, error.message, access);
     return;
@@ -5268,6 +5491,75 @@ function getAdminTokenLoginPayload(payload: unknown) {
   }
 
   return adminToken;
+}
+
+function getInvitationCreatePayload(payload: unknown) {
+  if (!isRecord(payload)) {
+    throw new ApiRequestError("invalid_request", 400, "Invitation payload must be an object.");
+  }
+
+  const email = getBoundedText(payload.email, 254);
+  if (!email) {
+    throw new ApiRequestError("invalid_request", 400, "Invitation email is required.");
+  }
+
+  const role = getWorkspaceRolePayload(payload.role);
+  if (!role) {
+    throw new ApiRequestError("invalid_request", 400, "Invitation role is required.");
+  }
+
+  return {
+    email,
+    expiresAt: getBoundedText(payload.expiresAt, 80),
+    invitedName: getBoundedText(payload.name, 120) ?? getBoundedText(payload.invitedName, 120),
+    role
+  };
+}
+
+function getInvitationAcceptPayload(payload: unknown) {
+  if (!isRecord(payload)) {
+    throw new ApiRequestError("invalid_request", 400, "Invitation acceptance payload must be an object.");
+  }
+
+  const token = getBoundedText(payload.token, 512) ?? getBoundedText(payload.acceptToken, 512);
+  if (!token) {
+    throw new ApiRequestError("invalid_request", 400, "Invitation token is required.");
+  }
+
+  return {
+    acceptedName: getBoundedText(payload.name, 120) ?? getBoundedText(payload.acceptedName, 120),
+    token
+  };
+}
+
+function getWorkspaceRolePayload(value: unknown): WorkspaceRole | undefined {
+  return value === "Owner" ||
+    value === "Maintainer" ||
+    value === "Contributor" ||
+    value === "Viewer"
+    ? value
+    : undefined;
+}
+
+function sanitizeInvitationForJson(invitation: TeamInvitationSummary) {
+  return { ...invitation };
+}
+
+function sanitizeMembership(membership: { id: string; role: WorkspaceRole; userId: string; workspaceId: string }) {
+  return {
+    id: membership.id,
+    role: membership.role,
+    userId: membership.userId,
+    workspaceId: membership.workspaceId
+  };
+}
+
+function sanitizeTeamUser(user: { email: string; id: string; name: string }) {
+  return {
+    email: user.email,
+    id: user.id,
+    name: user.name
+  };
 }
 
 function createSessionCookie(

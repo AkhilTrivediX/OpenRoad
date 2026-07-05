@@ -124,6 +124,12 @@ export const routeProtections: RouteProtection[] = [
     scope: "public"
   },
   {
+    methods: ["POST"],
+    path: "/api/openroad/invitations/accept",
+    permission: "contract:read",
+    scope: "public"
+  },
+  {
     methods: ["PUT"],
     path: "/api/openroad/state",
     permission: "state:write",
@@ -240,6 +246,18 @@ export const routeProtections: RouteProtection[] = [
   {
     methods: ["POST"],
     path: "/api/openroad/workspaces/:workspaceId/integrations/:provider/sync/jobs",
+    permission: "integration:manage",
+    scope: "workspace"
+  },
+  {
+    methods: ["GET", "POST"],
+    path: "/api/openroad/workspaces/:workspaceId/invitations",
+    permission: "integration:manage",
+    scope: "workspace"
+  },
+  {
+    methods: ["POST"],
+    path: "/api/openroad/workspaces/:workspaceId/invitations/:invitationId/revoke",
     permission: "integration:manage",
     scope: "workspace"
   },

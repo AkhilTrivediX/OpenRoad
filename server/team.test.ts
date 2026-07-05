@@ -58,6 +58,166 @@ describe("FileTeamStore", () => {
     });
   });
 
+  it("migrates schema v1 team metadata with empty invitations", async () => {
+    const teamFile = await createTempTeamFile();
+    const openRoadState = createInitialOpenRoadState();
+    await writeFile(
+      teamFile,
+      JSON.stringify({
+        auditEvents: [],
+        memberships: [
+          {
+            createdAt: "seed",
+            id: "membership-local-owner-acme",
+            role: "Owner",
+            userId: "local-owner",
+            workspaceId: "acme"
+          }
+        ],
+        schemaVersion: 1,
+        users: [
+          {
+            createdAt: "seed",
+            email: "owner@openroad.local",
+            id: "local-owner",
+            name: "Local owner"
+          }
+        ]
+      }),
+      "utf8"
+    );
+
+    const result = await new FileTeamStore(teamFile).load(openRoadState);
+    const persisted = JSON.parse(await readFile(teamFile, "utf8")) as {
+      invitations: unknown[];
+      schemaVersion: number;
+    };
+
+    expect(result.status).toBe("migrated");
+    expect(result.state.invitations).toEqual([]);
+    expect(persisted.schemaVersion).toBe(openRoadTeamSchemaVersion);
+    expect(persisted.invitations).toEqual([]);
+  });
+
+  it("creates invitations without persisting or listing raw accept tokens", async () => {
+    const teamFile = await createTempTeamFile();
+    const openRoadState = createInitialOpenRoadState();
+    const store = new FileTeamStore(teamFile);
+    await store.load(openRoadState);
+
+    const created = await store.createInvitation(openRoadState, {
+      createdByActorId: "local-owner",
+      email: "Teammate@Example.COM",
+      invitedName: "Roadmap teammate",
+      role: "Maintainer",
+      workspaceId: "acme"
+    });
+    const persistedText = await readFile(teamFile, "utf8");
+    const persisted = JSON.parse(persistedText) as {
+      invitations: Array<{ email: string; tokenHash: string }>;
+    };
+    const listed = await store.listInvitations(openRoadState, "acme");
+
+    expect(created.acceptToken).toMatch(/^oinv_/);
+    expect("tokenHash" in created.invitation).toBe(false);
+    expect(created.invitation).toMatchObject({
+      email: "teammate@example.com",
+      invitedName: "Roadmap teammate",
+      role: "Maintainer",
+      status: "pending",
+      workspaceId: "acme"
+    });
+    expect(persisted.invitations[0]).toMatchObject({
+      email: "teammate@example.com"
+    });
+    expect(persisted.invitations[0].tokenHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(persistedText).not.toContain(created.acceptToken);
+    expect(listed[0]).toMatchObject({
+      email: "teammate@example.com",
+      status: "pending"
+    });
+    expect("tokenHash" in listed[0]).toBe(false);
+  });
+
+  it("accepts invitations once and creates durable users and memberships", async () => {
+    const teamFile = await createTempTeamFile();
+    const openRoadState = createInitialOpenRoadState();
+    const store = new FileTeamStore(teamFile);
+    await store.load(openRoadState);
+    const created = await store.createInvitation(openRoadState, {
+      createdByActorId: "local-owner",
+      email: "builder@example.com",
+      role: "Contributor",
+      workspaceId: "maintainer"
+    });
+
+    const accepted = await store.acceptInvitation(openRoadState, {
+      acceptedName: "Product builder",
+      token: created.acceptToken
+    });
+    const reloaded = await store.load(openRoadState);
+
+    expect(accepted).toMatchObject({
+      createdMembership: true,
+      createdUser: true,
+      invitation: {
+        email: "builder@example.com",
+        status: "accepted",
+        workspaceId: "maintainer"
+      },
+      membership: {
+        role: "Contributor",
+        workspaceId: "maintainer"
+      },
+      user: {
+        email: "builder@example.com",
+        name: "Product builder"
+      }
+    });
+    expect(reloaded.state.users.some((user) => user.email === "builder@example.com")).toBe(true);
+    expect(
+      reloaded.state.memberships.some(
+        (membership) =>
+          membership.userId === accepted.user.id && membership.workspaceId === "maintainer"
+      )
+    ).toBe(true);
+    await expect(
+      store.acceptInvitation(openRoadState, { token: created.acceptToken })
+    ).rejects.toMatchObject({ code: "invalid_request" });
+  });
+
+  it("revokes pending invitations and rejects revoked tokens", async () => {
+    const teamFile = await createTempTeamFile();
+    const openRoadState = createInitialOpenRoadState();
+    const store = new FileTeamStore(teamFile);
+    await store.load(openRoadState);
+    const created = await store.createInvitation(openRoadState, {
+      createdByActorId: "local-owner",
+      email: "viewer@example.com",
+      role: "Viewer",
+      workspaceId: "acme"
+    });
+
+    const revoked = await store.revokeInvitation(openRoadState, {
+      invitationId: created.invitation.id,
+      revokedByActorId: "local-owner",
+      workspaceId: "acme"
+    });
+    const listed = await store.listInvitations(openRoadState, "acme");
+
+    expect(revoked).toMatchObject({
+      email: "viewer@example.com",
+      status: "revoked"
+    });
+    expect(listed[0]).toMatchObject({
+      id: created.invitation.id,
+      status: "revoked"
+    });
+    await expect(
+      store.acceptInvitation(openRoadState, { token: created.acceptToken })
+    ).rejects.toMatchObject({ code: "invalid_request" });
+  });
+
   it("rejects future schema versions", async () => {
     const teamFile = await createTempTeamFile();
     await writeFile(

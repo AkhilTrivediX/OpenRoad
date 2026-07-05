@@ -100,9 +100,14 @@ As an OpenRoad workspace owner, I need to invite a teammate to a workspace with 
 - Branch: `feat/team-invitations-foundation`
 - Commit SHA: pending.
 - Date: 2026-07-05.
-- Commands run: pending.
+- Commands run:
+  - `pnpm vitest run server/team.test.ts server/http.test.ts scripts/openroad-ops.test.mjs`: 94 tests passed.
+  - `pnpm vitest run server/team.test.ts server/http.test.ts scripts/openroad-ops.test.mjs scripts/openroad-release.test.mjs`: 100 tests passed.
+  - `pnpm check`: 329 tests passed; client and server production builds passed.
+  - Built-server invitation smoke in admin-token mode: create/list/accept/revoke passed, raw accept token was not persisted, list/accept responses did not expose token material, repeated accept returned `400`, and public portal still loaded.
+  - `pnpm release:verify`: dry-run release manifest generated with `team metadata schema 2` rollback notes.
 - Browser/viewports tested: No visual UI changes in this slice.
 - Accessibility checks: No visual UI changes in this slice.
-- Reviewer notes: pending.
+- Reviewer notes: Backend/API slice only. Invitation data remains in team metadata, separate from core OpenRoad state, sessions, and integration metadata. Acceptance creates durable user and membership records but intentionally does not authenticate the accepted user into a browser session.
 - Known unresolved risks: Password auth, OAuth account login, email invitation delivery, account recovery, session upgrade from accepted invite, and invitation management UI remain future production slices.
 - Rollback notes: Revert branch; team metadata schema v2 invitation records can be discarded after backup while core OpenRoad state, sessions, and integrations remain separate.

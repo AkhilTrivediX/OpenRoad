@@ -248,9 +248,10 @@ function resolveSigningPlan(options) {
 }
 
 async function resolveDataMigrationNote(rootDir) {
-  const [schemaVersion, integrationSchemaVersion] = await Promise.all([
+  const [schemaVersion, integrationSchemaVersion, teamSchemaVersion] = await Promise.all([
     readOpenRoadStateSchemaVersion(rootDir),
-    readOpenRoadIntegrationSchemaVersion(rootDir)
+    readOpenRoadIntegrationSchemaVersion(rootDir),
+    readOpenRoadTeamSchemaVersion(rootDir)
   ]);
   const schemaNotes = [];
 
@@ -260,6 +261,10 @@ async function resolveDataMigrationNote(rootDir) {
 
   if (integrationSchemaVersion !== undefined) {
     schemaNotes.push(`integration metadata schema ${integrationSchemaVersion}`);
+  }
+
+  if (teamSchemaVersion !== undefined) {
+    schemaNotes.push(`team metadata schema ${teamSchemaVersion}`);
   }
 
   if (schemaNotes.length > 0) {
@@ -283,6 +288,16 @@ async function readOpenRoadIntegrationSchemaVersion(rootDir) {
   try {
     const source = await readFile(join(rootDir, "server", "integrations.ts"), "utf8");
     const match = source.match(/openRoadIntegrationSchemaVersion\s*=\s*(\d+)/);
+    return match ? Number.parseInt(match[1], 10) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function readOpenRoadTeamSchemaVersion(rootDir) {
+  try {
+    const source = await readFile(join(rootDir, "server", "team.ts"), "utf8");
+    const match = source.match(/openRoadTeamSchemaVersion\s*=\s*(\d+)/);
     return match ? Number.parseInt(match[1], 10) : undefined;
   } catch {
     return undefined;

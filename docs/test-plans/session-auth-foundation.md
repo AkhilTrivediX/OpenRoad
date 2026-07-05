@@ -116,7 +116,7 @@ As a self-hosted OpenRoad owner, I need to sign into the server once from the br
 ## Evidence
 
 - Branch: `feat/session-auth-foundation`
-- Commit SHA: pending final feature commit.
+- Commit SHA: `e3819ea`.
 - Date: 2026-07-05.
 - Commands run:
   - `pnpm vitest run server/session-store.test.ts server/access.test.ts server/http.test.ts src/persistence/openroadServer.test.ts scripts/openroad-ops.test.mjs`: 101 tests passed.

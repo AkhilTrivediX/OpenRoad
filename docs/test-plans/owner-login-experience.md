@@ -83,7 +83,7 @@ As a self-hosted OpenRoad owner, I need the app to tell me when server sign-in i
 ## Evidence
 
 - Branch: `feat/owner-login-experience`
-- Commit SHA: pending.
+- Commit SHA: `4415341`.
 - Date: 2026-07-05.
 - Commands run:
   - `pnpm vitest run src/persistence/openroadServer.test.ts src/App.test.tsx`: 60 tests passed.

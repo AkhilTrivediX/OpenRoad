@@ -98,7 +98,7 @@ As an OpenRoad workspace owner, I need to invite a teammate to a workspace with 
 ## Evidence
 
 - Branch: `feat/team-invitations-foundation`
-- Commit SHA: pending.
+- Commit SHA: `aad7914`.
 - Date: 2026-07-05.
 - Commands run:
   - `pnpm vitest run server/team.test.ts server/http.test.ts scripts/openroad-ops.test.mjs`: 94 tests passed.

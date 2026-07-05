@@ -18,6 +18,7 @@ export function isServerPersistenceEnabled() {
 
 export async function loadServerOpenRoadState(): Promise<LoadOpenRoadResult> {
   const response = await fetch("/api/openroad/state", {
+    credentials: "same-origin",
     headers: { Accept: "application/json" }
   });
   const payload = (await readJsonResponse(response)) as ServerStateResponse;
@@ -34,6 +35,7 @@ export async function loadServerOpenRoadState(): Promise<LoadOpenRoadResult> {
 export async function saveServerOpenRoadState(state: OpenRoadState) {
   const response = await fetch("/api/openroad/state", {
     body: JSON.stringify({ state }),
+    credentials: "same-origin",
     headers: {
       Accept: "application/json",
       "Content-Type": "application/json"

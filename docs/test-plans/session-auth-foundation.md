@@ -100,7 +100,7 @@ As a self-hosted OpenRoad owner, I need to sign into the server once from the br
 - New session metadata is stored outside core OpenRoad state and team metadata.
 - Default session file path: `.openroad/openroad-sessions.json`.
 - Rollback by reverting the branch and deleting or preserving the session file; core state, integration metadata, and team metadata stay compatible.
-- Rotating `OPENROAD_ADMIN_TOKEN` does not automatically revoke existing sessions unless the operator deletes the session file; docs must call this out or the implementation must bind sessions to the active token hash.
+- Rotating `OPENROAD_ADMIN_TOKEN` invalidates existing sessions because session records are bound to the active token hash.
 
 ## Manual QA Checklist
 
@@ -116,11 +116,17 @@ As a self-hosted OpenRoad owner, I need to sign into the server once from the br
 ## Evidence
 
 - Branch: `feat/session-auth-foundation`
-- Commit SHA: pending.
-- Date: pending.
-- Commands run: pending.
-- Browser/viewports tested: pending.
+- Commit SHA: pending final feature commit.
+- Date: 2026-07-05.
+- Commands run:
+  - `pnpm vitest run server/session-store.test.ts server/access.test.ts server/http.test.ts src/persistence/openroadServer.test.ts scripts/openroad-ops.test.mjs`: 101 tests passed.
+  - `pnpm check`: 316 tests passed; client and server production builds passed.
+  - `pnpm vitest run scripts/openroad-release.test.mjs`: 6 tests passed.
+  - `pnpm release:verify`: dry-run release manifest generated with required gates and session-aware rollback text.
+  - Built server smoke with `OPENROAD_ADMIN_TOKEN` and `OPENROAD_SINGLE_USER_MODE=false`: `pnpm ops:smoke` passed health, contract, portal, private denial, and bearer-token checks.
+  - Built server session smoke: unauthenticated state `403`, login `200` with `openroad_session` cookie, cookie state `200`, logout `200`, old cookie state `403`, bearer-token state `200`.
+- Browser/viewports tested: No visual UI changes in this slice; client change is fetch credential behavior covered by `src/persistence/openroadServer.test.ts`.
 - Accessibility checks: No major visual UI changes expected in this slice.
-- Reviewer notes: pending.
+- Reviewer notes: Session store is intentionally separate from core state, team metadata, and integration metadata. Backup/restore includes the session file, while deleting `OPENROAD_SESSION_FILE` remains a safe sign-out operation.
 - Known unresolved risks: User invitations, password login, account recovery, OAuth callback exchange, hosted session storage, and admin session management remain future production slices.
 - Rollback notes: Revert branch; preserve or delete `OPENROAD_SESSION_FILE` as desired.

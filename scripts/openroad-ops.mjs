@@ -12,6 +12,7 @@ export async function createBackup(options = {}) {
   const integrationFile = resolve(
     options.integrationFile ?? process.env.OPENROAD_INTEGRATION_FILE ?? ".openroad/openroad-integrations.json"
   );
+  const sessionFile = resolve(options.sessionFile ?? process.env.OPENROAD_SESSION_FILE ?? ".openroad/openroad-sessions.json");
   const teamFile = resolve(options.teamFile ?? process.env.OPENROAD_TEAM_FILE ?? ".openroad/openroad-team.json");
   const outputDir = resolve(options.outputDir ?? ".openroad/backups");
   const createdAt = new Date().toISOString();
@@ -19,15 +20,18 @@ export async function createBackup(options = {}) {
   const backupDir = join(outputDir, backupName);
   const dataArchiveName = "openroad-state.json";
   const integrationArchiveName = "openroad-integrations.json";
+  const sessionArchiveName = "openroad-sessions.json";
   const teamArchiveName = "openroad-team.json";
 
-  const [dataJson, integrationSource, teamJson, packageJson] = await Promise.all([
+  const [dataJson, integrationSource, sessionSource, teamJson, packageJson] = await Promise.all([
     readJsonFile(dataFile, "OpenRoad state file"),
     readIntegrationSource(integrationFile),
+    readSessionSource(sessionFile),
     readJsonFile(teamFile, "OpenRoad team metadata file"),
     readPackageJson()
   ]);
   const integrationJson = sanitizeIntegrationState(integrationSource.json);
+  const sessionJson = sanitizeSessionState(sessionSource.json);
 
   validateOpenRoadState(dataJson);
   validateTeamState(teamJson);
@@ -36,10 +40,12 @@ export async function createBackup(options = {}) {
   await mkdir(backupDir, { recursive: false });
   await copyFile(dataFile, join(backupDir, dataArchiveName));
   await writeJsonFile(join(backupDir, integrationArchiveName), integrationJson);
+  await writeJsonFile(join(backupDir, sessionArchiveName), sessionJson);
   await copyFile(teamFile, join(backupDir, teamArchiveName));
 
   const [dataStats, teamStats] = await Promise.all([stat(dataFile), stat(teamFile)]);
   const integrationSize = Buffer.byteLength(`${JSON.stringify(integrationJson, null, 2)}\n`);
+  const sessionSize = Buffer.byteLength(`${JSON.stringify(sessionJson, null, 2)}\n`);
   const manifest = {
     app: {
       name: stringOrFallback(packageJson.name, "openroad"),
@@ -59,6 +65,13 @@ export async function createBackup(options = {}) {
         sizeBytes: integrationSize,
         sourcePath: integrationFile,
         sourceStatus: integrationSource.exists ? "file" : "default-empty"
+      },
+      session: {
+        archiveName: sessionArchiveName,
+        schemaVersion: sessionJson.schemaVersion,
+        sizeBytes: sessionSize,
+        sourcePath: sessionFile,
+        sourceStatus: sessionSource.exists ? "file" : "default-empty"
       },
       team: {
         archiveName: teamArchiveName,
@@ -86,26 +99,31 @@ export async function restoreBackup(options = {}) {
   const integrationFile = resolve(
     options.integrationFile ?? process.env.OPENROAD_INTEGRATION_FILE ?? ".openroad/openroad-integrations.json"
   );
+  const sessionFile = resolve(options.sessionFile ?? process.env.OPENROAD_SESSION_FILE ?? ".openroad/openroad-sessions.json");
   const teamFile = resolve(options.teamFile ?? process.env.OPENROAD_TEAM_FILE ?? ".openroad/openroad-team.json");
   const manifest = await readManifest(inputDir, options.force === true);
   const dataArchiveName = manifest?.files?.data?.archiveName ?? "openroad-state.json";
   const integrationArchiveName = manifest?.files?.integration?.archiveName ?? "openroad-integrations.json";
+  const sessionArchiveName = manifest?.files?.session?.archiveName ?? "openroad-sessions.json";
   const teamArchiveName = manifest?.files?.team?.archiveName ?? "openroad-team.json";
   const dataSource = join(inputDir, dataArchiveName);
   const integrationSource = join(inputDir, integrationArchiveName);
+  const sessionSource = join(inputDir, sessionArchiveName);
   const teamSource = join(inputDir, teamArchiveName);
   const safetyDir =
     options.safetyDir ??
     join(dirname(dataFile), "restore-safety", `openroad-pre-restore-${safeTimestamp(new Date().toISOString())}`);
 
   if (!options.force) {
-    const [dataJson, integrationJson, teamJson] = await Promise.all([
+    const [dataJson, integrationJson, sessionJson, teamJson] = await Promise.all([
       readJsonFile(dataSource, "backup OpenRoad state file"),
       readJsonFile(integrationSource, "backup OpenRoad integration metadata file"),
+      readSessionSource(sessionSource).then((source) => source.json),
       readJsonFile(teamSource, "backup OpenRoad team metadata file")
     ]);
     validateOpenRoadState(dataJson);
     sanitizeIntegrationState(integrationJson);
+    sanitizeSessionState(sessionJson);
     validateTeamState(teamJson);
   } else {
     await assertReadable(dataSource, "backup OpenRoad state file");
@@ -116,11 +134,13 @@ export async function restoreBackup(options = {}) {
   await mkdir(safetyDir, { recursive: true });
   await copyIfExists(dataFile, join(safetyDir, basename(dataFile)));
   await copyIfExists(integrationFile, join(safetyDir, basename(integrationFile)));
+  await copyIfExists(sessionFile, join(safetyDir, basename(sessionFile)));
   await copyIfExists(teamFile, join(safetyDir, basename(teamFile)));
 
   await Promise.all([
     mkdir(dirname(dataFile), { recursive: true }),
     mkdir(dirname(integrationFile), { recursive: true }),
+    mkdir(dirname(sessionFile), { recursive: true }),
     mkdir(dirname(teamFile), { recursive: true })
   ]);
   await copyFile(dataSource, dataFile);
@@ -134,12 +154,17 @@ export async function restoreBackup(options = {}) {
       )
     );
   }
+  await writeJsonFile(
+    sessionFile,
+    sanitizeSessionState((await readSessionSource(sessionSource)).json)
+  );
   await copyFile(teamSource, teamFile);
 
   return {
     restored: {
       dataFile,
       integrationFile,
+      sessionFile,
       teamFile
     },
     safetyDir
@@ -288,6 +313,21 @@ async function readIntegrationSource(file) {
   }
 }
 
+async function readSessionSource(file) {
+  try {
+    return {
+      exists: true,
+      json: await readJsonFile(file, "OpenRoad session metadata file")
+    };
+  } catch (error) {
+    if (!isNotFound(error)) throw error;
+    return {
+      exists: false,
+      json: createEmptySessionState()
+    };
+  }
+}
+
 async function writeJsonFile(file, value) {
   await writeFile(file, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
@@ -346,6 +386,12 @@ function validateIntegrationState(value) {
   }
 }
 
+function validateSessionState(value) {
+  if (!isRecord(value) || typeof value.schemaVersion !== "number" || !Array.isArray(value.sessions)) {
+    throw new OpsError("invalid_session_state", "OpenRoad session metadata backup is missing sessions.");
+  }
+}
+
 function sanitizeIntegrationState(value) {
   validateIntegrationState(value);
 
@@ -360,6 +406,30 @@ function sanitizeIntegrationState(value) {
     ...(value.schemaVersion >= 3
       ? { syncJobs: value.syncJobs.map(sanitizeIntegrationSyncJob) }
       : {})
+  };
+}
+
+function sanitizeSessionState(value) {
+  validateSessionState(value);
+
+  return {
+    schemaVersion: value.schemaVersion,
+    sessions: value.sessions.map(sanitizeSessionRecord)
+  };
+}
+
+function sanitizeSessionRecord(session) {
+  if (!isRecord(session)) return session;
+
+  return {
+    adminTokenHash: session.adminTokenHash,
+    createdAt: session.createdAt,
+    expiresAt: session.expiresAt,
+    id: session.id,
+    ...(session.ipAddress ? { ipAddress: session.ipAddress } : {}),
+    ...(session.revokedAt ? { revokedAt: session.revokedAt } : {}),
+    tokenHash: session.tokenHash,
+    ...(session.userAgent ? { userAgent: session.userAgent } : {})
   };
 }
 
@@ -510,6 +580,13 @@ function createEmptyIntegrationState() {
   };
 }
 
+function createEmptySessionState() {
+  return {
+    schemaVersion: 1,
+    sessions: []
+  };
+}
+
 function parseArgs(argv) {
   const args = {};
   for (let index = 0; index < argv.length; index += 1) {
@@ -597,8 +674,8 @@ function printHelp() {
   console.log(`OpenRoad operations
 
 Commands:
-  backup  --output-dir <dir> [--data-file <file>] [--integration-file <file>] [--team-file <file>] [--name <name>]
-  restore --input-dir <dir> [--data-file <file>] [--integration-file <file>] [--team-file <file>] [--force]
+  backup  --output-dir <dir> [--data-file <file>] [--integration-file <file>] [--session-file <file>] [--team-file <file>] [--name <name>]
+  restore --input-dir <dir> [--data-file <file>] [--integration-file <file>] [--session-file <file>] [--team-file <file>] [--force]
   smoke   [--base-url <url>] [--workspace-id <id>] [--admin-token <token>]
 `);
 }

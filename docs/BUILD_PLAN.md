@@ -10,7 +10,7 @@ Each feature must also satisfy `docs/PRODUCTION_READINESS.md` before merging to 
 
 Current stage: Stage 2 Team Beta foundation in progress.
 
-The standalone loop now covers workspaces, requests, triage, internal work, roadmap planning, changelog drafts, public portal preview, local durability, production APIs, basic tenancy boundaries, file-backed team metadata, audit events, self-host operations, app-level crash recovery, a first app-module boundary, hardened public portal write APIs with persisted visitor vote identity, the provider-neutral integration adapter contract, a payload-backed GitHub issue import/link API, server-only GitHub App installation verification, live GitHub issue fetch through verified installations, signed GitHub webhooks, safe disconnect handling, encrypted server-only provider credential storage, provider-neutral background sync job foundations, GitHub/Linear/Jira workers for already-linked issue mappings, progressive Settings visibility with GitHub/Linear/Jira manual sync controls, Linear issue import/link, Jira issue import/link with explicit field mapping, requester notification preferences/outbox events plus JSONL delivery handoff, deterministic local assistant triage, and release candidate manifest tooling. The next production work should continue hardening provider connect/disconnect, webhooks, direct email/provider notification delivery, and real model-backed AI adapters as separate slices.
+The standalone loop now covers workspaces, requests, triage, internal work, roadmap planning, changelog drafts, public portal preview, local durability, production APIs, basic tenancy boundaries, file-backed team metadata, audit events, self-host operations, owner browser sessions for admin-token deployments, app-level crash recovery, a first app-module boundary, hardened public portal write APIs with persisted visitor vote identity, the provider-neutral integration adapter contract, a payload-backed GitHub issue import/link API, server-only GitHub App installation verification, live GitHub issue fetch through verified installations, signed GitHub webhooks, safe disconnect handling, encrypted server-only provider credential storage, provider-neutral background sync job foundations, GitHub/Linear/Jira workers for already-linked issue mappings, progressive Settings visibility with GitHub/Linear/Jira manual sync controls, Linear issue import/link, Jira issue import/link with explicit field mapping, requester notification preferences/outbox events plus JSONL delivery handoff, deterministic local assistant triage, and release candidate manifest tooling. The next production work should build on sessions with invitations/account access, while provider connect/disconnect, webhooks, direct email/provider notification delivery, and real model-backed AI adapters remain separate hardening slices.
 
 ## Feature 1: Workspace Shell
 
@@ -177,6 +177,29 @@ Acceptance:
 - A small team can use OpenRoad with isolated workspace data.
 - Deployments can be smoke-tested and rolled back.
 - Operational errors are visible without exposing logs in default navigation.
+
+### Session Auth Foundation
+
+Branch: `feat/session-auth-foundation`
+
+Status: implemented and production-checked.
+
+Build:
+
+- Versioned file-backed session metadata.
+- Admin-token login exchange for owner browser sessions.
+- HttpOnly, SameSite=Lax owner session cookie.
+- Session-token hashing, expiration, revocation, and admin-token rotation binding.
+- Login/logout/session API contract.
+- Same-origin browser persistence fetches with credentials.
+- Deployment and security documentation.
+
+Acceptance:
+
+- Admin-token deployments can use the browser app without sending bearer tokens on every request.
+- Bearer-token scripts, trusted proxy actors, single-user mode, and public portal access still work.
+- Session secrets are not returned, logged, or persisted as raw token material.
+- Deleting the session file signs out browsers without touching product, team, or integration data.
 
 ### Production Server Foundation
 

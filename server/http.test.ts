@@ -22,6 +22,7 @@ import {
   FileIntegrationStore,
   createIntegrationCredentialSecretContext
 } from "./integrations";
+import { FileSessionStore, type SessionStore } from "./session-store";
 import { FileOpenRoadStore } from "./store";
 import { FileTeamStore } from "./team";
 import type { AuthOptions } from "./access";
@@ -49,7 +50,7 @@ describe("OpenRoad production server", () => {
 
     expect(health.status).toBe(200);
     expect(health.body).toMatchObject({
-      apiVersion: "2026-07-04",
+      apiVersion: "2026-07-05",
       ok: true,
       schemaVersion: openRoadSchemaVersion
     });
@@ -68,10 +69,11 @@ describe("OpenRoad production server", () => {
 
     expect(response.status).toBe(200);
     expect(response.body).toMatchObject({
-      apiVersion: "2026-07-04",
+      apiVersion: "2026-07-05",
       contract: {
         auth: {
           adminTokenConfigured: true,
+          sessionCookieEnabled: true,
           singleUserMode: false,
           trustedProxyHeadersEnabled: true
         },
@@ -183,6 +185,93 @@ describe("OpenRoad production server", () => {
     expect(allowed.status).toBe(200);
     expect(allowed.body.state.schemaVersion).toBe(openRoadSchemaVersion);
     expect(deniedWrite.status).toBe(403);
+  });
+
+  it("creates and revokes browser owner sessions without exposing token material", async () => {
+    const { sessionFile, url } = await startTestServer({
+      auth: { adminToken: "secret", singleUserMode: false }
+    });
+
+    const beforeSession = await fetchJson(`${url}/api/openroad/session`);
+    const wrongLogin = await fetchJson(`${url}/api/openroad/auth/login`, {
+      body: JSON.stringify({ adminToken: "wrong" }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const login = await fetchJson(`${url}/api/openroad/auth/login`, {
+      body: JSON.stringify({ adminToken: "secret" }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const setCookie = login.headers.get("set-cookie") ?? "";
+    const cookie = cookiePair(setCookie);
+    const cookieValue = cookie.split("=").slice(1).join("=");
+    const rawSessionSecret = decodeURIComponent(cookieValue).split(".")[1];
+    const persistedSessions = await readFile(sessionFile, "utf8");
+    const stateWithCookie = await fetchJson(`${url}/api/openroad/state`, {
+      headers: { Cookie: cookie }
+    });
+    const sessionWithCookie = await fetchJson(`${url}/api/openroad/session`, {
+      headers: { Cookie: cookie }
+    });
+    const audit = await fetchJson(`${url}/api/openroad/audit-events`, {
+      headers: { Authorization: "Bearer secret" }
+    });
+    const logout = await fetchJson(`${url}/api/openroad/auth/logout`, {
+      headers: { Cookie: cookie },
+      method: "POST"
+    });
+    const stateAfterLogout = await fetchJson(`${url}/api/openroad/state`, {
+      headers: { Cookie: cookie }
+    });
+    const bearerStillWorks = await fetchJson(`${url}/api/openroad/state`, {
+      headers: { Authorization: "Bearer secret" }
+    });
+
+    expect(beforeSession.status).toBe(200);
+    expect(beforeSession.body).toMatchObject({
+      actor: { type: "public-visitor" },
+      authenticated: false,
+      loginRequired: true
+    });
+    expect(wrongLogin.status).toBe(403);
+    expect(login.status).toBe(200);
+    expect(login.body).toMatchObject({
+      actor: { source: "session", type: "local-owner" },
+      authenticated: true,
+      status: "authenticated"
+    });
+    expect(setCookie).toContain("openroad_session=");
+    expect(setCookie).toContain("HttpOnly");
+    expect(setCookie).toContain("SameSite=Lax");
+    expect(setCookie).toContain("Path=/");
+    expect(setCookie).toContain("Max-Age=");
+    expect(persistedSessions).not.toContain("secret");
+    expect(persistedSessions).not.toContain(rawSessionSecret);
+    expect(stateWithCookie.status).toBe(200);
+    expect(stateWithCookie.body.state.schemaVersion).toBe(openRoadSchemaVersion);
+    expect(sessionWithCookie.body).toMatchObject({
+      actor: { source: "session", type: "local-owner" },
+      authenticated: true,
+      loginRequired: false
+    });
+    expect(audit.body.auditEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          actorId: "local-owner",
+          actorType: "local-owner",
+          type: "auth.login"
+        })
+      ])
+    );
+    expect(logout.status).toBe(200);
+    expect(logout.body).toMatchObject({
+      revoked: true,
+      status: "signed_out"
+    });
+    expect(logout.headers.get("set-cookie")).toContain("Max-Age=0");
+    expect(stateAfterLogout.status).toBe(403);
+    expect(bearerStillWorks.status).toBe(200);
   });
 
   it("allows configured admin token to replace state", async () => {
@@ -3806,6 +3895,7 @@ async function startTestServer(
     linearOAuthConfig?: LinearOAuthConfig;
     notificationDeliveryAdapter?: NotificationDeliveryAdapter;
     portalRateLimiter?: PortalRateLimiter;
+    sessionStore?: SessionStore;
     tokenVault?: IntegrationTokenVault;
   } = {}
 ) {
@@ -3818,9 +3908,11 @@ async function startTestServer(
 
   const dataFile = join(directory, "state.json");
   const integrationFile = join(directory, "integrations.json");
+  const sessionFile = join(directory, "sessions.json");
   const teamFile = join(directory, "team.json");
   const store = new FileOpenRoadStore(dataFile);
   const integrationStore = new FileIntegrationStore(integrationFile);
+  const sessionStore = options.sessionStore ?? new FileSessionStore(sessionFile);
   const teamStore = new FileTeamStore(teamFile);
   await store.load();
   const server = createOpenRoadServer({
@@ -3837,6 +3929,7 @@ async function startTestServer(
     logger: { error: vi.fn(), log: vi.fn() },
     notificationDeliveryAdapter: options.notificationDeliveryAdapter,
     portalRateLimiter: options.portalRateLimiter,
+    sessionStore,
     store,
     teamStore,
     tokenVault: options.tokenVault
@@ -3844,7 +3937,17 @@ async function startTestServer(
   const url = await listen(server);
   openServers.push(server);
 
-  return { dataFile, integrationFile, integrationStore, store, teamFile, teamStore, url };
+  return {
+    dataFile,
+    integrationFile,
+    integrationStore,
+    sessionFile,
+    sessionStore,
+    store,
+    teamFile,
+    teamStore,
+    url
+  };
 }
 
 function workspaceActorHeaders(workspaceId: string, role: string) {

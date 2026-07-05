@@ -77,6 +77,9 @@ describe("openroad release operations", () => {
       "feature-evidence",
       "operator-release-notes"
     ]);
+    expect(result.manifest.release.rollback.dataMigration).toContain(
+      "Back up state, integration, session, and team files before upgrade"
+    );
     expect(result.manifest.artifacts).toContainEqual({
       path: "dist/assets/index.js",
       sha256: expectedHash,

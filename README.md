@@ -45,7 +45,7 @@ OpenRoad now has a working standalone product loop, production server foundation
 - Release candidate manifest tooling for version, checksum, support-window, and dry-run publishing verification.
 - Docker Compose, backup/restore, and smoke-check commands for self-host operators.
 
-Current production limits are explicit: OAuth/session auth, invitation flows, managed database migrations, hosted release promotion, deeper observability, full integration connect/disconnect Settings flows, OAuth callback exchange, Linear/Jira webhooks, provider write-back, direct email/provider notification delivery, real model-backed AI adapters with consent/prompt redaction/audit logs, and conflict UI are planned next-stage work.
+Current production limits are explicit: user invitations, password/OAuth account login, managed database migrations, hosted release promotion, deeper observability, full integration connect/disconnect Settings flows, OAuth callback exchange, Linear/Jira webhooks, provider write-back, direct email/provider notification delivery, real model-backed AI adapters with consent/prompt redaction/audit logs, and conflict UI are planned next-stage work. Admin-token self-hosting has an httpOnly owner browser session path.
 
 Current docs:
 
@@ -91,6 +91,8 @@ pnpm install --frozen-lockfile
 pnpm build
 $env:OPENROAD_DATA_FILE="C:\openroad\openroad-state.json"
 $env:OPENROAD_INTEGRATION_FILE="C:\openroad\openroad-integrations.json"
+$env:OPENROAD_SESSION_FILE="C:\openroad\openroad-sessions.json"
+$env:OPENROAD_SESSION_TTL_MS="604800000"
 $env:OPENROAD_TEAM_FILE="C:\openroad\openroad-team.json"
 $env:PORT="4173"
 pnpm start
@@ -150,6 +152,6 @@ The server exposes:
 - `POST /api/openroad/workspaces/:workspaceId/portal/requests/:requestId/vote`
 - `POST /api/openroad/workspaces/:workspaceId/portal/requests/:requestId/comments`
 
-When `OPENROAD_ADMIN_TOKEN` is configured, private state APIs require `Authorization: Bearer <token>`. The portal API remains public and returns only the public projection. See [API auth and tenancy contract](docs/API_AUTH_TENANCY_CONTRACT.md).
+When `OPENROAD_ADMIN_TOKEN` is configured, private state APIs require either `Authorization: Bearer <token>` or an owner session cookie created by `POST /api/openroad/auth/login`. The portal API remains public and returns only the public projection. See [API auth and tenancy contract](docs/API_AUTH_TENANCY_CONTRACT.md).
 
 Deployment, backup, restore, smoke, upgrade, and rollback details live in [Deployment runbook](docs/DEPLOYMENT_RUNBOOK.md).

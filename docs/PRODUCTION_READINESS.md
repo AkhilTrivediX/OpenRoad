@@ -172,8 +172,8 @@ These are known production gaps after the requester notifications and local assi
 
 - Some UI orchestration still lives inside `App.tsx`; the first helper/module extraction is complete, but component-level splitting remains future work.
 - Product, integration, and team persistence are file-backed, not managed SQL with online migrations.
-- Full-state APIs are protected by single-user/admin-token mode, but browser session auth is not implemented.
-- Persistent workspace membership and audit events exist, but OAuth/session auth and invitation flows are not implemented.
+- Full-state APIs are protected by single-user/admin-token mode, and admin-token deployments now have an httpOnly owner browser session path.
+- Persistent workspace membership, audit events, and owner browser sessions exist, but invitations, password auth, OAuth account login, and account recovery are not implemented.
 - Backup/restore, local self-host smoke commands, and release candidate manifests exist, but published Docker images and hosted release promotion are not implemented.
 - Observability is limited to process logs; structured operational events and dashboards are pending.
 - Public portal write controls, persisted anonymous visitor vote identity, idempotent vote dedupe, and process-local rate limits exist, but notification preferences, CAPTCHA/external bot checks, and distributed abuse controls are pending.
@@ -183,12 +183,12 @@ These are known production gaps after the requester notifications and local assi
 
 ## Next Production Move
 
-Next branch: `feat/provider-webhook-hardening`
+Next branch: `feat/team-invitations-foundation`
 
 Purpose:
 
-- Add the next provider hardening slice without expanding first-use complexity.
-- Preserve provider secret boundaries, install scope validation, retry behavior, and backup/restore safety.
+- Build on the session-auth foundation with a production-safe team invitation design and implementation slice.
+- Preserve current owner session, bearer-token, trusted-proxy, public portal, and integration secret boundaries.
 - Preserve the existing production gate: feature branch, test plan first, focused tests, `pnpm check`, browser QA when UI changes, smoke test, audit, merge, then push.
 
-Linear/Jira webhooks, provider write-back, OAuth callback exchange, direct email/provider notification delivery, and conflict UI remain hardening work that should stay behind server-only secret management, background job controls, and/or explicit delivery infrastructure.
+Linear/Jira webhooks, provider write-back, OAuth callback exchange, direct email/provider notification delivery, conflict UI, and real account login remain hardening work that should stay behind server-only secret management, background job controls, and/or explicit delivery infrastructure.

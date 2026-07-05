@@ -1,5 +1,5 @@
 import { Buffer } from "node:buffer";
-import { randomUUID } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
@@ -162,6 +162,12 @@ import {
   createJiraIntegrationSyncWorker
 } from "./jira-sync-worker.js";
 import type { AuditEvent, TeamStore } from "./team.js";
+import {
+  SessionStoreError,
+  getSessionCookieValue,
+  sessionCookieName,
+  type SessionStore
+} from "./session-store.js";
 
 type CreateOpenRoadServerOptions = {
   auth?: AuthOptions;
@@ -177,6 +183,7 @@ type CreateOpenRoadServerOptions = {
   logger?: Pick<Console, "error" | "log">;
   notificationDeliveryAdapter?: NotificationDeliveryAdapter;
   portalRateLimiter?: PortalRateLimiter;
+  sessionStore?: SessionStore;
   store: OpenRoadStore;
   teamStore?: TeamStore;
   tokenVault?: IntegrationTokenVault;
@@ -306,6 +313,7 @@ export function createOpenRoadServer({
   logger = console,
   notificationDeliveryAdapter = createNotificationDeliveryAdapterFromEnv(),
   portalRateLimiter = createPortalRateLimiterFromEnv(),
+  sessionStore,
   store,
   teamStore,
   tokenVault = createIntegrationTokenVaultFromEnv()
@@ -334,9 +342,11 @@ export function createOpenRoadServer({
   );
 
   return createServer(async (request, response) => {
-    const access = createAccessContext(request, auth);
+    let access = createAccessContext(request, auth);
 
     try {
+      const sessionActor = await resolveSessionActorForRequest(request, auth, sessionStore);
+      access = createAccessContext(request, { ...(auth ?? {}), sessionActor });
       const requestUrl = new URL(request.url ?? "/", "http://openroad.local");
 
       if (requestUrl.pathname.startsWith("/api/")) {
@@ -347,6 +357,7 @@ export function createOpenRoadServer({
           store,
           access,
           auth,
+          sessionStore,
           githubAppClient,
           githubAppConfig,
           integrationStore,
@@ -444,6 +455,7 @@ async function handleApiRequest(
   store: OpenRoadStore,
   access: AccessContext,
   auth: AuthOptions | undefined,
+  sessionStore: SessionStore | undefined,
   githubAppClient: GitHubAppClient,
   githubAppConfig: GitHubAppConfig,
   integrationStore: IntegrationStore | undefined,
@@ -484,11 +496,22 @@ async function handleApiRequest(
         ...openRoadApiContract,
         auth: {
           adminTokenConfigured: Boolean(auth?.adminToken),
-          singleUserMode: auth?.singleUserMode !== false,
+          sessionCookieEnabled: Boolean(sessionStore),
+          singleUserMode: isSingleUserAuthEnabled(auth),
           trustedProxyHeadersEnabled: Boolean(auth?.trustProxyHeaders)
         }
       }
     }, access);
+    return;
+  }
+
+  if (requestUrl.pathname === "/api/openroad/auth/login") {
+    await handleLoginRequest(request, response, store, access, auth, sessionStore, teamStore);
+    return;
+  }
+
+  if (requestUrl.pathname === "/api/openroad/auth/logout") {
+    await handleLogoutRequest(request, response, store, access, auth, sessionStore, teamStore);
     return;
   }
 
@@ -503,7 +526,7 @@ async function handleApiRequest(
   }
 
   if (requestUrl.pathname === "/api/openroad/session") {
-    await handleSessionRequest(request, response, store, access, teamStore);
+    await handleSessionRequest(request, response, store, access, auth, sessionStore, teamStore);
     return;
   }
 
@@ -961,11 +984,133 @@ async function handleActionRequest(
   }
 }
 
+async function handleLoginRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  store: OpenRoadStore,
+  access: AccessContext,
+  auth: AuthOptions | undefined,
+  sessionStore: SessionStore | undefined,
+  teamStore: TeamStore | undefined
+) {
+  if (request.method !== "POST") {
+    writeApiError(response, 405, "invalid_method", "This endpoint only supports POST.", access);
+    return;
+  }
+
+  try {
+    if (!auth?.adminToken) {
+      throw new ApiRequestError(
+        "not_configured",
+        503,
+        "Admin-token login is not configured for this OpenRoad server."
+      );
+    }
+
+    if (!sessionStore) {
+      throw new ApiRequestError(
+        "not_configured",
+        503,
+        "OpenRoad session storage is not configured."
+      );
+    }
+
+    const payload = await readJsonBody(request, 8192);
+    const adminToken = getAdminTokenLoginPayload(payload);
+
+    if (!safeSecretEqual(adminToken, auth.adminToken)) {
+      throw new AccessDeniedError("Admin token is invalid.");
+    }
+
+    const session = await sessionStore.createSession({
+      adminToken: auth.adminToken,
+      ipAddress: request.socket.remoteAddress,
+      userAgent: getSingleHeader(request.headers, "user-agent")
+    });
+    const loginAccess: AccessContext = {
+      ...access,
+      actor: { id: "local-owner", source: "admin-token", type: "local-owner" }
+    };
+    const current = await store.load();
+    await recordAuditEvent(teamStore, current.state, loginAccess, {
+      summary: "Created an owner browser session.",
+      type: "auth.login"
+    });
+
+    writeJson(
+      response,
+      200,
+      {
+        authenticated: true,
+        actor: sanitizeActor(session.session.actor),
+        expiresAt: session.session.expiresAt,
+        status: "authenticated"
+      },
+      access,
+      {
+        "Set-Cookie": createSessionCookie(
+          session.cookieValue,
+          session.maxAgeSeconds,
+          request,
+          auth
+        )
+      }
+    );
+  } catch (error) {
+    writeKnownApiError(response, error, access);
+  }
+}
+
+async function handleLogoutRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  store: OpenRoadStore,
+  access: AccessContext,
+  auth: AuthOptions | undefined,
+  sessionStore: SessionStore | undefined,
+  teamStore: TeamStore | undefined
+) {
+  if (request.method !== "POST") {
+    writeApiError(response, 405, "invalid_method", "This endpoint only supports POST.", access);
+    return;
+  }
+
+  try {
+    const cookieValue = getSessionCookieValue(getSingleHeader(request.headers, "cookie"));
+    const revoked = sessionStore ? await sessionStore.revokeSession(cookieValue) : false;
+
+    if (revoked) {
+      const current = await store.load();
+      await recordAuditEvent(teamStore, current.state, access, {
+        summary: "Revoked an owner browser session.",
+        type: "auth.logout"
+      });
+    }
+
+    writeJson(
+      response,
+      200,
+      {
+        revoked,
+        status: "signed_out"
+      },
+      access,
+      {
+        "Set-Cookie": createExpiredSessionCookie(request, auth)
+      }
+    );
+  } catch (error) {
+    writeKnownApiError(response, error, access);
+  }
+}
+
 async function handleSessionRequest(
   request: IncomingMessage,
   response: ServerResponse,
   store: OpenRoadStore,
   access: AccessContext,
+  auth: AuthOptions | undefined,
+  sessionStore: SessionStore | undefined,
   teamStore: TeamStore | undefined
 ) {
   if (request.method !== "GET") {
@@ -981,6 +1126,17 @@ async function handleSessionRequest(
     200,
     {
       actor: sanitizeActor(access.actor),
+      authenticated: access.actor.type !== "public-visitor",
+      auth: {
+        adminTokenConfigured: Boolean(auth?.adminToken),
+        sessionCookieEnabled: Boolean(sessionStore),
+        singleUserMode: isSingleUserAuthEnabled(auth),
+        trustedProxyHeadersEnabled: Boolean(auth?.trustProxyHeaders)
+      },
+      loginRequired:
+        Boolean(auth?.adminToken) &&
+        !isSingleUserAuthEnabled(auth) &&
+        access.actor.type === "public-visitor",
       memberships: team
         ? filterMembershipsForActor(team.state.memberships, access.actor)
         : []
@@ -4995,6 +5151,12 @@ function writeKnownApiError(
     return;
   }
 
+  if (error instanceof SessionStoreError) {
+    const status = error.code === "future_schema" ? 409 : 422;
+    writeApiError(response, status, error.code, error.message, access);
+    return;
+  }
+
   if (error instanceof AccessDeniedError) {
     writeApiError(response, error.status, error.code, error.message, access);
     return;
@@ -5078,6 +5240,83 @@ function getSingleHeader(headers: IncomingMessage["headers"], name: string) {
   const value = headers[name];
   if (Array.isArray(value)) return value[0];
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+async function resolveSessionActorForRequest(
+  request: IncomingMessage,
+  auth: AuthOptions | undefined,
+  sessionStore: SessionStore | undefined
+) {
+  if (!auth?.adminToken || !sessionStore) return undefined;
+
+  const session = await sessionStore.resolveSession({
+    adminToken: auth.adminToken,
+    cookieValue: getSessionCookieValue(getSingleHeader(request.headers, "cookie"))
+  });
+
+  return session?.actor;
+}
+
+function getAdminTokenLoginPayload(payload: unknown) {
+  if (!isRecord(payload)) {
+    throw new ApiRequestError("invalid_request", 400, "Login payload must be an object.");
+  }
+
+  const adminToken = getBoundedText(payload.adminToken, 4096) ?? getBoundedText(payload.token, 4096);
+  if (!adminToken) {
+    throw new ApiRequestError("invalid_request", 400, "Admin token is required.");
+  }
+
+  return adminToken;
+}
+
+function createSessionCookie(
+  cookieValue: string,
+  maxAgeSeconds: number,
+  request: IncomingMessage,
+  auth: AuthOptions | undefined
+) {
+  return [
+    `${sessionCookieName}=${encodeURIComponent(cookieValue)}`,
+    "HttpOnly",
+    `Max-Age=${maxAgeSeconds}`,
+    "Path=/",
+    "SameSite=Lax",
+    ...(isSecureRequest(request, auth) ? ["Secure"] : [])
+  ].join("; ");
+}
+
+function createExpiredSessionCookie(
+  request: IncomingMessage,
+  auth: AuthOptions | undefined
+) {
+  return [
+    `${sessionCookieName}=`,
+    "HttpOnly",
+    "Max-Age=0",
+    "Path=/",
+    "SameSite=Lax",
+    ...(isSecureRequest(request, auth) ? ["Secure"] : [])
+  ].join("; ");
+}
+
+function isSecureRequest(request: IncomingMessage, auth: AuthOptions | undefined) {
+  const socket = request.socket as typeof request.socket & { encrypted?: boolean };
+  if (socket.encrypted) return true;
+  if (!auth?.trustProxyHeaders) return false;
+
+  const forwardedProto = getSingleHeader(request.headers, "x-forwarded-proto");
+  return forwardedProto?.split(",")[0]?.trim().toLowerCase() === "https";
+}
+
+function safeSecretEqual(left: string, right: string) {
+  const leftBuffer = Buffer.from(left, "utf8");
+  const rightBuffer = Buffer.from(right, "utf8");
+  return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function isSingleUserAuthEnabled(auth: AuthOptions | undefined) {
+  return Boolean(auth?.singleUserMode || (!auth?.adminToken && auth?.singleUserMode !== false));
 }
 
 function getRequiredHeaderText(request: IncomingMessage, name: string, message: string) {

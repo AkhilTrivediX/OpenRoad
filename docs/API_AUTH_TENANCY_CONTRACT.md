@@ -4,7 +4,7 @@ This contract defines the first enforceable trust boundary for OpenRoad. It is n
 
 ## API Version
 
-Current API version: `2026-07-04`
+Current API version: `2026-07-05`
 
 Every JSON API response includes:
 
@@ -48,10 +48,18 @@ When `OPENROAD_ADMIN_TOKEN` is configured:
 
 - `GET /api/openroad/state` requires `Authorization: Bearer <token>`.
 - `PUT /api/openroad/state` requires `Authorization: Bearer <token>`.
+- `POST /api/openroad/auth/login` can exchange the admin token for an httpOnly owner session cookie.
+- Browser calls may use the owner session cookie instead of an `Authorization` header.
 - Owner/admin actions such as `replace-state`, `replace-workspace`, and `create-workspace` require owner/admin permission.
 - Public portal endpoints remain public.
 
-Do not expose `OPENROAD_ADMIN_TOKEN` to browser JavaScript. A future session/auth feature must replace direct browser access to private APIs when admin token mode is enabled.
+Do not expose `OPENROAD_ADMIN_TOKEN` to browser JavaScript beyond the one-time login request. The server stores only a hash of the generated session token and binds sessions to the active admin token hash.
+
+### Owner Browser Sessions
+
+Owner sessions are stored outside core product state in `OPENROAD_SESSION_FILE`, defaulting to `.openroad/openroad-sessions.json`. Session cookies use `HttpOnly`, `SameSite=Lax`, `Path=/`, and a bounded `Max-Age`. The server adds `Secure` when the request is HTTPS or when trusted proxy headers are enabled and `x-forwarded-proto` is `https`.
+
+`POST /api/openroad/auth/logout` revokes the current session and clears the browser cookie. Rotating `OPENROAD_ADMIN_TOKEN` invalidates existing sessions because the persisted session record is bound to the admin token hash.
 
 ### Trusted Proxy Headers
 
@@ -72,18 +80,22 @@ These headers are for future auth proxy/session integration and tests. Do not en
 
 - `GET /api/health`
 - `GET /api/openroad/contract`
+- `GET /api/openroad/session`
+- `POST /api/openroad/auth/login`
+- `POST /api/openroad/auth/logout`
 - `GET /api/openroad/workspaces/:workspaceId/portal`
 - `POST /api/openroad/workspaces/:workspaceId/portal/requests/:requestId/vote`
 - `POST /api/openroad/workspaces/:workspaceId/portal/requests/:requestId/comments`
 
 Public portal responses use the OpenRoad public projection and must not include requester source, internal comments, hidden comments, private roadmap items, private changelog entries, draft changelog entries, or private notes. Public portal write routes must validate portal settings, public request visibility, requester scope, and rate limits before mutation.
 
+Session/auth routes return only current actor, login-required flags, safe auth capability metadata, and bounded session status. They must not return admin tokens, bearer tokens, session cookie values, session token hashes, provider tokens, encrypted credentials, or private OpenRoad state.
+
 ## Private Routes
 
 - `GET /api/openroad/state`
 - `PUT /api/openroad/state`
 - `POST /api/openroad/actions`
-- `GET /api/openroad/session`
 - `GET /api/openroad/workspaces`
 - `GET /api/openroad/workspaces/:workspaceId`
 - `POST /api/openroad/workspaces/:workspaceId/actions`
@@ -150,6 +162,8 @@ Valid deliveries are processed as integration actor work after the target worksp
 
 ```powershell
 $env:OPENROAD_ADMIN_TOKEN="replace-with-long-random-token"
+$env:OPENROAD_SESSION_FILE=".openroad/openroad-sessions.json"
+$env:OPENROAD_SESSION_TTL_MS="604800000"
 $env:OPENROAD_INTEGRATION_FILE=".openroad/openroad-integrations.json"
 $env:OPENROAD_TOKEN_ENCRYPTION_KEY="replace-with-at-least-32-random-characters"
 $env:OPENROAD_TOKEN_ENCRYPTION_KEY_ID="primary"

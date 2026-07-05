@@ -88,11 +88,19 @@ As a workspace owner, I need a quiet place in Settings to invite a teammate, cho
 ## Evidence
 
 - Branch: `feat/team-invitations-ui`
-- Commit SHA: pending.
+- Commit SHA: `28a1ff27ceeda03751b81b3485527e59e15bf191`.
 - Date: 2026-07-05.
-- Commands run: pending.
-- Browser/viewports tested: pending.
-- Accessibility checks: pending.
-- Reviewer notes: pending.
+- Commands run:
+  - `pnpm vitest run src/persistence/openroadInvitations.test.ts src/App.test.tsx` -> 61 passed.
+  - `node C:\Users\PC\.agents\skills\impeccable\scripts\detect.mjs --json src\App.tsx src\styles.css` -> no findings.
+  - `pnpm check` -> 335 passed plus client/server production builds.
+  - `pnpm release:verify` -> dry-run release manifest passed.
+- Browser/viewports tested:
+  - Built server, admin-token mode, isolated temp state on `http://127.0.0.1:43174`.
+  - Desktop `1440x900`: signed in, invitation access refreshed to Ready, created invitation, verified one-time token prefix, revoked invitation, verified token reveal cleared, no body overflow, no Team access text overflow.
+  - Compact `390x844`: Settings stayed inside viewport-height app shell, Access panel Ready, one-column grid, no body overflow, no Team access text overflow.
+  - Public portal API without session returned HTTP 200 for `/api/openroad/workspaces/acme/portal`.
+- Accessibility checks: labelled Team access region, labelled create/accept forms, labelled inputs/selects, explicit status/alert messages, status text visible beyond color, keyboard-operable native controls.
+- Reviewer notes: Live browser QA caught stale unauthenticated invitation access after owner sign-in; the Settings metadata effects now refresh after the owner session returns to idle and have regression coverage.
 - Known unresolved risks: Email delivery, password/OAuth login, account recovery, accepted-member session login, and deeper role-management UI remain future slices.
 - Rollback notes: Revert branch; backend invitation APIs remain available for API users and operators.

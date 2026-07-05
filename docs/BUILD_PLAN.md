@@ -10,7 +10,7 @@ Each feature must also satisfy `docs/PRODUCTION_READINESS.md` before merging to 
 
 Current stage: Stage 2 Team Beta foundation in progress.
 
-The standalone loop now covers workspaces, requests, triage, internal work, roadmap planning, changelog drafts, public portal preview, local durability, production APIs, basic tenancy boundaries, file-backed team metadata, audit events, self-host operations, owner browser sessions and owner sign-in for admin-token deployments, app-level crash recovery, a first app-module boundary, hardened public portal write APIs with persisted visitor vote identity, the provider-neutral integration adapter contract, a payload-backed GitHub issue import/link API, server-only GitHub App installation verification, live GitHub issue fetch through verified installations, signed GitHub webhooks, safe disconnect handling, encrypted server-only provider credential storage, provider-neutral background sync job foundations, GitHub/Linear/Jira workers for already-linked issue mappings, progressive Settings visibility with GitHub/Linear/Jira manual sync controls, Linear issue import/link, Jira issue import/link with explicit field mapping, requester notification preferences/outbox events plus JSONL delivery handoff, deterministic local assistant triage, and release candidate manifest tooling. The next production work should build on sessions with invitations/account access, while provider connect/disconnect, webhooks, direct email/provider notification delivery, and real model-backed AI adapters remain separate hardening slices.
+The standalone loop now covers workspaces, requests, triage, internal work, roadmap planning, changelog drafts, public portal preview, local durability, production APIs, basic tenancy boundaries, file-backed team metadata, audit events, self-host operations, owner browser sessions and owner sign-in for admin-token deployments, team invitation/account-access APIs, app-level crash recovery, a first app-module boundary, hardened public portal write APIs with persisted visitor vote identity, the provider-neutral integration adapter contract, a payload-backed GitHub issue import/link API, server-only GitHub App installation verification, live GitHub issue fetch through verified installations, signed GitHub webhooks, safe disconnect handling, encrypted server-only provider credential storage, provider-neutral background sync job foundations, GitHub/Linear/Jira workers for already-linked issue mappings, progressive Settings visibility with GitHub/Linear/Jira manual sync controls, Linear issue import/link, Jira issue import/link with explicit field mapping, requester notification preferences/outbox events plus JSONL delivery handoff, deterministic local assistant triage, and release candidate manifest tooling. The next production work should build a progressive invitation management UI and eventual account login, while provider connect/disconnect, Linear/Jira webhooks, direct email/provider notification delivery, and real model-backed AI adapters remain separate hardening slices.
 
 ## Feature 1: Workspace Shell
 
@@ -222,6 +222,31 @@ Acceptance:
 - Successful sign-in creates the owner session and opens the normal app shell.
 - Wrong tokens stay on the sign-in surface without rendering token text.
 - Non-auth server failures still preserve local browser fallback behavior.
+
+### Team Invitations Foundation
+
+Branch: `feat/team-invitations-foundation`
+
+Status: implemented and production-checked.
+
+Build:
+
+- Team metadata schema `2` with invitation records.
+- Owner-only workspace invitation create/list/revoke APIs.
+- Public invitation accept API that creates or reuses users and workspace memberships.
+- Raw accept tokens returned once and persisted only as hashes.
+- Safe invitation summaries that omit token hashes.
+- Audit events for create, revoke, and accept.
+- Backup/restore validation for invitation-aware team metadata.
+- API contract, deployment, readiness, and rollback documentation.
+
+Acceptance:
+
+- Owners can invite a teammate with a bounded workspace role.
+- Non-owner actors cannot manage invitations.
+- Accepted invitations create durable team users and memberships without authenticating a browser session.
+- Revoked, accepted, expired, malformed, or wrong tokens cannot be accepted.
+- Core OpenRoad product state, session data, and integration metadata remain separate from invitation data.
 
 ### Production Server Foundation
 

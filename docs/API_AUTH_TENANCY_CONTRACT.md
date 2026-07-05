@@ -83,6 +83,7 @@ These headers are for future auth proxy/session integration and tests. Do not en
 - `GET /api/openroad/session`
 - `POST /api/openroad/auth/login`
 - `POST /api/openroad/auth/logout`
+- `POST /api/openroad/invitations/accept`
 - `GET /api/openroad/workspaces/:workspaceId/portal`
 - `POST /api/openroad/workspaces/:workspaceId/portal/requests/:requestId/vote`
 - `POST /api/openroad/workspaces/:workspaceId/portal/requests/:requestId/comments`
@@ -90,6 +91,8 @@ These headers are for future auth proxy/session integration and tests. Do not en
 Public portal responses use the OpenRoad public projection and must not include requester source, internal comments, hidden comments, private roadmap items, private changelog entries, draft changelog entries, or private notes. Public portal write routes must validate portal settings, public request visibility, requester scope, and rate limits before mutation.
 
 Session/auth routes return only current actor, login-required flags, safe auth capability metadata, and bounded session status. They must not return admin tokens, bearer tokens, session cookie values, session token hashes, provider tokens, encrypted credentials, or private OpenRoad state.
+
+Invitation acceptance is public only because the invitation token is the bearer secret. It accepts a valid pending token and creates or reuses the invited team user and workspace membership. It does not create a browser session, return private workspace state, or expose token hashes. Accepted, revoked, expired, malformed, or wrong tokens return a generic invalid request error.
 
 ## Private Routes
 
@@ -113,6 +116,9 @@ Session/auth routes return only current actor, login-required flags, safe auth c
 - `POST /api/openroad/workspaces/:workspaceId/integrations/:provider/credentials`
 - `POST /api/openroad/workspaces/:workspaceId/integrations/:provider/credentials/:credentialId/revoke`
 - `POST /api/openroad/workspaces/:workspaceId/integrations/:provider/sync/jobs`
+- `GET /api/openroad/workspaces/:workspaceId/invitations`
+- `POST /api/openroad/workspaces/:workspaceId/invitations`
+- `POST /api/openroad/workspaces/:workspaceId/invitations/:invitationId/revoke`
 - `GET /api/openroad/audit-events`
 - `GET /api/openroad/ops/status`
 
@@ -143,6 +149,8 @@ Jira live sync requires a queued sync job, an active Jira installation, an activ
 Provider credential create/list/revoke routes require `integration:manage`, which is reserved for local owners/admins and workspace owners. Credential storage requires `OPENROAD_TOKEN_ENCRYPTION_KEY`; credentials must be scoped to an active installation in the same workspace and provider. Responses return only metadata and never return access tokens, refresh tokens, ciphertext, IVs, tags, or encryption key material.
 
 Integration sync job enqueue routes require `integration:manage`, which is reserved for local owners/admins and workspace owners. Jobs must be scoped to an active installation in the same workspace and provider. Responses return sanitized job metadata and never return provider tokens, encrypted credentials, raw provider payloads, webhook signatures, request headers, or request bodies. Concurrent integration metadata writes are serialized inside one Node process while OpenRoad uses file-backed stores.
+
+Invitation management routes require `integration:manage`, which is reserved for local owners/admins and workspace owners. Creating an invitation returns the raw accept token exactly once and stores only a hash in `OPENROAD_TEAM_FILE` team metadata schema `2`. List, revoke, accept, session, audit, backup, and ops responses must not return invitation token hashes or raw accept tokens after creation. Email delivery, password login, OAuth login, account recovery, and browser session upgrade for accepted members remain out of scope for this slice.
 
 ## Provider-Signature Routes
 

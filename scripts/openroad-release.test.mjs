@@ -64,7 +64,7 @@ describe("openroad release operations", () => {
         commit: "abc123",
         rollback: {
           dataMigration: expect.stringContaining(
-            "OpenRoad state schema 6; integration metadata schema 3"
+            "OpenRoad state schema 6; integration metadata schema 3; team metadata schema 2"
           )
         },
         version: "0.1.0-rc.1"
@@ -166,6 +166,7 @@ async function writeBuildArtifacts(root) {
   await writeFile(assetFile, "console.log('ok');");
   await writeFile(join(root, "server-dist", "server", "index.js"), "export {};");
   await writeFile(join(root, "server", "integrations.ts"), "export const openRoadIntegrationSchemaVersion = 3;");
+  await writeFile(join(root, "server", "team.ts"), "export const openRoadTeamSchemaVersion = 2;");
   await writeFile(join(root, "src", "domain", "openroad.ts"), "export const openRoadSchemaVersion = 6;");
   return { assetFile, outputFile };
 }

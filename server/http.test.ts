@@ -455,6 +455,167 @@ describe("OpenRoad production server", () => {
     expect(response.body.error.code).toBe("forbidden");
   });
 
+  it("creates and accepts workspace invitations without exposing token hashes", async () => {
+    const { teamFile, url } = await startTestServer({
+      auth: { singleUserMode: false, trustProxyHeaders: true }
+    });
+
+    const publicCreate = await fetchJson(`${url}/api/openroad/workspaces/acme/invitations`, {
+      body: JSON.stringify({ email: "beta@example.com", role: "Viewer" }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const contributorCreate = await fetchJson(`${url}/api/openroad/workspaces/acme/invitations`, {
+      body: JSON.stringify({ email: "beta@example.com", role: "Viewer" }),
+      headers: {
+        ...workspaceActorHeaders("acme", "Contributor"),
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    const ownerCreate = await fetchJson(`${url}/api/openroad/workspaces/acme/invitations`, {
+      body: JSON.stringify({
+        email: "Beta@Example.COM",
+        name: "Beta maintainer",
+        role: "Maintainer"
+      }),
+      headers: {
+        ...workspaceActorHeaders("acme", "Owner"),
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    const acceptToken = ownerCreate.body.acceptToken as string;
+    const teamStateAfterCreate = await readFile(teamFile, "utf8");
+    const ownerList = await fetchJson(`${url}/api/openroad/workspaces/acme/invitations`, {
+      headers: workspaceActorHeaders("acme", "Owner")
+    });
+    const viewerList = await fetchJson(`${url}/api/openroad/workspaces/acme/invitations`, {
+      headers: workspaceActorHeaders("acme", "Viewer")
+    });
+    const accepted = await fetchJson(`${url}/api/openroad/invitations/accept`, {
+      body: JSON.stringify({ name: "Beta operator", token: acceptToken }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const acceptedAgain = await fetchJson(`${url}/api/openroad/invitations/accept`, {
+      body: JSON.stringify({ token: acceptToken }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const audit = await fetchJson(`${url}/api/openroad/audit-events?workspaceId=acme`, {
+      headers: workspaceActorHeaders("acme", "Owner")
+    });
+
+    expect(publicCreate.status).toBe(403);
+    expect(contributorCreate.status).toBe(403);
+    expect(ownerCreate.status).toBe(201);
+    expect(ownerCreate.body).toMatchObject({
+      invitation: {
+        email: "beta@example.com",
+        role: "Maintainer",
+        status: "pending",
+        workspaceId: "acme"
+      },
+      status: "pending"
+    });
+    expect(acceptToken).toMatch(/^oinv_/);
+    expect(JSON.stringify(ownerCreate.body)).not.toContain("tokenHash");
+    expect(teamStateAfterCreate).not.toContain(acceptToken);
+    expect(teamStateAfterCreate).toContain("tokenHash");
+    expect(ownerList.status).toBe(200);
+    expect(ownerList.body.invitations[0]).toMatchObject({
+      email: "beta@example.com",
+      status: "pending"
+    });
+    expect(JSON.stringify(ownerList.body)).not.toContain("tokenHash");
+    expect(viewerList.status).toBe(403);
+    expect(accepted.status).toBe(200);
+    expect(accepted.body).toMatchObject({
+      createdMembership: true,
+      createdUser: true,
+      invitation: {
+        email: "beta@example.com",
+        status: "accepted"
+      },
+      membership: {
+        role: "Maintainer",
+        workspaceId: "acme"
+      },
+      status: "accepted",
+      user: {
+        email: "beta@example.com",
+        name: "Beta operator"
+      }
+    });
+    expect(JSON.stringify(accepted.body)).not.toContain("tokenHash");
+    expect(JSON.stringify(accepted.body)).not.toContain(acceptToken);
+    expect(acceptedAgain.status).toBe(400);
+    expect(acceptedAgain.body.error.code).toBe("invalid_request");
+    expect(audit.body.auditEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "team.invitation.create", workspaceId: "acme" }),
+        expect.objectContaining({ type: "team.invitation.accept", workspaceId: "acme" })
+      ])
+    );
+    expect(JSON.stringify(audit.body)).not.toContain(acceptToken);
+  });
+
+  it("revokes pending invitations without creating memberships", async () => {
+    const { teamFile, url } = await startTestServer({
+      auth: { singleUserMode: false, trustProxyHeaders: true }
+    });
+
+    const created = await fetchJson(`${url}/api/openroad/workspaces/acme/invitations`, {
+      body: JSON.stringify({ email: "viewer@example.com", role: "Viewer" }),
+      headers: {
+        ...workspaceActorHeaders("acme", "Owner"),
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    const invitationId = created.body.invitation.id as string;
+    const acceptToken = created.body.acceptToken as string;
+    const viewerRevoke = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/invitations/${encodeURIComponent(invitationId)}/revoke`,
+      {
+        headers: workspaceActorHeaders("acme", "Viewer"),
+        method: "POST"
+      }
+    );
+    const ownerRevoke = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/invitations/${encodeURIComponent(invitationId)}/revoke`,
+      {
+        headers: workspaceActorHeaders("acme", "Owner"),
+        method: "POST"
+      }
+    );
+    const accepted = await fetchJson(`${url}/api/openroad/invitations/accept`, {
+      body: JSON.stringify({ token: acceptToken }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const teamState = JSON.parse(await readFile(teamFile, "utf8")) as {
+      memberships: Array<{ userId: string }>;
+      users: Array<{ email: string }>;
+    };
+
+    expect(created.status).toBe(201);
+    expect(viewerRevoke.status).toBe(403);
+    expect(ownerRevoke.status).toBe(200);
+    expect(ownerRevoke.body).toMatchObject({
+      invitation: {
+        email: "viewer@example.com",
+        status: "revoked"
+      },
+      status: "revoked"
+    });
+    expect(JSON.stringify(ownerRevoke.body)).not.toContain("tokenHash");
+    expect(accepted.status).toBe(400);
+    expect(teamState.users.some((user) => user.email === "viewer@example.com")).toBe(false);
+    expect(teamState.memberships.some((membership) => membership.userId.includes("viewer"))).toBe(false);
+  });
+
   it("imports GitHub issues into requests and persists mappings outside core state", async () => {
     const { dataFile, integrationFile, teamFile, url } = await startTestServer();
 

@@ -30,7 +30,7 @@ OpenRoad now has a working standalone product loop, production server foundation
 - Public/private visibility for requests, comments, roadmap items, and changelog entries.
 - Production Node server that serves the built app and same-origin OpenRoad APIs.
 - File-backed server persistence for a single-tenant self-host or evaluation install.
-- Team metadata, workspace membership, audit events, and private ops status APIs.
+- Team metadata, workspace membership, hashed invitation tokens, audit events, and private ops status APIs.
 - App-level crash recovery boundary with retry and local browser-data reset actions.
 - Provider-neutral integration mappings plus a payload-backed GitHub issue import/link API.
 - Server-only GitHub App setup and installation verification foundation.
@@ -45,7 +45,7 @@ OpenRoad now has a working standalone product loop, production server foundation
 - Release candidate manifest tooling for version, checksum, support-window, and dry-run publishing verification.
 - Docker Compose, backup/restore, and smoke-check commands for self-host operators.
 
-Current production limits are explicit: user invitations, password/OAuth account login, managed database migrations, hosted release promotion, deeper observability, full integration connect/disconnect Settings flows, OAuth callback exchange, Linear/Jira webhooks, provider write-back, direct email/provider notification delivery, real model-backed AI adapters with consent/prompt redaction/audit logs, and conflict UI are planned next-stage work. Admin-token self-hosting has an httpOnly owner browser session path.
+Current production limits are explicit: invitation management UI, email delivery for invitations, password/OAuth account login, account recovery, managed database migrations, hosted release promotion, deeper observability, full integration connect/disconnect Settings flows, OAuth callback exchange, Linear/Jira webhooks, provider write-back, direct email/provider notification delivery, real model-backed AI adapters with consent/prompt redaction/audit logs, and conflict UI are planned next-stage work. Admin-token self-hosting has an httpOnly owner browser session path, and invitation APIs now create durable users and memberships without authenticating those users into browser sessions yet.
 
 Current docs:
 
@@ -118,13 +118,16 @@ pnpm ops:smoke -- --base-url http://127.0.0.1:4173 --workspace-id acme --admin-t
 pnpm ops:backup -- --output-dir C:\openroad\backups
 ```
 
-Keep `.env.selfhost`, `/data`, backup directories, and restore-safety directories private. Backups contain OpenRoad product data, requester information, integration metadata, team metadata, memberships, and audit events.
+Keep `.env.selfhost`, `/data`, backup directories, and restore-safety directories private. Backups contain OpenRoad product data, requester information, integration metadata, team metadata, invitation token hashes, memberships, and audit events.
 
 The server exposes:
 
 - `GET /api/health`
 - `GET /api/openroad/contract`
 - `GET /api/openroad/session`
+- `POST /api/openroad/auth/login`
+- `POST /api/openroad/auth/logout`
+- `POST /api/openroad/invitations/accept`
 - `GET /api/openroad/state`
 - `PUT /api/openroad/state`
 - `POST /api/openroad/actions`
@@ -145,6 +148,9 @@ The server exposes:
 - `POST /api/openroad/workspaces/:workspaceId/integrations/:provider/credentials`
 - `POST /api/openroad/workspaces/:workspaceId/integrations/:provider/credentials/:credentialId/revoke`
 - `POST /api/openroad/workspaces/:workspaceId/integrations/:provider/sync/jobs`
+- `GET /api/openroad/workspaces/:workspaceId/invitations`
+- `POST /api/openroad/workspaces/:workspaceId/invitations`
+- `POST /api/openroad/workspaces/:workspaceId/invitations/:invitationId/revoke`
 - `POST /api/openroad/integrations/sync/run`
 - `GET /api/openroad/audit-events`
 - `GET /api/openroad/ops/status`

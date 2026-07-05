@@ -128,7 +128,7 @@ The first local owner is seeded from:
 - `OPENROAD_OWNER_EMAIL`
 - `OPENROAD_OWNER_NAME`
 
-Changing these values later does not rewrite existing team metadata. To change the owner after metadata exists, update the team metadata through a future admin UI or intentionally restore edited metadata from backup. Until invitation flows exist, treat the first bootstrap as an operator decision.
+Changing these values later does not rewrite existing team metadata. To change the owner after metadata exists, use the invitation APIs to add durable workspace members, update the team metadata through a future admin UI, or intentionally restore edited metadata from backup. Until browser account login exists, treat the first bootstrap as an operator decision.
 
 ## Operational Commands
 
@@ -173,7 +173,7 @@ The backup directory contains:
 - `openroad-team.json`
 - `manifest.json`
 
-The manifest records creation time, app package version, source paths, file sizes, and schema versions. Backups are not encrypted by OpenRoad tooling; use your host, storage, or secret-management system to protect them. When provider credentials exist, `openroad-integrations.json` contains encrypted token material and must be treated as sensitive. `openroad-sessions.json` stores session and admin-token hashes, not raw tokens, but should still be treated as operationally sensitive.
+The manifest records creation time, app package version, source paths, file sizes, and schema versions. Backups are not encrypted by OpenRoad tooling; use your host, storage, or secret-management system to protect them. When provider credentials exist, `openroad-integrations.json` contains encrypted token material and must be treated as sensitive. `openroad-sessions.json` stores session and admin-token hashes, not raw tokens, but should still be treated as operationally sensitive. `openroad-team.json` stores invitation token hashes, membership data, and audit events.
 
 ## Data Schema Notes
 
@@ -182,6 +182,8 @@ OpenRoad state schema `7` stores anonymous public portal voter keys and requeste
 Integration metadata schema `3` stores server-only encrypted provider credential records and background sync job metadata in `openroad-integrations.json`. Upgrade from schema `1` or `2` is automatic on load and initializes missing `credentials: []` and `syncJobs: []`. Downgrading to an older integration metadata build after credentials or sync jobs are created requires revoking/removing credentials, draining/removing sync jobs, or restoring a pre-upgrade integration backup.
 
 Session metadata schema `1` stores owner browser session records in `openroad-sessions.json`. Records contain hashes, ids, timestamps, and bounded client metadata only. Deleting this file signs out browsers without changing OpenRoad product data.
+
+Team metadata schema `2` stores users, memberships, audit events, and invitations in `openroad-team.json`. Invitation records store hashed accept tokens only. Restoring a pre-schema-2 team file automatically migrates invitations to an empty list. Rolling back across this schema should preserve a backup first; reverting to a build that only understands schema `1` requires restoring the previous team metadata backup or intentionally discarding schema `2` invitation records.
 
 ## Provider Token Storage
 
@@ -264,7 +266,7 @@ For local single-user mode without `OPENROAD_ADMIN_TOKEN`, omit `--admin-token`;
 
 1. Read the release manifest, release notes, and migration notes.
 2. Stop writes to the instance.
-3. Run `pnpm ops:backup` and verify the backup directory has a manifest and all three data files.
+3. Run `pnpm ops:backup` and verify the backup directory has a manifest and all four data files.
 4. Deploy the new application version or rebuild the Docker image.
 5. Start OpenRoad.
 6. Confirm automatic state migration succeeds when the release notes mention a schema bump.
@@ -294,6 +296,8 @@ For local single-user mode without `OPENROAD_ADMIN_TOKEN`, omit `--admin-token`;
 - With `Authorization: Bearer <token>`, `GET /api/openroad/state` should return `200`.
 - `GET /api/openroad/ops/status` should require private read permission.
 - `POST /api/openroad/notifications/deliver` should require private write permission and return `503` unless a delivery adapter is configured.
+- `POST /api/openroad/workspaces/acme/invitations` should require owner/admin permission and return a one-time accept token only on creation.
+- `POST /api/openroad/invitations/accept` should accept a valid pending invitation token without returning private workspace state.
 
 ## Security Notes
 
@@ -307,7 +311,7 @@ For local single-user mode without `OPENROAD_ADMIN_TOKEN`, omit `--admin-token`;
 
 ## Current Limits
 
-- Owner browser sessions for admin-token self-hosting are implemented; user invitations, password auth, OAuth account login, and hosted account management are not implemented.
+- Owner browser sessions for admin-token self-hosting and backend invitation APIs are implemented; invitation UI, email invitation delivery, password auth, OAuth account login, account recovery, and hosted account management are not implemented.
 - Team metadata is file-backed, not managed SQL.
 - Trusted proxy headers are disabled by default.
 - Payload-backed GitHub issue import, GitHub App installation verification, live issue fetch, signed webhooks, safe disconnect APIs, encrypted server-only provider credential storage, provider-neutral background sync job metadata, GitHub/Linear/Jira workers for already-linked issue mappings, payload-backed Linear issue import, payload-backed Jira issue import, requester notification outbox/preferences, and a server-side JSONL notification delivery handoff exist; OAuth callback exchange, Linear/Jira webhooks, provider write-back, direct email/provider notification delivery, conflict UI, and billing are not implemented.

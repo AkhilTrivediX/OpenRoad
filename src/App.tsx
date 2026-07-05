@@ -9,6 +9,7 @@ import {
   GitMerge,
   Globe2,
   Inbox,
+  KeyRound,
   LayoutDashboard,
   Link2,
   ListChecks,
@@ -111,6 +112,8 @@ import {
 } from "./app/openroadViewModel";
 import {
   isServerPersistenceEnabled,
+  isOpenRoadServerAuthRequiredError,
+  loginOpenRoadOwner,
   loadServerOpenRoadState,
   saveServerOpenRoadState
 } from "./persistence/openroadServer";
@@ -165,6 +168,9 @@ export function App() {
       ? loadResult.error ?? "Saved OpenRoad data could not be loaded. Demo data is active."
       : ""
   );
+  const [ownerLoginState, setOwnerLoginState] = useState<"idle" | "required" | "submitting">("idle");
+  const [ownerLoginToken, setOwnerLoginToken] = useState("");
+  const [ownerLoginMessage, setOwnerLoginMessage] = useState("");
   const [integrationStatus, setIntegrationStatus] = useState<WorkspaceIntegrationStatus>(() =>
     createStandaloneIntegrationStatus(resolveInitialWorkspaceId(loadResult.state, loadSelectedWorkspaceId()))
   );
@@ -212,6 +218,50 @@ export function App() {
     () => workspaceList.find((item) => item.id === workspaceId) ?? workspaceList[0],
     [workspaceId, workspaceList]
   );
+
+  function applyServerLoadResult(result: Awaited<ReturnType<typeof loadServerOpenRoadState>>) {
+    hasLoadedServerState.current = true;
+    hasServerSaveFailed.current = false;
+    skipNextServerSave.current = true;
+    dispatchOpenRoad({ type: "replace-state", state: result.state });
+    setWorkspaceId((currentWorkspaceId) =>
+      result.state.workspaces.some((item) => item.id === currentWorkspaceId)
+        ? currentWorkspaceId
+        : result.state.workspaces[0]?.id ?? currentWorkspaceId
+    );
+    setOwnerLoginState("idle");
+    setOwnerLoginMessage("");
+    setPersistenceMessage(
+      result.status === "recovered"
+        ? result.error ?? "Server data was recovered. Seed data is active."
+        : "Server storage connected."
+    );
+  }
+
+  async function signInOwner(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    const adminToken = ownerLoginToken.trim();
+    if (!adminToken || ownerLoginState === "submitting") return;
+
+    setOwnerLoginState("submitting");
+    setOwnerLoginMessage("");
+
+    try {
+      await loginOpenRoadOwner(adminToken);
+      const result = await loadServerOpenRoadState();
+      applyServerLoadResult(result);
+      setOwnerLoginToken("");
+    } catch (error) {
+      setOwnerLoginState("required");
+      setOwnerLoginMessage(
+        isOpenRoadServerAuthRequiredError(error)
+          ? "Token was not accepted. Check the server admin token and try again."
+          : "OpenRoad could not complete sign-in. Check the server and try again."
+      );
+    }
+  }
+
   useEffect(() => {
     try {
       saveOpenRoadState(openRoadState as OpenRoadState);
@@ -254,22 +304,18 @@ export function App() {
     loadServerOpenRoadState()
       .then((result) => {
         if (isCancelled) return;
-        hasLoadedServerState.current = true;
-        skipNextServerSave.current = true;
-        dispatchOpenRoad({ type: "replace-state", state: result.state });
-        setWorkspaceId((currentWorkspaceId) =>
-          result.state.workspaces.some((item) => item.id === currentWorkspaceId)
-            ? currentWorkspaceId
-            : result.state.workspaces[0]?.id ?? currentWorkspaceId
-        );
-        setPersistenceMessage(
-          result.status === "recovered"
-            ? result.error ?? "Server data was recovered. Seed data is active."
-            : "Server storage connected."
-        );
+        applyServerLoadResult(result);
       })
-      .catch(() => {
+      .catch((error) => {
         if (isCancelled) return;
+
+        if (isOpenRoadServerAuthRequiredError(error)) {
+          setOwnerLoginState("required");
+          setOwnerLoginMessage("");
+          setPersistenceMessage("");
+          return;
+        }
+
         hasLoadedServerState.current = true;
         hasServerSaveFailed.current = true;
         setPersistenceMessage("Server storage is unavailable. Local browser data is active.");
@@ -1277,6 +1323,75 @@ export function App() {
     setNewRoadmapDraft(emptyRoadmapDraft);
     setNewChangelogDraft(emptyChangelogDraft);
     resetRequestFilters();
+  }
+
+  if (serverPersistenceEnabled && ownerLoginState !== "idle") {
+    const isSigningIn = ownerLoginState === "submitting";
+
+    return (
+      <main className="app-shell owner-auth-shell" aria-label="OpenRoad owner sign-in">
+        <aside className="route-index owner-auth-rail" aria-label="OpenRoad identity">
+          <div className="brand" aria-label="OpenRoad">
+            <span className="brand-mark" aria-hidden="true">
+              <RouteGlyph />
+            </span>
+            <span className="brand-copy">
+              <strong>OpenRoad</strong>
+              <small>route room</small>
+            </span>
+          </div>
+          <div className="owner-auth-rail-copy">
+            <span className="section-label">Server access</span>
+            <strong>Owner session required</strong>
+            <p>Private workspaces are protected on this deployment.</p>
+          </div>
+        </aside>
+
+        <section className="owner-auth-deck" aria-labelledby="owner-auth-title">
+          <form className="owner-auth-panel" onSubmit={signInOwner}>
+            <div className="owner-auth-heading">
+              <span className="owner-auth-icon" aria-hidden="true">
+                <KeyRound size={18} strokeWidth={1.8} />
+              </span>
+              <div>
+                <span className="section-label">OpenRoad server</span>
+                <h1 id="owner-auth-title">Sign in to continue</h1>
+              </div>
+            </div>
+
+            <p>
+              Enter the server admin token once. OpenRoad will create an httpOnly session cookie
+              and then load the shared workspace.
+            </p>
+
+            <label className="owner-token-field">
+              <span>Admin token</span>
+              <input
+                autoComplete="current-password"
+                autoFocus
+                disabled={isSigningIn}
+                onChange={(event) => setOwnerLoginToken(event.target.value)}
+                type="password"
+                value={ownerLoginToken}
+              />
+            </label>
+
+            {ownerLoginMessage ? (
+              <p className="owner-auth-message" role="alert">
+                {ownerLoginMessage}
+              </p>
+            ) : null}
+
+            <div className="owner-auth-actions">
+              <button className="primary-action" disabled={!ownerLoginToken.trim() || isSigningIn} type="submit">
+                <KeyRound aria-hidden="true" size={15} />
+                {isSigningIn ? "Signing in..." : "Create owner session"}
+              </button>
+            </div>
+          </form>
+        </section>
+      </main>
+    );
   }
 
   return (

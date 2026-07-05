@@ -91,7 +91,7 @@ $env:OPENROAD_TRUST_PROXY_HEADERS="false"
 $env:PORT="4173"
 ```
 
-Do not expose `OPENROAD_ADMIN_TOKEN` to browser JavaScript beyond the one-time owner login request. OpenRoad stores only hashed session-token material in `OPENROAD_SESSION_FILE`; deleting that file signs out browser sessions without touching product data.
+Do not expose `OPENROAD_ADMIN_TOKEN` to browser JavaScript beyond the one-time owner login request. In admin-token mode the browser app shows an owner sign-in surface, submits the token to the same-origin server, and then uses the httpOnly session cookie for private APIs. OpenRoad stores only hashed session-token material in `OPENROAD_SESSION_FILE`; deleting that file signs out browser sessions without touching product data.
 
 Do not expose GitHub App private keys, GitHub webhook secrets, Linear client secrets, Jira client secrets, or `OPENROAD_TOKEN_ENCRYPTION_KEY` to browser JavaScript. Prefer `OPENROAD_GITHUB_APP_PRIVATE_KEY_FILE` for self-host installs.
 

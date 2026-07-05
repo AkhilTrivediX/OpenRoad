@@ -10,10 +10,36 @@ type ServerStateResponse = {
   status?: string;
 };
 
+type ServerSessionResponse = {
+  authenticated: boolean;
+  loginRequired: boolean;
+};
+
+type OwnerLoginResponse = {
+  authenticated: boolean;
+  status: string;
+};
+
+export class OpenRoadServerAuthRequiredError extends Error {
+  code = "auth_required" as const;
+
+  constructor(message = "OpenRoad server sign-in is required.") {
+    super(message);
+  }
+}
+
 export function isServerPersistenceEnabled() {
   if (typeof window === "undefined") return false;
   if (import.meta.env.VITE_OPENROAD_SERVER_SYNC === "off") return false;
   return import.meta.env.PROD || import.meta.env.VITE_OPENROAD_SERVER_SYNC === "on";
+}
+
+export async function loadServerOpenRoadSession() {
+  const response = await fetch("/api/openroad/session", {
+    credentials: "same-origin",
+    headers: { Accept: "application/json" }
+  });
+  return (await readJsonResponse(response)) as ServerSessionResponse;
 }
 
 export async function loadServerOpenRoadState(): Promise<LoadOpenRoadResult> {
@@ -30,6 +56,19 @@ export async function loadServerOpenRoadState(): Promise<LoadOpenRoadResult> {
     state: migrateOpenRoadState(payload.state),
     status: payload.status === "recovered" ? "recovered" : "ready"
   };
+}
+
+export async function loginOpenRoadOwner(adminToken: string) {
+  const response = await fetch("/api/openroad/auth/login", {
+    body: JSON.stringify({ adminToken }),
+    credentials: "same-origin",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json"
+    },
+    method: "POST"
+  });
+  return (await readJsonResponse(response)) as OwnerLoginResponse;
 }
 
 export async function saveServerOpenRoadState(state: OpenRoadState) {
@@ -50,6 +89,10 @@ async function readJsonResponse(response: Response) {
   const payload = (await response.json()) as unknown;
 
   if (!response.ok) {
+    if (response.status === 403 && isErrorPayload(payload) && payload.error.code === "forbidden") {
+      throw new OpenRoadServerAuthRequiredError(payload.error.message);
+    }
+
     const message =
       isErrorPayload(payload) && typeof payload.error.message === "string"
         ? payload.error.message
@@ -60,7 +103,13 @@ async function readJsonResponse(response: Response) {
   return payload;
 }
 
-function isErrorPayload(value: unknown): value is { error: { message: string } } {
+export function isOpenRoadServerAuthRequiredError(
+  value: unknown
+): value is OpenRoadServerAuthRequiredError {
+  return value instanceof OpenRoadServerAuthRequiredError;
+}
+
+function isErrorPayload(value: unknown): value is { error: { code?: string; message: string } } {
   return (
     typeof value === "object" &&
     value !== null &&

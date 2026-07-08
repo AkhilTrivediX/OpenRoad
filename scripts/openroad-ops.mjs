@@ -423,7 +423,8 @@ function sanitizeSessionRecord(session) {
   if (!isRecord(session)) return session;
 
   return {
-    adminTokenHash: session.adminTokenHash,
+    actor: sanitizeSessionActor(session.actor),
+    ...(session.adminTokenHash ? { adminTokenHash: session.adminTokenHash } : {}),
     createdAt: session.createdAt,
     expiresAt: session.expiresAt,
     id: session.id,
@@ -432,6 +433,29 @@ function sanitizeSessionRecord(session) {
     tokenHash: session.tokenHash,
     ...(session.userAgent ? { userAgent: session.userAgent } : {})
   };
+}
+
+function sanitizeSessionActor(actor) {
+  if (!isRecord(actor)) return actor;
+
+  if (actor.type === "local-owner") {
+    return {
+      id: actor.id,
+      source: actor.source,
+      type: actor.type
+    };
+  }
+
+  if (actor.type === "workspace-member") {
+    return {
+      id: actor.id,
+      role: actor.role,
+      type: actor.type,
+      workspaceId: actor.workspaceId
+    };
+  }
+
+  return { type: actor.type };
 }
 
 function sanitizeIntegrationCredential(credential) {

@@ -248,9 +248,10 @@ function resolveSigningPlan(options) {
 }
 
 async function resolveDataMigrationNote(rootDir) {
-  const [schemaVersion, integrationSchemaVersion, teamSchemaVersion] = await Promise.all([
+  const [schemaVersion, integrationSchemaVersion, sessionSchemaVersion, teamSchemaVersion] = await Promise.all([
     readOpenRoadStateSchemaVersion(rootDir),
     readOpenRoadIntegrationSchemaVersion(rootDir),
+    readOpenRoadSessionSchemaVersion(rootDir),
     readOpenRoadTeamSchemaVersion(rootDir)
   ]);
   const schemaNotes = [];
@@ -261,6 +262,10 @@ async function resolveDataMigrationNote(rootDir) {
 
   if (integrationSchemaVersion !== undefined) {
     schemaNotes.push(`integration metadata schema ${integrationSchemaVersion}`);
+  }
+
+  if (sessionSchemaVersion !== undefined) {
+    schemaNotes.push(`session metadata schema ${sessionSchemaVersion}`);
   }
 
   if (teamSchemaVersion !== undefined) {
@@ -288,6 +293,16 @@ async function readOpenRoadIntegrationSchemaVersion(rootDir) {
   try {
     const source = await readFile(join(rootDir, "server", "integrations.ts"), "utf8");
     const match = source.match(/openRoadIntegrationSchemaVersion\s*=\s*(\d+)/);
+    return match ? Number.parseInt(match[1], 10) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function readOpenRoadSessionSchemaVersion(rootDir) {
+  try {
+    const source = await readFile(join(rootDir, "server", "session-store.ts"), "utf8");
+    const match = source.match(/openRoadSessionSchemaVersion\s*=\s*(\d+)/);
     return match ? Number.parseInt(match[1], 10) : undefined;
   } catch {
     return undefined;

@@ -455,9 +455,12 @@ h3 {
 }
 
 .owner-auth-deck {
+  align-content: center;
   align-items: center;
   background: var(--deck);
   display: grid;
+  gap: 12px;
+  justify-items: center;
   min-height: 0;
   overflow: hidden;
   padding: 24px;
@@ -472,6 +475,7 @@ h3 {
   min-width: 0;
   padding: 22px;
   position: relative;
+  width: min(100%, 560px);
 }
 
 .owner-auth-panel::after {
@@ -506,6 +510,12 @@ h3 {
   font-size: 13px;
   line-height: 1.55;
   max-width: 62ch;
+}
+
+.member-auth-panel {
+  background: var(--plate);
+  border-color: var(--line);
+  gap: 14px;
 }
 
 .owner-token-field {

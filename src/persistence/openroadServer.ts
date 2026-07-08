@@ -1,7 +1,9 @@
 import {
   migrateOpenRoadState,
+  openRoadSchemaVersion,
   type LoadOpenRoadResult,
-  type OpenRoadState
+  type OpenRoadState,
+  type Workspace
 } from "../domain/openroad";
 
 type ServerStateResponse = {
@@ -10,14 +12,47 @@ type ServerStateResponse = {
   status?: string;
 };
 
+type ServerActorResponse = {
+  id?: string;
+  role?: string;
+  source?: string;
+  type?: string;
+  workspaceId?: string;
+};
+
+type ServerMembershipResponse = {
+  role?: string;
+  workspaceId?: string;
+};
+
 type ServerSessionResponse = {
+  actor?: ServerActorResponse;
   authenticated: boolean;
-  loginRequired: boolean;
+  loginRequired?: boolean;
+  memberships?: ServerMembershipResponse[];
 };
 
 type OwnerLoginResponse = {
   authenticated: boolean;
   status: string;
+};
+
+type InvitationSessionResponse = {
+  authenticated: boolean;
+  status: string;
+};
+
+type ServerWorkspaceListResponse = {
+  workspaces?: Array<{ id?: string }>;
+};
+
+type ServerWorkspaceResponse = {
+  workspace?: Workspace;
+};
+
+export type ServerOpenRoadScope = "owner" | "workspace-member";
+export type ServerOpenRoadLoadResult = LoadOpenRoadResult & {
+  serverScope: ServerOpenRoadScope;
 };
 
 export class OpenRoadServerAuthRequiredError extends Error {
@@ -42,19 +77,67 @@ export async function loadServerOpenRoadSession() {
   return (await readJsonResponse(response)) as ServerSessionResponse;
 }
 
-export async function loadServerOpenRoadState(): Promise<LoadOpenRoadResult> {
+export async function loadServerOpenRoadState(): Promise<ServerOpenRoadLoadResult> {
   const response = await fetch("/api/openroad/state", {
     credentials: "same-origin",
     headers: { Accept: "application/json" }
   });
-  const payload = (await readJsonResponse(response)) as ServerStateResponse;
+  const payload = await readJsonPayload(response);
+
+  if (response.ok) {
+    return createLoadResult(payload as ServerStateResponse, "owner");
+  }
+
+  if (response.status !== 403 || !isForbiddenPayload(payload)) {
+    throw createRequestError(response, payload);
+  }
+
+  const session = await loadServerOpenRoadSession();
+
+  if (!isWorkspaceMemberSession(session)) {
+    throw new OpenRoadServerAuthRequiredError(
+      isErrorPayload(payload) && typeof payload.error.message === "string"
+        ? payload.error.message
+        : undefined
+    );
+  }
+
+  return loadWorkspaceMemberOpenRoadState();
+}
+
+async function loadWorkspaceMemberOpenRoadState(): Promise<ServerOpenRoadLoadResult> {
+  const listResponse = await fetch("/api/openroad/workspaces", {
+    credentials: "same-origin",
+    headers: { Accept: "application/json" }
+  });
+  const listPayload = (await readJsonResponse(listResponse)) as ServerWorkspaceListResponse;
+  const workspaceIds = Array.isArray(listPayload.workspaces)
+    ? listPayload.workspaces
+        .map((workspace) => workspace.id)
+        .filter((workspaceId): workspaceId is string => Boolean(workspaceId))
+    : [];
+
+  if (workspaceIds.length === 0) {
+    throw new Error("This member session does not have access to any OpenRoad workspaces.");
+  }
+
+  const workspacePayloads = await Promise.all(
+    workspaceIds.map(async (workspaceId) => {
+      const response = await fetch(`/api/openroad/workspaces/${encodeURIComponent(workspaceId)}`, {
+        credentials: "same-origin",
+        headers: { Accept: "application/json" }
+      });
+      return (await readJsonResponse(response)) as ServerWorkspaceResponse;
+    })
+  );
+  const workspaces = workspacePayloads
+    .map((payload) => payload.workspace)
+    .filter((workspace): workspace is Workspace => Boolean(workspace));
 
   return {
-    error: payload.backupPath
-      ? "Server data was recovered from a corrupt state file."
-      : undefined,
-    state: migrateOpenRoadState(payload.state),
-    status: payload.status === "recovered" ? "recovered" : "ready"
+    state: migrateOpenRoadState({ schemaVersion: openRoadSchemaVersion, workspaces }),
+    status: "ready",
+    serverScope: "workspace-member"
   };
 }
 
@@ -71,6 +154,19 @@ export async function loginOpenRoadOwner(adminToken: string) {
   return (await readJsonResponse(response)) as OwnerLoginResponse;
 }
 
+export async function acceptOpenRoadInvitationSession(token: string, name = "") {
+  const response = await fetch("/api/openroad/invitations/session", {
+    body: JSON.stringify({ name, token }),
+    credentials: "same-origin",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json"
+    },
+    method: "POST"
+  });
+  return (await readJsonResponse(response)) as InvitationSessionResponse;
+}
+
 export async function saveServerOpenRoadState(state: OpenRoadState) {
   const response = await fetch("/api/openroad/state", {
     body: JSON.stringify({ state }),
@@ -81,26 +177,75 @@ export async function saveServerOpenRoadState(state: OpenRoadState) {
     },
     method: "PUT"
   });
-  const payload = (await readJsonResponse(response)) as ServerStateResponse;
-  return migrateOpenRoadState(payload.state);
+  const payload = await readJsonPayload(response);
+
+  if (response.ok) {
+    return migrateOpenRoadState((payload as ServerStateResponse).state);
+  }
+
+  if (response.status !== 403 || !isForbiddenPayload(payload) || state.workspaces.length !== 1) {
+    throw createRequestError(response, payload);
+  }
+
+  const [workspace] = state.workspaces;
+  const workspaceResponse = await fetch(
+    `/api/openroad/workspaces/${encodeURIComponent(workspace.id)}`,
+    {
+      body: JSON.stringify({ workspace }),
+      credentials: "same-origin",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json"
+      },
+      method: "PUT"
+    }
+  );
+  const workspacePayload = (await readJsonResponse(workspaceResponse)) as ServerWorkspaceResponse;
+
+  return migrateOpenRoadState({
+    schemaVersion: openRoadSchemaVersion,
+    workspaces: [workspacePayload.workspace]
+  });
 }
 
 async function readJsonResponse(response: Response) {
-  const payload = (await response.json()) as unknown;
+  const payload = await readJsonPayload(response);
 
   if (!response.ok) {
-    if (response.status === 403 && isErrorPayload(payload) && payload.error.code === "forbidden") {
-      throw new OpenRoadServerAuthRequiredError(payload.error.message);
-    }
-
-    const message =
-      isErrorPayload(payload) && typeof payload.error.message === "string"
-        ? payload.error.message
-        : "OpenRoad server request failed.";
-    throw new Error(message);
+    throw createRequestError(response, payload);
   }
 
   return payload;
+}
+
+async function readJsonPayload(response: Response) {
+  return (await response.json()) as unknown;
+}
+
+function createLoadResult(
+  payload: ServerStateResponse,
+  serverScope: ServerOpenRoadScope
+): ServerOpenRoadLoadResult {
+  return {
+    error: payload.backupPath
+      ? "Server data was recovered from a corrupt state file."
+      : undefined,
+    state: migrateOpenRoadState(payload.state),
+    status: payload.status === "recovered" ? "recovered" : "ready",
+    serverScope
+  };
+}
+
+function createRequestError(response: Response, payload: unknown) {
+  if (response.status === 403 && isForbiddenPayload(payload)) {
+    return new OpenRoadServerAuthRequiredError(payload.error.message);
+  }
+
+  const message =
+    isErrorPayload(payload) && typeof payload.error.message === "string"
+      ? payload.error.message
+      : "OpenRoad server request failed.";
+  return new Error(message);
 }
 
 export function isOpenRoadServerAuthRequiredError(
@@ -116,5 +261,17 @@ function isErrorPayload(value: unknown): value is { error: { code?: string; mess
     "error" in value &&
     typeof (value as { error?: unknown }).error === "object" &&
     (value as { error?: unknown }).error !== null
+  );
+}
+
+function isForbiddenPayload(value: unknown): value is { error: { code: "forbidden"; message: string } } {
+  return isErrorPayload(value) && value.error.code === "forbidden";
+}
+
+function isWorkspaceMemberSession(session: ServerSessionResponse) {
+  if (!session.authenticated || session.actor?.type !== "workspace-member") return false;
+  if (typeof session.actor.workspaceId === "string" && session.actor.workspaceId.trim()) return true;
+  return Boolean(
+    session.memberships?.some((membership) => typeof membership.workspaceId === "string")
   );
 }

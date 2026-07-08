@@ -154,6 +154,41 @@ describe("OpenRoad workspace shell", () => {
     expect(document.body.textContent).not.toContain("server-admin-token");
   });
 
+  it("creates a member session from an invitation and loads the scoped workspace", async () => {
+    vi.stubEnv("VITE_OPENROAD_SERVER_SYNC", "on");
+    const fetchMock = createMemberInvitationLoginFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await user.type(await screen.findByLabelText("Invitation token"), "oinv_member-secret");
+    await user.type(screen.getByLabelText("Name"), "Member User");
+    await user.click(screen.getByRole("button", { name: "Join workspace" }));
+
+    expect(await screen.findByRole("combobox", { name: "Workspace" })).toHaveDisplayValue(
+      "Member Workspace"
+    );
+    expect(screen.getByText("Member workspace connected.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "New workspace" })).toBeDisabled();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/openroad/invitations/session",
+      expect.objectContaining({
+        body: JSON.stringify({ name: "Member User", token: "oinv_member-secret" }),
+        credentials: "same-origin",
+        method: "POST"
+      })
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/openroad/workspaces/acme",
+      expect.objectContaining({
+        credentials: "same-origin",
+        headers: { Accept: "application/json" }
+      })
+    );
+    expect(document.body.textContent).not.toContain("oinv_member-secret");
+  });
+
   it("refreshes invitation access after owner sign-in", async () => {
     vi.stubEnv("VITE_OPENROAD_SERVER_SYNC", "on");
     const fetchMock = createOwnerLoginFetchMock({ loginSucceeds: true });
@@ -1461,6 +1496,24 @@ function createOwnerLoginFetchMock(
       );
     }
 
+    if (url === "/api/openroad/session") {
+      return jsonResponse(
+        isAuthenticated
+          ? {
+              actor: { id: "local-owner", source: "session", type: "local-owner" },
+              authenticated: true,
+              loginRequired: false,
+              memberships: []
+            }
+          : {
+              actor: { id: "public", type: "public-visitor" },
+              authenticated: false,
+              loginRequired: true,
+              memberships: []
+            }
+      );
+    }
+
     if (url === "/api/openroad/workspaces/acme/invitations") {
       if (!isAuthenticated) {
         return jsonResponse(
@@ -1488,6 +1541,93 @@ function createOwnerLoginFetchMock(
 
       return jsonResponse(
         { error: { code: "forbidden", message: "Integration status requires access." } },
+        403
+      );
+    }
+
+    return jsonResponse({ error: { message: "Unhandled test request." } }, 404);
+  });
+}
+
+function createMemberInvitationLoginFetchMock() {
+  const localState = createInitialOpenRoadState();
+  const memberWorkspace = {
+    ...localState.workspaces[0],
+    name: "Member Workspace"
+  };
+  let isMemberAuthenticated = false;
+
+  return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input.toString();
+    const method = init?.method ?? "GET";
+
+    if (url === "/api/openroad/state") {
+      return jsonResponse(
+        {
+          error: {
+            code: "forbidden",
+            message: "Actor does not have permission to access this OpenRoad resource."
+          }
+        },
+        403
+      );
+    }
+
+    if (url === "/api/openroad/session") {
+      return jsonResponse(
+        isMemberAuthenticated
+          ? {
+              actor: {
+                id: "user-member@example.com",
+                role: "Contributor",
+                type: "workspace-member",
+                workspaceId: "acme"
+              },
+              authenticated: true,
+              loginRequired: false,
+              memberships: [{ role: "Contributor", workspaceId: "acme" }]
+            }
+          : {
+              actor: { id: "public", type: "public-visitor" },
+              authenticated: false,
+              loginRequired: true,
+              memberships: []
+            }
+      );
+    }
+
+    if (url === "/api/openroad/invitations/session" && method === "POST") {
+      isMemberAuthenticated = true;
+      return jsonResponse({ authenticated: true, status: "authenticated" });
+    }
+
+    if (url === "/api/openroad/workspaces") {
+      return jsonResponse({ workspaces: [{ id: "acme", name: "Member Workspace" }] });
+    }
+
+    if (url === "/api/openroad/workspaces/acme" && method === "GET") {
+      return jsonResponse({ workspace: memberWorkspace });
+    }
+
+    if (url === "/api/openroad/workspaces/acme" && method === "PUT") {
+      return jsonResponse({ status: "saved", workspace: memberWorkspace });
+    }
+
+    if (url === "/api/openroad/workspaces/acme/integrations/status") {
+      return jsonResponse(
+        { error: { code: "forbidden", message: "Integration status requires access." } },
+        403
+      );
+    }
+
+    if (url === "/api/openroad/workspaces/acme/invitations") {
+      return jsonResponse(
+        {
+          error: {
+            code: "forbidden",
+            message: "Team invitations require workspace owner access in this deployment."
+          }
+        },
         403
       );
     }

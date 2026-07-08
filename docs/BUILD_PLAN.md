@@ -10,7 +10,7 @@ Each feature must also satisfy `docs/PRODUCTION_READINESS.md` before merging to 
 
 Current stage: Stage 2 Team Beta foundation in progress.
 
-The standalone loop now covers workspaces, requests, triage, internal work, roadmap planning, changelog drafts, public portal preview, local durability, production APIs, basic tenancy boundaries, file-backed team metadata, audit events, self-host operations, owner browser sessions and owner sign-in for admin-token deployments, team invitation/account-access APIs, app-level crash recovery, a first app-module boundary, hardened public portal write APIs with persisted visitor vote identity, the provider-neutral integration adapter contract, a payload-backed GitHub issue import/link API, server-only GitHub App installation verification, live GitHub issue fetch through verified installations, signed GitHub webhooks, safe disconnect handling, encrypted server-only provider credential storage, provider-neutral background sync job foundations, GitHub/Linear/Jira workers for already-linked issue mappings, progressive Settings visibility with GitHub/Linear/Jira manual sync controls, Linear issue import/link, Jira issue import/link with explicit field mapping, requester notification preferences/outbox events plus JSONL delivery handoff, deterministic local assistant triage, and release candidate manifest tooling. The next production work should build a progressive invitation management UI and eventual account login, while provider connect/disconnect, Linear/Jira webhooks, direct email/provider notification delivery, and real model-backed AI adapters remain separate hardening slices.
+The standalone loop now covers workspaces, requests, triage, internal work, roadmap planning, changelog drafts, public portal preview, local durability, production APIs, basic tenancy boundaries, file-backed team metadata, audit events, self-host operations, owner browser sessions and owner sign-in for admin-token deployments, team invitation/account-access APIs, scoped member browser sessions from invitation tokens, app-level crash recovery, a first app-module boundary, hardened public portal write APIs with persisted visitor vote identity, the provider-neutral integration adapter contract, a payload-backed GitHub issue import/link API, server-only GitHub App installation verification, live GitHub issue fetch through verified installations, signed GitHub webhooks, safe disconnect handling, encrypted server-only provider credential storage, provider-neutral background sync job foundations, GitHub/Linear/Jira workers for already-linked issue mappings, progressive Settings visibility with GitHub/Linear/Jira manual sync controls, Linear issue import/link, Jira issue import/link with explicit field mapping, requester notification preferences/outbox events plus JSONL delivery handoff, deterministic local assistant triage, and release candidate manifest tooling. The next production work should deliver invitation links through a server-side channel and then build durable account login, while provider connect/disconnect, Linear/Jira webhooks, direct provider notification delivery, and real model-backed AI adapters remain separate hardening slices.
 
 ## Feature 1: Workspace Shell
 
@@ -247,6 +247,29 @@ Acceptance:
 - Accepted invitations create durable team users and memberships without authenticating a browser session.
 - Revoked, accepted, expired, malformed, or wrong tokens cannot be accepted.
 - Core OpenRoad product state, session data, and integration metadata remain separate from invitation data.
+
+### Member Invite Sessions
+
+Branch: `feat/member-invite-sessions`
+
+Status: implemented and production-checked.
+
+Build:
+
+- Session metadata schema `2` with actor-aware owner and workspace-member session records.
+- Public invitation session endpoint that accepts a valid pending token and creates a scoped httpOnly member session.
+- Workspace-scoped `PUT /api/openroad/workspaces/:workspaceId` save path.
+- Browser persistence fallback from owner-only full-state APIs to member workspace list/detail APIs.
+- Owner/member sign-in surface that lets invitees join without the admin token.
+- Safe backup/release schema notes and contract documentation for session metadata `2`.
+
+Acceptance:
+
+- Accepted invitation sessions create or reuse the user and membership, mark the invitation accepted, and set an httpOnly cookie.
+- Member sessions cannot read or write `/api/openroad/state` and cannot cross workspace boundaries.
+- Contributor or higher member sessions can save workspace-scoped data; viewer sessions remain read-only.
+- Owner sessions remain admin-token-bound and keep full-state behavior.
+- Raw invitation tokens, session secrets, admin tokens, and token hashes are never returned or persisted in browser-visible state.
 
 ### Production Server Foundation
 

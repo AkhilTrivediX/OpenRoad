@@ -15,7 +15,7 @@ As an invited teammate, I need to paste or open an invitation token, enter my di
 - Versioned session metadata that can store local-owner and workspace-member session actors.
 - Public invitation acceptance endpoint that can create a member httpOnly browser session.
 - Browser persistence fallback that loads allowed workspace data through workspace-scoped APIs when full state is forbidden.
-- Browser save path that uses workspace-scoped action APIs for member sessions.
+- Browser save path that uses workspace-scoped action and workspace replacement APIs for member sessions.
 - Focused invite acceptance UI state using the existing owner sign-in surface area.
 - Documentation updates for auth/session contract and production limits.
 
@@ -55,7 +55,7 @@ As an invited teammate, I need to paste or open an invitation token, enter my di
 - Contributor/Maintainer/Owner member session can save workspace-scoped actions.
 - Viewer member session cannot save workspace-scoped actions.
 - Browser persistence helpers fall back from full-state load to workspace-scoped load when authenticated member access is available.
-- Browser persistence helpers use workspace-scoped action saves for member scope.
+- Browser persistence helpers use workspace-scoped saves for member scope.
 - Existing owner sign-in, Settings invitations, integrations status, portal, and standalone workflows pass.
 
 ## Manual QA Checklist

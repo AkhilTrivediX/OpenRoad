@@ -526,6 +526,19 @@ async function handleApiRequest(
     return;
   }
 
+  if (requestUrl.pathname === "/api/openroad/invitations/session") {
+    await handleInvitationSessionRequest(
+      request,
+      response,
+      store,
+      access,
+      auth,
+      sessionStore,
+      teamStore
+    );
+    return;
+  }
+
   if (requestUrl.pathname === "/api/openroad/state") {
     await handleStateRequest(request, response, store, access, teamStore);
     return;
@@ -934,7 +947,7 @@ async function handleApiRequest(
   const workspaceMatch = requestUrl.pathname.match(/^\/api\/openroad\/workspaces\/([^/]+)$/);
 
   if (workspaceMatch) {
-    await handleWorkspaceRequest(request, response, store, access, workspaceMatch[1]);
+    await handleWorkspaceRequest(request, response, store, access, teamStore, workspaceMatch[1]);
     return;
   }
 
@@ -1429,6 +1442,94 @@ async function handleInvitationAcceptRequest(
         user: sanitizeTeamUser(result.user)
       },
       access
+    );
+  } catch (error) {
+    writeKnownApiError(response, error, access);
+  }
+}
+
+async function handleInvitationSessionRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  store: OpenRoadStore,
+  access: AccessContext,
+  auth: AuthOptions | undefined,
+  sessionStore: SessionStore | undefined,
+  teamStore: TeamStore | undefined
+) {
+  if (request.method !== "POST") {
+    writeApiError(response, 405, "invalid_method", "This endpoint only supports POST.", access);
+    return;
+  }
+
+  if (!teamStore) {
+    writeKnownApiError(
+      response,
+      new ApiRequestError("not_configured", 503, "OpenRoad team metadata store is not configured."),
+      access
+    );
+    return;
+  }
+
+  if (!sessionStore) {
+    writeKnownApiError(
+      response,
+      new ApiRequestError("not_configured", 503, "OpenRoad session storage is not configured."),
+      access
+    );
+    return;
+  }
+
+  try {
+    const payload = await readJsonBody(request, 8192);
+    const invitationPayload = getInvitationAcceptPayload(payload);
+    const current = await store.load();
+    const result = await teamStore.acceptInvitation(current.state, invitationPayload);
+    const memberActor: AccessContext["actor"] = {
+      id: result.user.id,
+      role: result.membership.role,
+      type: "workspace-member",
+      workspaceId: result.membership.workspaceId
+    };
+    const session = await sessionStore.createMemberSession({
+      actor: memberActor,
+      ipAddress: request.socket.remoteAddress,
+      userAgent: getSingleHeader(request.headers, "user-agent")
+    });
+    const memberAccess: AccessContext = {
+      ...access,
+      actor: memberActor
+    };
+
+    await recordAuditEvent(teamStore, current.state, memberAccess, {
+      summary: `Accepted invitation for ${result.invitation.email} and created a member session.`,
+      type: "team.invitation.session",
+      workspaceId: result.invitation.workspaceId
+    });
+
+    writeJson(
+      response,
+      200,
+      {
+        actor: sanitizeActor(session.session.actor),
+        authenticated: true,
+        createdMembership: result.createdMembership,
+        createdUser: result.createdUser,
+        expiresAt: session.session.expiresAt,
+        invitation: sanitizeInvitationForJson(result.invitation),
+        membership: sanitizeMembership(result.membership),
+        status: "authenticated",
+        user: sanitizeTeamUser(result.user)
+      },
+      memberAccess,
+      {
+        "Set-Cookie": createSessionCookie(
+          session.cookieValue,
+          session.maxAgeSeconds,
+          request,
+          auth
+        )
+      }
     );
   } catch (error) {
     writeKnownApiError(response, error, access);
@@ -4797,26 +4898,72 @@ async function handleWorkspaceRequest(
   response: ServerResponse,
   store: OpenRoadStore,
   access: AccessContext,
+  teamStore: TeamStore | undefined,
   encodedWorkspaceId: string
 ) {
-  if (request.method !== "GET") {
-    writeApiError(response, 405, "invalid_method", "This endpoint only supports GET.", access);
+  if (request.method !== "GET" && request.method !== "PUT") {
+    writeApiError(response, 405, "invalid_method", "This endpoint only supports GET and PUT.", access);
     return;
   }
 
   const workspaceId = decodeURIComponent(encodedWorkspaceId);
 
   try {
-    requirePermission(access, "workspace:read", workspaceId);
-    const result = await store.load();
-    const workspace = result.state.workspaces.find((item) => item.id === workspaceId);
+    if (request.method === "GET") {
+      requirePermission(access, "workspace:read", workspaceId);
+      const result = await store.load();
+      const workspace = result.state.workspaces.find((item) => item.id === workspaceId);
 
-    if (!workspace) {
+      if (!workspace) {
+        writeApiError(response, 404, "not_found", "Workspace was not found.", access);
+        return;
+      }
+
+      writeJson(response, 200, { workspace }, access);
+      return;
+    }
+
+    requirePermission(access, "workspace:write", workspaceId);
+    const payload = await readJsonBody(request);
+    const workspacePayload = getWorkspacePayload(payload);
+
+    if (!isRecord(workspacePayload) || workspacePayload.id !== workspaceId) {
+      throw new OpenRoadStoreError(
+        "invalid_state",
+        "Workspace payload must match the requested workspace."
+      );
+    }
+
+    const current = await store.load();
+    if (!current.state.workspaces.some((item) => item.id === workspaceId)) {
       writeApiError(response, 404, "not_found", "Workspace was not found.", access);
       return;
     }
 
-    writeJson(response, 200, { workspace }, access);
+    const nextState = parseOpenRoadState({
+      ...current.state,
+      workspaces: current.state.workspaces.map((workspace) =>
+        workspace.id === workspaceId ? workspacePayload : workspace
+      )
+    });
+    const state = await store.replaceState(nextState);
+    const auditEvent = await recordAuditEvent(teamStore, state, access, {
+      summary: "Replaced workspace data.",
+      type: "workspace.replace",
+      workspaceId
+    });
+    const workspace = state.workspaces.find((item) => item.id === workspaceId);
+
+    writeJson(
+      response,
+      200,
+      {
+        revision: auditEvent?.id ?? `workspace-${Date.now()}`,
+        status: "saved",
+        workspace
+      },
+      access
+    );
   } catch (error) {
     writeKnownApiError(response, error, access);
   }
@@ -5073,6 +5220,14 @@ async function handlePortalCommentRequest(
 function getStatePayload(payload: unknown) {
   if (isRecord(payload) && "state" in payload) {
     return payload.state;
+  }
+
+  return payload;
+}
+
+function getWorkspacePayload(payload: unknown) {
+  if (isRecord(payload) && "workspace" in payload) {
+    return payload.workspace;
   }
 
   return payload;

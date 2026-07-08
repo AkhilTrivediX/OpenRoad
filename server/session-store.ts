@@ -4,12 +4,14 @@ import { dirname, resolve } from "node:path";
 
 import type { OpenRoadActor } from "./access.js";
 
-export const openRoadSessionSchemaVersion = 1;
+export const openRoadSessionSchemaVersion = 2;
+const previousOpenRoadSessionSchemaVersion = 1;
 export const defaultSessionTtlMs = 1000 * 60 * 60 * 24 * 7;
 export const sessionCookieName = "openroad_session";
 
 export type SessionRecord = {
-  adminTokenHash: string;
+  actor: OpenRoadActor;
+  adminTokenHash?: string;
   createdAt: string;
   expiresAt: string;
   id: string;
@@ -38,6 +40,13 @@ export type SessionCreateInput = {
   userAgent?: string;
 };
 
+export type MemberSessionCreateInput = {
+  actor: Extract<OpenRoadActor, { type: "workspace-member" }>;
+  ipAddress?: string;
+  now?: Date;
+  userAgent?: string;
+};
+
 export type SessionCreateResult = {
   cookieValue: string;
   maxAgeSeconds: number;
@@ -58,6 +67,7 @@ export type SessionStoreLoadResult = {
 
 export type SessionStore = {
   createSession(input: SessionCreateInput): Promise<SessionCreateResult>;
+  createMemberSession(input: MemberSessionCreateInput): Promise<SessionCreateResult>;
   load(): Promise<SessionStoreLoadResult>;
   resolveSession(input: SessionResolveInput): Promise<SessionMetadata | undefined>;
   revokeSession(cookieValue: string | undefined, now?: Date): Promise<boolean>;
@@ -115,13 +125,39 @@ export class FileSessionStore implements SessionStore {
   }
 
   async createSession(input: SessionCreateInput): Promise<SessionCreateResult> {
+    return this.createSessionRecord({
+      actor: { id: "local-owner", source: "session", type: "local-owner" },
+      adminTokenHash: hashSecret(input.adminToken),
+      ipAddress: input.ipAddress,
+      now: input.now,
+      userAgent: input.userAgent
+    });
+  }
+
+  async createMemberSession(input: MemberSessionCreateInput): Promise<SessionCreateResult> {
+    return this.createSessionRecord({
+      actor: normalizeSessionActor(input.actor),
+      ipAddress: input.ipAddress,
+      now: input.now,
+      userAgent: input.userAgent
+    });
+  }
+
+  private async createSessionRecord(input: {
+    actor: OpenRoadActor;
+    adminTokenHash?: string;
+    ipAddress?: string;
+    now?: Date;
+    userAgent?: string;
+  }): Promise<SessionCreateResult> {
     const now = input.now ?? new Date();
     const ttlMs = this.options.ttlMs ?? defaultSessionTtlMs;
     const expiresAt = new Date(now.getTime() + ttlMs);
     const token = createSessionSecret();
     const id = `session-${randomUUID()}`;
     const session: SessionRecord = {
-      adminTokenHash: hashSecret(input.adminToken),
+      actor: input.actor,
+      ...(input.adminTokenHash ? { adminTokenHash: input.adminTokenHash } : {}),
       createdAt: now.toISOString(),
       expiresAt: expiresAt.toISOString(),
       id,
@@ -148,7 +184,7 @@ export class FileSessionStore implements SessionStore {
   }
 
   async resolveSession(input: SessionResolveInput): Promise<SessionMetadata | undefined> {
-    if (!input.adminToken || !input.cookieValue) return undefined;
+    if (!input.cookieValue) return undefined;
 
     const parsed = parseSessionCookieValue(input.cookieValue);
     if (!parsed) return undefined;
@@ -159,7 +195,10 @@ export class FileSessionStore implements SessionStore {
 
     if (!session || !isSessionActive(session, now)) return undefined;
     if (!safeEqual(session.tokenHash, hashSecret(parsed.secret))) return undefined;
-    if (!safeEqual(session.adminTokenHash, hashSecret(input.adminToken))) return undefined;
+    if (session.adminTokenHash) {
+      if (!input.adminToken) return undefined;
+      if (!safeEqual(session.adminTokenHash, hashSecret(input.adminToken))) return undefined;
+    }
 
     return createSessionMetadata(session);
   }
@@ -226,6 +265,10 @@ export function parseSessionState(value: unknown): SessionState {
     );
   }
 
+  if (value.schemaVersion === previousOpenRoadSessionSchemaVersion) {
+    return migrateSessionStateV1(value);
+  }
+
   if (value.schemaVersion !== openRoadSessionSchemaVersion || !Array.isArray(value.sessions)) {
     throw new SessionStoreError("invalid_state", "OpenRoad session metadata is invalid.");
   }
@@ -264,7 +307,7 @@ export function getSessionCookieValue(cookieHeader: string | undefined) {
 
 function createSessionMetadata(session: SessionRecord): SessionMetadata {
   return {
-    actor: { id: "local-owner", source: "session", type: "local-owner" },
+    actor: cloneValue(session.actor),
     createdAt: session.createdAt,
     expiresAt: session.expiresAt,
     id: session.id
@@ -305,6 +348,35 @@ function isSessionActive(session: SessionRecord, now: Date) {
 function isSessionRecord(value: unknown): value is SessionRecord {
   return (
     isRecord(value) &&
+    isSessionActor(value.actor) &&
+    (value.adminTokenHash === undefined || typeof value.adminTokenHash === "string") &&
+    typeof value.createdAt === "string" &&
+    typeof value.expiresAt === "string" &&
+    typeof value.id === "string" &&
+    typeof value.tokenHash === "string" &&
+    (value.ipAddress === undefined || typeof value.ipAddress === "string") &&
+    (value.revokedAt === undefined || typeof value.revokedAt === "string") &&
+    (value.userAgent === undefined || typeof value.userAgent === "string")
+  );
+}
+
+function migrateSessionStateV1(value: Record<string, unknown>): SessionState {
+  if (!Array.isArray(value.sessions) || !value.sessions.every(isSessionRecordV1)) {
+    throw new SessionStoreError("invalid_state", "OpenRoad session metadata is invalid.");
+  }
+
+  return {
+    schemaVersion: openRoadSessionSchemaVersion,
+    sessions: value.sessions.map((session) => ({
+      ...session,
+      actor: { id: "local-owner", source: "session", type: "local-owner" }
+    }))
+  };
+}
+
+function isSessionRecordV1(value: unknown) {
+  return (
+    isRecord(value) &&
     typeof value.adminTokenHash === "string" &&
     typeof value.createdAt === "string" &&
     typeof value.expiresAt === "string" &&
@@ -313,6 +385,32 @@ function isSessionRecord(value: unknown): value is SessionRecord {
     (value.ipAddress === undefined || typeof value.ipAddress === "string") &&
     (value.revokedAt === undefined || typeof value.revokedAt === "string") &&
     (value.userAgent === undefined || typeof value.userAgent === "string")
+  );
+}
+
+function normalizeSessionActor(actor: OpenRoadActor): OpenRoadActor {
+  if (!isSessionActor(actor)) {
+    throw new SessionStoreError("invalid_state", "OpenRoad session actor is invalid.");
+  }
+
+  return cloneValue(actor);
+}
+
+function isSessionActor(value: unknown): value is OpenRoadActor {
+  if (!isRecord(value)) return false;
+
+  if (value.type === "local-owner") {
+    return value.id === "local-owner" && value.source === "session";
+  }
+
+  return (
+    value.type === "workspace-member" &&
+    typeof value.id === "string" &&
+    typeof value.workspaceId === "string" &&
+    (value.role === "Owner" ||
+      value.role === "Maintainer" ||
+      value.role === "Contributor" ||
+      value.role === "Viewer")
   );
 }
 

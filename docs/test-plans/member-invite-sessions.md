@@ -81,11 +81,16 @@ As an invited teammate, I need to paste or open an invitation token, enter my di
 ## Evidence
 
 - Branch: `feat/member-invite-sessions`
-- Commit SHA: pending.
+- Commit SHA: `dee9c8aa007f16b26ebea069228769e710ebe5c7`.
 - Date: 2026-07-08.
-- Commands run: pending.
-- Browser/viewports tested: pending.
-- Accessibility checks: pending.
-- Reviewer notes: pending.
+- Commands run:
+  - `pnpm vitest run server/access.test.ts server/session-store.test.ts server/team.test.ts server/http.test.ts src/persistence/openroadServer.test.ts src/App.test.tsx scripts/openroad-ops.test.mjs scripts/openroad-release.test.mjs`: 186 tests passed.
+  - `node C:\Users\PC\.agents\skills\impeccable\scripts\detect.mjs --json src\App.tsx src\styles.css`: no findings.
+  - `pnpm check`: 343 tests passed; client and server production builds passed.
+  - Built-server member invite smoke in admin-token mode: owner login, invitation create, invitation session accept, member session resolve, full-state denial, scoped workspace list/read/write, cross-workspace denial, one-time token reuse denial, httpOnly cookie, and no token echo all passed.
+  - `pnpm release:verify`: dry-run release manifest generated with `session metadata schema 2` rollback notes.
+- Browser/viewports tested: Headless Chrome against built assets at 390x844 and 1280x720 for owner/member auth surface and member workspace shell; no document-level horizontal or vertical overflow. Screenshots saved under `.openroad/member-invite-sessions-final-*/final-*.png`.
+- Accessibility checks: Owner and member auth forms have accessible names, invite token/name fields have labels, status is text-based, and design detector returned no findings for touched UI files.
+- Reviewer notes: Member invite sessions are scoped to invited workspaces, use httpOnly cookies, and do not depend on admin-token material. The browser disables new workspace creation for member sessions to avoid local-only server-mode mutations.
 - Known unresolved risks: Password/OAuth auth, invitation email delivery, account recovery, deeper member management UI, automated browser E2E, managed SQL migrations, and hosted billing remain future slices.
 - Rollback notes: Revert branch; session metadata v2 can be restored from pre-upgrade backup, while team invitation and product state remain separate.

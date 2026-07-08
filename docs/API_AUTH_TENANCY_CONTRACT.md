@@ -21,7 +21,7 @@ Every JSON API error includes:
 ## Actors
 
 - Local owner: single-user self-host owner or bearer-token admin.
-- Workspace member: future authenticated workspace user.
+- Workspace member: authenticated workspace user created from an accepted invitation session.
 - Public visitor: anonymous public portal reader.
 - Requester: future public requester with linked identity.
 - Integration actor: provider installation/job actor.
@@ -50,16 +50,24 @@ When `OPENROAD_ADMIN_TOKEN` is configured:
 - `PUT /api/openroad/state` requires `Authorization: Bearer <token>`.
 - `POST /api/openroad/auth/login` can exchange the admin token for an httpOnly owner session cookie.
 - Browser calls may use the owner session cookie instead of an `Authorization` header.
+- `POST /api/openroad/invitations/session` can exchange a valid pending invitation token for an httpOnly member session cookie scoped to the invited workspace and role.
 - Owner/admin actions such as `replace-state`, `replace-workspace`, and `create-workspace` require owner/admin permission.
+- Workspace-member sessions can use workspace-scoped read/write APIs according to role, but cannot use full-state APIs.
 - Public portal endpoints remain public.
 
-Do not expose `OPENROAD_ADMIN_TOKEN` to browser JavaScript beyond the one-time login request. The server stores only a hash of the generated session token and binds sessions to the active admin token hash.
+Do not expose `OPENROAD_ADMIN_TOKEN` to browser JavaScript beyond the one-time login request. The server stores only a hash of generated session tokens. Owner sessions are bound to the active admin token hash. Member sessions are bound to the persisted workspace-member actor and do not store admin-token material.
 
 ### Owner Browser Sessions
 
 Owner sessions are stored outside core product state in `OPENROAD_SESSION_FILE`, defaulting to `.openroad/openroad-sessions.json`. Session cookies use `HttpOnly`, `SameSite=Lax`, `Path=/`, and a bounded `Max-Age`. The server adds `Secure` when the request is HTTPS or when trusted proxy headers are enabled and `x-forwarded-proto` is `https`.
 
 `POST /api/openroad/auth/logout` revokes the current session and clears the browser cookie. Rotating `OPENROAD_ADMIN_TOKEN` invalidates existing sessions because the persisted session record is bound to the admin token hash.
+
+### Member Browser Sessions
+
+Invitation session acceptance is public only because the invitation token is the bearer secret. `POST /api/openroad/invitations/session` accepts a valid pending token, creates or reuses the invited team user and workspace membership, marks the invitation accepted, creates an httpOnly session cookie, and returns only sanitized actor, membership, invitation, and user metadata. It must not return the raw invitation token, session cookie value, session token hash, admin token, private workspace state, or cross-workspace membership data.
+
+Member sessions resolve as `workspace-member` actors. They can read `GET /api/openroad/workspaces`, read `GET /api/openroad/workspaces/:workspaceId` for allowed workspaces, and write workspace-scoped actions or `PUT /api/openroad/workspaces/:workspaceId` when their role grants `workspace:write`. They cannot read or write `/api/openroad/state`, create global workspaces, manage provider credentials, manage invitations unless their role grants owner-level integration management, or access another workspace.
 
 ### Trusted Proxy Headers
 
@@ -84,6 +92,7 @@ These headers are for future auth proxy/session integration and tests. Do not en
 - `POST /api/openroad/auth/login`
 - `POST /api/openroad/auth/logout`
 - `POST /api/openroad/invitations/accept`
+- `POST /api/openroad/invitations/session`
 - `GET /api/openroad/workspaces/:workspaceId/portal`
 - `POST /api/openroad/workspaces/:workspaceId/portal/requests/:requestId/vote`
 - `POST /api/openroad/workspaces/:workspaceId/portal/requests/:requestId/comments`
@@ -92,7 +101,7 @@ Public portal responses use the OpenRoad public projection and must not include 
 
 Session/auth routes return only current actor, login-required flags, safe auth capability metadata, and bounded session status. They must not return admin tokens, bearer tokens, session cookie values, session token hashes, provider tokens, encrypted credentials, or private OpenRoad state.
 
-Invitation acceptance is public only because the invitation token is the bearer secret. It accepts a valid pending token and creates or reuses the invited team user and workspace membership. It does not create a browser session, return private workspace state, or expose token hashes. Accepted, revoked, expired, malformed, or wrong tokens return a generic invalid request error.
+API-only invitation acceptance remains available at `POST /api/openroad/invitations/accept`. It accepts a valid pending token and creates or reuses the invited team user and workspace membership without creating a browser session. Browser invitation acceptance uses `POST /api/openroad/invitations/session` and creates the scoped member session described above. Both endpoints must reject accepted, revoked, expired, malformed, or wrong tokens with generic invalid request errors and must not expose token hashes.
 
 ## Private Routes
 
@@ -101,6 +110,7 @@ Invitation acceptance is public only because the invitation token is the bearer 
 - `POST /api/openroad/actions`
 - `GET /api/openroad/workspaces`
 - `GET /api/openroad/workspaces/:workspaceId`
+- `PUT /api/openroad/workspaces/:workspaceId`
 - `POST /api/openroad/workspaces/:workspaceId/actions`
 - `POST /api/openroad/workspaces/:workspaceId/integrations/github/issues/import`
 - `GET /api/openroad/workspaces/:workspaceId/integrations/github/issues/live`
@@ -124,7 +134,7 @@ Invitation acceptance is public only because the invitation token is the bearer 
 
 Workspace-scoped routes require the actor to be scoped to the requested workspace unless the actor is the local owner/admin.
 
-Workspace-scoped action responses return the updated workspace and a revision marker. They must not return the full multi-workspace state.
+Workspace-scoped action and workspace replacement responses return the updated workspace and a revision marker. They must not return the full multi-workspace state.
 
 GitHub issue import is workspace-scoped and requires workspace write permission. It accepts fixture/API payloads only in the current slice; it must not accept GitHub OAuth tokens, App private keys, webhook secrets, or raw credential fields.
 
@@ -150,7 +160,7 @@ Provider credential create/list/revoke routes require `integration:manage`, whic
 
 Integration sync job enqueue routes require `integration:manage`, which is reserved for local owners/admins and workspace owners. Jobs must be scoped to an active installation in the same workspace and provider. Responses return sanitized job metadata and never return provider tokens, encrypted credentials, raw provider payloads, webhook signatures, request headers, or request bodies. Concurrent integration metadata writes are serialized inside one Node process while OpenRoad uses file-backed stores.
 
-Invitation management routes require `integration:manage`, which is reserved for local owners/admins and workspace owners. Creating an invitation returns the raw accept token exactly once and stores only a hash in `OPENROAD_TEAM_FILE` team metadata schema `2`. List, revoke, accept, session, audit, backup, and ops responses must not return invitation token hashes or raw accept tokens after creation. Email delivery, password login, OAuth login, account recovery, and browser session upgrade for accepted members remain out of scope for this slice.
+Invitation management routes require `integration:manage`, which is reserved for local owners/admins and workspace owners. Creating an invitation returns the raw accept token exactly once and stores only a hash in `OPENROAD_TEAM_FILE` team metadata schema `2`. List, revoke, accept, session, audit, backup, and ops responses must not return invitation token hashes or raw accept tokens after creation. Email delivery, password login, OAuth login, account recovery, and deeper member-management UI remain out of scope for this slice.
 
 ## Provider-Signature Routes
 

@@ -8,6 +8,7 @@ This runbook covers the current production path: one Node process serving the bu
 - Mutable data lives in four JSON files: `OPENROAD_DATA_FILE`, `OPENROAD_INTEGRATION_FILE`, `OPENROAD_TEAM_FILE`, and `OPENROAD_SESSION_FILE`.
 - Docker Compose stores those files in the `openroad-data` volume at `/data`.
 - `OPENROAD_ADMIN_TOKEN` protects private APIs when configured and can be exchanged for an httpOnly owner browser session.
+- Valid invitation tokens can be exchanged for httpOnly member browser sessions scoped to the invited workspace and role.
 - The public portal API remains unauthenticated and returns only public data.
 - Backups contain product, requester, integration, team, membership, and audit data; store them like production data.
 
@@ -91,7 +92,7 @@ $env:OPENROAD_TRUST_PROXY_HEADERS="false"
 $env:PORT="4173"
 ```
 
-Do not expose `OPENROAD_ADMIN_TOKEN` to browser JavaScript beyond the one-time owner login request. In admin-token mode the browser app shows an owner sign-in surface, submits the token to the same-origin server, and then uses the httpOnly session cookie for private APIs. OpenRoad stores only hashed session-token material in `OPENROAD_SESSION_FILE`; deleting that file signs out browser sessions without touching product data.
+Do not expose `OPENROAD_ADMIN_TOKEN` to browser JavaScript beyond the one-time owner login request. In admin-token mode the browser app shows an owner/member sign-in surface: owners submit the admin token to the same-origin server, and invited members submit their invitation token for a scoped session. OpenRoad stores only hashed session-token material in `OPENROAD_SESSION_FILE`; deleting that file signs out owner and member browser sessions without touching product data.
 
 Do not expose GitHub App private keys, GitHub webhook secrets, Linear client secrets, Jira client secrets, or `OPENROAD_TOKEN_ENCRYPTION_KEY` to browser JavaScript. Prefer `OPENROAD_GITHUB_APP_PRIVATE_KEY_FILE` for self-host installs.
 
@@ -181,7 +182,7 @@ OpenRoad state schema `7` stores anonymous public portal voter keys and requeste
 
 Integration metadata schema `3` stores server-only encrypted provider credential records and background sync job metadata in `openroad-integrations.json`. Upgrade from schema `1` or `2` is automatic on load and initializes missing `credentials: []` and `syncJobs: []`. Downgrading to an older integration metadata build after credentials or sync jobs are created requires revoking/removing credentials, draining/removing sync jobs, or restoring a pre-upgrade integration backup.
 
-Session metadata schema `1` stores owner browser session records in `openroad-sessions.json`. Records contain hashes, ids, timestamps, and bounded client metadata only. Deleting this file signs out browsers without changing OpenRoad product data.
+Session metadata schema `2` stores actor-aware owner and workspace-member browser session records in `openroad-sessions.json`. Owner records remain bound to the active admin-token hash; member records store the workspace-member actor and do not store admin-token material. Records contain hashes, ids, timestamps, and bounded client metadata only. Schema `1` owner-session files migrate automatically on load. Deleting this file signs out browsers without changing OpenRoad product data.
 
 Team metadata schema `2` stores users, memberships, audit events, and invitations in `openroad-team.json`. Invitation records store hashed accept tokens only. Restoring a pre-schema-2 team file automatically migrates invitations to an empty list. Rolling back across this schema should preserve a backup first; reverting to a build that only understands schema `1` requires restoring the previous team metadata backup or intentionally discarding schema `2` invitation records.
 

@@ -561,6 +561,173 @@ describe("OpenRoad production server", () => {
     expect(JSON.stringify(audit.body)).not.toContain(acceptToken);
   });
 
+  it("creates member browser sessions from accepted invitations", async () => {
+    const { sessionFile, teamFile, url } = await startTestServer({
+      auth: { adminToken: "secret", singleUserMode: false, trustProxyHeaders: true }
+    });
+
+    const contributorInvite = await fetchJson(`${url}/api/openroad/workspaces/acme/invitations`, {
+      body: JSON.stringify({
+        email: "member@example.com",
+        name: "Member User",
+        role: "Contributor"
+      }),
+      headers: {
+        ...workspaceActorHeaders("acme", "Owner"),
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    const contributorToken = contributorInvite.body.acceptToken as string;
+    const memberSession = await fetchJson(`${url}/api/openroad/invitations/session`, {
+      body: JSON.stringify({ name: "Member User", token: contributorToken }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const memberCookie = cookiePair(memberSession.headers.get("set-cookie") ?? "");
+    const session = await fetchJson(`${url}/api/openroad/session`, {
+      headers: { Cookie: memberCookie }
+    });
+    const fullState = await fetchJson(`${url}/api/openroad/state`, {
+      headers: { Cookie: memberCookie }
+    });
+    const ownWorkspace = await fetchJson(`${url}/api/openroad/workspaces/acme`, {
+      headers: { Cookie: memberCookie }
+    });
+    const otherWorkspace = await fetchJson(`${url}/api/openroad/workspaces/maintainer`, {
+      headers: { Cookie: memberCookie }
+    });
+    const replacedWorkspace = await fetchJson(`${url}/api/openroad/workspaces/acme`, {
+      body: JSON.stringify({
+        workspace: {
+          ...ownWorkspace.body.workspace,
+          summary: "Member scoped replacement"
+        }
+      }),
+      headers: { Cookie: memberCookie, "Content-Type": "application/json" },
+      method: "PUT"
+    });
+    const createdRequest = await fetchJson(`${url}/api/openroad/workspaces/acme/actions`, {
+      body: JSON.stringify({
+        action: {
+          request: {
+            ...createInitialOpenRoadState().workspaces[0].requests[0],
+            id: "member-created-request",
+            title: "Member created request"
+          },
+          type: "create-request",
+          workspaceId: "acme"
+        }
+      }),
+      headers: { Cookie: memberCookie, "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const acceptedAgain = await fetchJson(`${url}/api/openroad/invitations/session`, {
+      body: JSON.stringify({ token: contributorToken }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const persistedSessions = await readFile(sessionFile, "utf8");
+    const persistedTeam = await readFile(teamFile, "utf8");
+
+    expect(contributorInvite.status).toBe(201);
+    expect(memberSession.status).toBe(200);
+    expect(memberSession.headers.get("set-cookie")).toContain("openroad_session=");
+    expect(memberSession.headers.get("set-cookie")).toContain("HttpOnly");
+    expect(memberSession.body).toMatchObject({
+      actor: {
+        id: "user-member@example.com",
+        role: "Contributor",
+        type: "workspace-member",
+        workspaceId: "acme"
+      },
+      authenticated: true,
+      membership: {
+        role: "Contributor",
+        workspaceId: "acme"
+      },
+      status: "authenticated",
+      user: {
+        email: "member@example.com",
+        name: "Member User"
+      }
+    });
+    expect(JSON.stringify(memberSession.body)).not.toContain(contributorToken);
+    expect(session.body.actor).toMatchObject({
+      role: "Contributor",
+      type: "workspace-member",
+      workspaceId: "acme"
+    });
+    expect(fullState.status).toBe(403);
+    expect(ownWorkspace.status).toBe(200);
+    expect(ownWorkspace.body.workspace.id).toBe("acme");
+    expect(otherWorkspace.status).toBe(403);
+    expect(replacedWorkspace.status).toBe(200);
+    expect(replacedWorkspace.body.workspace.summary).toBe("Member scoped replacement");
+    expect(createdRequest.status).toBe(200);
+    expect(createdRequest.body.workspace.requests.some((request: { id: string }) => request.id === "member-created-request")).toBe(true);
+    expect(acceptedAgain.status).toBe(400);
+    expect(persistedSessions).not.toContain(contributorToken);
+    expect(persistedSessions).not.toContain(memberCookie.split(".")[1]);
+    expect(persistedSessions).toContain('"type": "workspace-member"');
+    expect(persistedTeam).not.toContain(contributorToken);
+  });
+
+  it("prevents viewer member sessions from writing workspace data", async () => {
+    const { url } = await startTestServer({
+      auth: { adminToken: "secret", singleUserMode: false, trustProxyHeaders: true }
+    });
+
+    const viewerInvite = await fetchJson(`${url}/api/openroad/workspaces/acme/invitations`, {
+      body: JSON.stringify({ email: "viewer-session@example.com", role: "Viewer" }),
+      headers: {
+        ...workspaceActorHeaders("acme", "Owner"),
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    const viewerSession = await fetchJson(`${url}/api/openroad/invitations/session`, {
+      body: JSON.stringify({ token: viewerInvite.body.acceptToken }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const viewerCookie = cookiePair(viewerSession.headers.get("set-cookie") ?? "");
+    const readWorkspace = await fetchJson(`${url}/api/openroad/workspaces/acme`, {
+      headers: { Cookie: viewerCookie }
+    });
+    const writeWorkspace = await fetchJson(`${url}/api/openroad/workspaces/acme/actions`, {
+      body: JSON.stringify({
+        action: {
+          request: {
+            ...createInitialOpenRoadState().workspaces[0].requests[0],
+            id: "viewer-created-request",
+            title: "Viewer created request"
+          },
+          type: "create-request",
+          workspaceId: "acme"
+        }
+      }),
+      headers: { Cookie: viewerCookie, "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const replaceWorkspace = await fetchJson(`${url}/api/openroad/workspaces/acme`, {
+      body: JSON.stringify({
+        workspace: {
+          ...readWorkspace.body.workspace,
+          summary: "Viewer replacement"
+        }
+      }),
+      headers: { Cookie: viewerCookie, "Content-Type": "application/json" },
+      method: "PUT"
+    });
+
+    expect(viewerInvite.status).toBe(201);
+    expect(viewerSession.status).toBe(200);
+    expect(readWorkspace.status).toBe(200);
+    expect(writeWorkspace.status).toBe(403);
+    expect(replaceWorkspace.status).toBe(403);
+  });
+
   it("revokes pending invitations without creating memberships", async () => {
     const { teamFile, url } = await startTestServer({
       auth: { singleUserMode: false, trustProxyHeaders: true }

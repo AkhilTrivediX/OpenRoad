@@ -39,6 +39,7 @@ describe("FileSessionStore", () => {
       schemaVersion: openRoadSessionSchemaVersion,
       sessions: [
         expect.objectContaining({
+          actor: { id: "local-owner", source: "session", type: "local-owner" },
           id: created.session.id,
           userAgent: "OpenRoad test"
         })
@@ -47,6 +48,53 @@ describe("FileSessionStore", () => {
     expect(resolved?.actor).toMatchObject({
       source: "session",
       type: "local-owner"
+    });
+  });
+
+  it("creates workspace-member sessions without admin-token binding", async () => {
+    const sessionFile = await createTempSessionFile();
+    const store = new FileSessionStore(sessionFile);
+
+    const created = await store.createMemberSession({
+      actor: {
+        id: "user-teammate@example.com",
+        role: "Contributor",
+        type: "workspace-member",
+        workspaceId: "acme"
+      },
+      now: new Date("2026-07-05T00:00:00.000Z"),
+      userAgent: "Member browser"
+    });
+    const persisted = await readFile(sessionFile, "utf8");
+    const persistedState = JSON.parse(persisted) as {
+      sessions: Array<{ adminTokenHash?: string }>;
+    };
+    const resolved = await store.resolveSession({
+      cookieValue: created.cookieValue,
+      now: new Date("2026-07-05T00:01:00.000Z")
+    });
+
+    expect(persisted).not.toContain(created.cookieValue.split(".")[1]);
+    expect(persistedState).toMatchObject({
+      schemaVersion: openRoadSessionSchemaVersion,
+      sessions: [
+        expect.objectContaining({
+          actor: {
+            id: "user-teammate@example.com",
+            role: "Contributor",
+            type: "workspace-member",
+            workspaceId: "acme"
+          },
+          userAgent: "Member browser"
+        })
+      ]
+    });
+    expect(persistedState.sessions[0]).not.toHaveProperty("adminTokenHash");
+    expect(resolved?.actor).toMatchObject({
+      id: "user-teammate@example.com",
+      role: "Contributor",
+      type: "workspace-member",
+      workspaceId: "acme"
     });
   });
 
@@ -113,6 +161,43 @@ describe("FileSessionStore", () => {
         now: new Date("2026-07-05T00:01:00.000Z")
       })
     ).resolves.toBeUndefined();
+  });
+
+  it("migrates v1 owner session metadata to actor-aware records", async () => {
+    const sessionFile = await createTempSessionFile();
+    await writeFile(
+      sessionFile,
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          sessions: [
+            {
+              adminTokenHash: "admin-hash",
+              createdAt: "2026-07-05T00:00:00.000Z",
+              expiresAt: "2026-07-12T00:00:00.000Z",
+              id: "session-v1",
+              tokenHash: "token-hash"
+            }
+          ]
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+
+    const result = await new FileSessionStore(sessionFile).load();
+    const persisted = JSON.parse(await readFile(sessionFile, "utf8")) as {
+      schemaVersion: number;
+      sessions: Array<{ actor?: unknown; id: string }>;
+    };
+
+    expect(result.status).toBe("migrated");
+    expect(persisted.schemaVersion).toBe(openRoadSessionSchemaVersion);
+    expect(persisted.sessions[0]).toMatchObject({
+      actor: { id: "local-owner", source: "session", type: "local-owner" },
+      id: "session-v1"
+    });
   });
 
   it("rejects future schema versions", async () => {

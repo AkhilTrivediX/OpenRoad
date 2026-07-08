@@ -114,11 +114,13 @@ import {
   type TriageView
 } from "./app/openroadViewModel";
 import {
+  acceptOpenRoadInvitationSession,
   isServerPersistenceEnabled,
   isOpenRoadServerAuthRequiredError,
   loginOpenRoadOwner,
   loadServerOpenRoadState,
-  saveServerOpenRoadState
+  saveServerOpenRoadState,
+  type ServerOpenRoadScope
 } from "./persistence/openroadServer";
 import {
   createStandaloneIntegrationStatus,
@@ -181,9 +183,15 @@ export function App() {
       ? loadResult.error ?? "Saved OpenRoad data could not be loaded. Demo data is active."
       : ""
   );
+  const [serverAccessScope, setServerAccessScope] = useState<"local" | ServerOpenRoadScope>(
+    "local"
+  );
   const [ownerLoginState, setOwnerLoginState] = useState<"idle" | "required" | "submitting">("idle");
   const [ownerLoginToken, setOwnerLoginToken] = useState("");
   const [ownerLoginMessage, setOwnerLoginMessage] = useState("");
+  const [memberLoginDraft, setMemberLoginDraft] = useState({ name: "", token: "" });
+  const [memberLoginState, setMemberLoginState] = useState<"idle" | "submitting">("idle");
+  const [memberLoginMessage, setMemberLoginMessage] = useState("");
   const [integrationStatus, setIntegrationStatus] = useState<WorkspaceIntegrationStatus>(() =>
     createStandaloneIntegrationStatus(resolveInitialWorkspaceId(loadResult.state, loadSelectedWorkspaceId()))
   );
@@ -249,11 +257,14 @@ export function App() {
     () => workspaceList.find((item) => item.id === workspaceId) ?? workspaceList[0],
     [workspaceId, workspaceList]
   );
+  const isServerMemberSession =
+    serverPersistenceEnabled && serverAccessScope === "workspace-member";
 
   function applyServerLoadResult(result: Awaited<ReturnType<typeof loadServerOpenRoadState>>) {
     hasLoadedServerState.current = true;
     hasServerSaveFailed.current = false;
     skipNextServerSave.current = true;
+    setServerAccessScope(result.serverScope);
     dispatchOpenRoad({ type: "replace-state", state: result.state });
     setWorkspaceId((currentWorkspaceId) =>
       result.state.workspaces.some((item) => item.id === currentWorkspaceId)
@@ -262,8 +273,11 @@ export function App() {
     );
     setOwnerLoginState("idle");
     setOwnerLoginMessage("");
+    setMemberLoginMessage("");
     setPersistenceMessage(
-      result.status === "recovered"
+      result.serverScope === "workspace-member"
+        ? "Member workspace connected."
+        : result.status === "recovered"
         ? result.error ?? "Server data was recovered. Seed data is active."
         : "Server storage connected."
     );
@@ -290,6 +304,32 @@ export function App() {
           ? "Token was not accepted. Check the server admin token and try again."
           : "OpenRoad could not complete sign-in. Check the server and try again."
       );
+    }
+  }
+
+  async function signInWithInvitation(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    const token = memberLoginDraft.token.trim();
+    if (!token || memberLoginState === "submitting") return;
+
+    setMemberLoginState("submitting");
+    setMemberLoginMessage("");
+    setOwnerLoginMessage("");
+
+    try {
+      await acceptOpenRoadInvitationSession(token, memberLoginDraft.name.trim());
+      const result = await loadServerOpenRoadState();
+      applyServerLoadResult(result);
+      setMemberLoginDraft({ name: "", token: "" });
+    } catch (error) {
+      setMemberLoginMessage(
+        error instanceof Error
+          ? error.message
+          : "OpenRoad could not accept this invitation. Check the token and try again."
+      );
+    } finally {
+      setMemberLoginState("idle");
     }
   }
 
@@ -349,6 +389,7 @@ export function App() {
 
         hasLoadedServerState.current = true;
         hasServerSaveFailed.current = true;
+        setServerAccessScope("local");
         setPersistenceMessage("Server storage is unavailable. Local browser data is active.");
       });
 
@@ -1507,6 +1548,7 @@ export function App() {
 
   if (serverPersistenceEnabled && ownerLoginState !== "idle") {
     const isSigningIn = ownerLoginState === "submitting";
+    const isJoiningWorkspace = memberLoginState === "submitting";
 
     return (
       <main className="app-shell owner-auth-shell" aria-label="OpenRoad owner sign-in">
@@ -1522,13 +1564,17 @@ export function App() {
           </div>
           <div className="owner-auth-rail-copy">
             <span className="section-label">Server access</span>
-            <strong>Owner session required</strong>
-            <p>Private workspaces are protected on this deployment.</p>
+            <strong>Session required</strong>
+            <p>Use an owner token or a workspace invitation to enter this deployment.</p>
           </div>
         </aside>
 
         <section className="owner-auth-deck" aria-labelledby="owner-auth-title">
-          <form className="owner-auth-panel" onSubmit={signInOwner}>
+          <form
+            aria-label="Create owner session"
+            className="owner-auth-panel"
+            onSubmit={signInOwner}
+          >
             <div className="owner-auth-heading">
               <span className="owner-auth-icon" aria-hidden="true">
                 <KeyRound size={18} strokeWidth={1.8} />
@@ -1566,6 +1612,70 @@ export function App() {
               <button className="primary-action" disabled={!ownerLoginToken.trim() || isSigningIn} type="submit">
                 <KeyRound aria-hidden="true" size={15} />
                 {isSigningIn ? "Signing in..." : "Create owner session"}
+              </button>
+            </div>
+          </form>
+
+          <form
+            aria-label="Join invited workspace"
+            className="owner-auth-panel member-auth-panel"
+            onSubmit={signInWithInvitation}
+          >
+            <div className="owner-auth-heading">
+              <span className="owner-auth-icon" aria-hidden="true">
+                <UserPlus size={18} strokeWidth={1.8} />
+              </span>
+              <div>
+                <span className="section-label">Workspace invite</span>
+                <h2>Join as a member</h2>
+              </div>
+            </div>
+
+            <p>
+              Paste the invitation token from the workspace owner. OpenRoad will create a
+              scoped member session for the invited workspace only.
+            </p>
+
+            <label className="owner-token-field">
+              <span>Invitation token</span>
+              <input
+                autoComplete="one-time-code"
+                disabled={isJoiningWorkspace}
+                onChange={(event) =>
+                  setMemberLoginDraft((draft) => ({ ...draft, token: event.target.value }))
+                }
+                type="password"
+                value={memberLoginDraft.token}
+              />
+            </label>
+
+            <label className="owner-token-field">
+              <span>Name</span>
+              <input
+                autoComplete="name"
+                disabled={isJoiningWorkspace}
+                onChange={(event) =>
+                  setMemberLoginDraft((draft) => ({ ...draft, name: event.target.value }))
+                }
+                placeholder="Optional"
+                value={memberLoginDraft.name}
+              />
+            </label>
+
+            {memberLoginMessage ? (
+              <p className="owner-auth-message" role="alert">
+                {memberLoginMessage}
+              </p>
+            ) : null}
+
+            <div className="owner-auth-actions">
+              <button
+                className="secondary-action"
+                disabled={!memberLoginDraft.token.trim() || isJoiningWorkspace}
+                type="submit"
+              >
+                <UserPlus aria-hidden="true" size={15} />
+                {isJoiningWorkspace ? "Joining..." : "Join workspace"}
               </button>
             </div>
           </form>
@@ -1659,7 +1769,13 @@ export function App() {
           <div className="top-actions">
             <button
               className="secondary-action compact"
+              disabled={isServerMemberSession}
               onClick={() => setIsCreatingWorkspace((value) => !value)}
+              title={
+                isServerMemberSession
+                  ? "Member sessions are scoped to invited workspaces."
+                  : undefined
+              }
               type="button"
             >
               New workspace

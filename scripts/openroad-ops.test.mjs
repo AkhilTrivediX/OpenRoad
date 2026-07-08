@@ -34,7 +34,7 @@ describe("openroad ops", () => {
     expect(manifest.type).toBe("openroad-file-snapshot");
     expect(manifest.files.data.schemaVersion).toBe(2);
     expect(manifest.files.integration.schemaVersion).toBe(3);
-    expect(manifest.files.session.schemaVersion).toBe(1);
+    expect(manifest.files.session.schemaVersion).toBe(2);
     expect(manifest.files.team.schemaVersion).toBe(2);
     await expect(readFile(join(result.backupDir, "openroad-state.json"), "utf8")).resolves.toContain("acme");
     await expect(readFile(join(result.backupDir, "openroad-integrations.json"), "utf8")).resolves.toContain(
@@ -368,9 +368,10 @@ async function writeOpenRoadPair(root, workspaceId = "acme") {
     sessionFile,
     JSON.stringify(
       {
-        schemaVersion: 1,
+        schemaVersion: 2,
         sessions: [
           {
+            actor: { id: "local-owner", source: "session", type: "local-owner" },
             adminTokenHash: "admin-hash",
             createdAt: "2026-07-04T00:00:00.000Z",
             expiresAt: "2026-07-11T00:00:00.000Z",

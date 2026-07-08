@@ -30,7 +30,7 @@ OpenRoad now has a working standalone product loop, production server foundation
 - Public/private visibility for requests, comments, roadmap items, and changelog entries.
 - Production Node server that serves the built app and same-origin OpenRoad APIs.
 - File-backed server persistence for a single-tenant self-host or evaluation install.
-- Team metadata, workspace membership, hashed invitation tokens, audit events, and private ops status APIs.
+- Team metadata, workspace membership, hashed invitation tokens, owner/member browser sessions, audit events, and private ops status APIs.
 - App-level crash recovery boundary with retry and local browser-data reset actions.
 - Provider-neutral integration mappings plus a payload-backed GitHub issue import/link API.
 - Server-only GitHub App setup and installation verification foundation.
@@ -45,7 +45,7 @@ OpenRoad now has a working standalone product loop, production server foundation
 - Release candidate manifest tooling for version, checksum, support-window, and dry-run publishing verification.
 - Docker Compose, backup/restore, and smoke-check commands for self-host operators.
 
-Current production limits are explicit: invitation management UI, email delivery for invitations, password/OAuth account login, account recovery, managed database migrations, hosted release promotion, deeper observability, full integration connect/disconnect Settings flows, OAuth callback exchange, Linear/Jira webhooks, provider write-back, direct email/provider notification delivery, real model-backed AI adapters with consent/prompt redaction/audit logs, and conflict UI are planned next-stage work. Admin-token self-hosting has an httpOnly owner browser session path, and invitation APIs now create durable users and memberships without authenticating those users into browser sessions yet.
+Current production limits are explicit: email delivery for invitations, password/OAuth account login, account recovery, managed database migrations, hosted release promotion, deeper observability, full integration connect/disconnect Settings flows, OAuth callback exchange, Linear/Jira webhooks, provider write-back, direct email/provider notification delivery, real model-backed AI adapters with consent/prompt redaction/audit logs, and conflict UI are planned next-stage work. Admin-token self-hosting has an httpOnly owner browser session path, and invitation tokens can create scoped member browser sessions without exposing the server admin token.
 
 Current docs:
 
@@ -128,11 +128,13 @@ The server exposes:
 - `POST /api/openroad/auth/login`
 - `POST /api/openroad/auth/logout`
 - `POST /api/openroad/invitations/accept`
+- `POST /api/openroad/invitations/session`
 - `GET /api/openroad/state`
 - `PUT /api/openroad/state`
 - `POST /api/openroad/actions`
 - `GET /api/openroad/workspaces`
 - `GET /api/openroad/workspaces/:workspaceId`
+- `PUT /api/openroad/workspaces/:workspaceId`
 - `POST /api/openroad/workspaces/:workspaceId/actions`
 - `POST /api/openroad/workspaces/:workspaceId/integrations/github/issues/import`
 - `GET /api/openroad/workspaces/:workspaceId/integrations/github/issues/live`
@@ -158,6 +160,6 @@ The server exposes:
 - `POST /api/openroad/workspaces/:workspaceId/portal/requests/:requestId/vote`
 - `POST /api/openroad/workspaces/:workspaceId/portal/requests/:requestId/comments`
 
-When `OPENROAD_ADMIN_TOKEN` is configured, private state APIs require either `Authorization: Bearer <token>` or an owner session cookie created by the browser sign-in flow or `POST /api/openroad/auth/login`. The portal API remains public and returns only the public projection. See [API auth and tenancy contract](docs/API_AUTH_TENANCY_CONTRACT.md).
+When `OPENROAD_ADMIN_TOKEN` is configured, private state APIs require either `Authorization: Bearer <token>` or an owner session cookie created by the browser sign-in flow or `POST /api/openroad/auth/login`. Invitation tokens can create scoped member session cookies through `POST /api/openroad/invitations/session`; member sessions use workspace-scoped APIs and cannot read or write full multi-workspace state. The portal API remains public and returns only the public projection. See [API auth and tenancy contract](docs/API_AUTH_TENANCY_CONTRACT.md).
 
 Deployment, backup, restore, smoke, upgrade, and rollback details live in [Deployment runbook](docs/DEPLOYMENT_RUNBOOK.md).

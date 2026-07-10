@@ -1,6 +1,6 @@
 # Background Sync Foundation
 
-OpenRoad has a provider-neutral background sync job foundation for GitHub, Linear, and Jira integrations. GitHub, Linear, and Jira now have live workers for already-linked issue mappings when their server-side credentials are configured; provider write-back remains future work.
+OpenRoad has a provider-neutral background sync job foundation for GitHub, Linear, and Jira integrations. GitHub, Linear, and Jira now have live workers for already-linked issue mappings when their server-side credentials are configured, and explicit provider write-back is handled by a separate request-scoped API.
 
 ## Current Capability
 
@@ -53,7 +53,6 @@ Provider workers fetch/decrypt credentials server-side through the credential bo
 
 ## Deferred Work
 
-- Provider write-back.
 - Hosted OAuth callback token exchange.
 - Conflict detection/resolution UI.
 - External queue systems.

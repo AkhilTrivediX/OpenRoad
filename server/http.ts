@@ -146,6 +146,7 @@ import {
 } from "./github-sync-worker.js";
 import {
   FetchLinearApiClient,
+  LinearApiClientError,
   type LinearApiClient
 } from "./linear-api.js";
 import {
@@ -156,6 +157,10 @@ import {
   createProviderIntegrationSyncWorker,
   type ProviderIntegrationSyncWorkers
 } from "./provider-sync-worker.js";
+import {
+  ProviderWriteBackError,
+  writeBackOpenRoadRequestToProvider
+} from "./provider-writeback.js";
 import {
   createSafeLinearOAuthSetup,
   decodeLinearOAuthState,
@@ -174,6 +179,7 @@ import {
 } from "./jira.js";
 import {
   FetchJiraApiClient,
+  JiraApiClientError,
   type JiraApiClient
 } from "./jira-api.js";
 import {
@@ -420,9 +426,11 @@ export function createOpenRoadServer({
           integrationStore,
           resolvedIntegrationSyncWorker,
           configuredIntegrationSyncProviders,
+          jiraApiClient,
           jiraOAuthConfig,
           jiraOAuthExchangeClient,
           jiraWebhookConfig,
+          linearApiClient,
           linearOAuthConfig,
           linearOAuthExchangeClient,
           linearWebhookConfig,
@@ -558,9 +566,11 @@ async function handleApiRequest(
   integrationStore: IntegrationStore | undefined,
   integrationSyncWorker: IntegrationSyncWorker | undefined,
   configuredIntegrationSyncProviders: Set<IntegrationProvider>,
+  jiraApiClient: JiraApiClient,
   jiraOAuthConfig: JiraOAuthConfig,
   jiraOAuthExchangeClient: JiraOAuthExchangeClient,
   jiraWebhookConfig: JiraWebhookConfig,
+  linearApiClient: LinearApiClient,
   linearOAuthConfig: LinearOAuthConfig,
   linearOAuthExchangeClient: LinearOAuthExchangeClient,
   linearWebhookConfig: LinearWebhookConfig,
@@ -1115,6 +1125,33 @@ async function handleApiRequest(
       integrationCredentialRevokeMatch[1],
       integrationCredentialRevokeMatch[2],
       integrationCredentialRevokeMatch[3]
+    );
+    return;
+  }
+
+  const integrationWriteBackMatch = requestUrl.pathname.match(
+    /^\/api\/openroad\/workspaces\/([^/]+)\/integrations\/([^/]+)\/write-back$/
+  );
+
+  if (integrationWriteBackMatch) {
+    await handleProviderWriteBackRequest(
+      request,
+      response,
+      store,
+      access,
+      teamStore,
+      integrationStore,
+      githubAppClient,
+      jiraApiClient,
+      jiraOAuthConfig,
+      jiraOAuthExchangeClient,
+      linearApiClient,
+      linearOAuthConfig,
+      linearOAuthExchangeClient,
+      runIntegrationMutationExclusive,
+      tokenVault,
+      integrationWriteBackMatch[1],
+      integrationWriteBackMatch[2]
     );
     return;
   }
@@ -3684,6 +3721,7 @@ function parseJiraIntegrationPermissions(value: unknown): IntegrationPermission[
 
   const allowed = new Set<IntegrationPermission>([
     ...jiraRequiredInstallationPermissions,
+    "write:external",
     "webhook:receive"
   ]);
 
@@ -4236,6 +4274,21 @@ function createIntegrationStatusProviderSummary({
         linearOAuthConfig
       })
   );
+  const activeWritableInstallations = activeInstallations.filter((installation) =>
+    installation.permissions.includes("write:external")
+  );
+  const activeWritableCredentials = integrationState.credentials.filter(
+    (credential) =>
+      credential.provider === provider &&
+      credential.workspaceId === workspaceId &&
+      credential.status === "active" &&
+      credential.permissions.includes("write:external") &&
+      activeWritableInstallations.some((installation) => installation.id === credential.installationId) &&
+      isCredentialUsableForSync(credential, provider, {
+        jiraOAuthConfig,
+        linearOAuthConfig
+      })
+  );
   const jobs = integrationState.syncJobs
     .filter((job) => job.workspaceId === workspaceId && job.provider === provider)
     .sort((left, right) => timestampMs(right.updatedAt) - timestampMs(left.updatedAt));
@@ -4279,7 +4332,14 @@ function createIntegrationStatusProviderSummary({
       setup: setupConfigured,
       webhooks:
         configuredWebhookProviders.has(provider) &&
-        activeInstallations.some((installation) => installation.permissions.includes("webhook:receive"))
+        activeInstallations.some((installation) => installation.permissions.includes("webhook:receive")),
+      writeBack: canProviderWriteBack({
+        activeCredentials: activeWritableCredentials.length,
+        activeInstallations: activeWritableInstallations.length,
+        linkedIssueMappings: linkedIssueMappings.length,
+        provider,
+        setupConfigured
+      })
     },
     connection,
     disconnectedAccounts: disconnectedInstallations
@@ -4675,6 +4735,123 @@ async function handleIntegrationSyncRunRequest(
   }
 }
 
+function canProviderWriteBack({
+  activeCredentials,
+  activeInstallations,
+  linkedIssueMappings,
+  provider,
+  setupConfigured
+}: {
+  activeCredentials: number;
+  activeInstallations: number;
+  linkedIssueMappings: number;
+  provider: IntegrationProvider;
+  setupConfigured: boolean;
+}) {
+  if (linkedIssueMappings === 0 || activeInstallations === 0) return false;
+  if (provider === "github") return setupConfigured;
+  return activeCredentials > 0;
+}
+
+async function handleProviderWriteBackRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  store: OpenRoadStore,
+  access: AccessContext,
+  teamStore: TeamStore | undefined,
+  integrationStore: IntegrationStore | undefined,
+  githubAppClient: GitHubAppClient,
+  jiraApiClient: JiraApiClient,
+  jiraOAuthConfig: JiraOAuthConfig,
+  jiraOAuthExchangeClient: JiraOAuthExchangeClient,
+  linearApiClient: LinearApiClient,
+  linearOAuthConfig: LinearOAuthConfig,
+  linearOAuthExchangeClient: LinearOAuthExchangeClient,
+  runIntegrationMutationExclusive: NotificationDeliveryRunner,
+  tokenVault: IntegrationTokenVault,
+  encodedWorkspaceId: string,
+  encodedProvider: string
+) {
+  if (request.method !== "POST") {
+    writeApiError(response, 405, "invalid_method", "This endpoint only supports POST.", access);
+    return;
+  }
+
+  const workspaceId = decodeURIComponent(encodedWorkspaceId);
+
+  try {
+    const provider = parseIntegrationProviderPath(encodedProvider);
+    requirePermission(access, "integration:manage", workspaceId);
+
+    if (!integrationStore) {
+      throw new ApiRequestError(
+        "not_configured",
+        503,
+        "OpenRoad integration metadata store is not configured."
+      );
+    }
+
+    const current = await store.load();
+    const workspace = current.state.workspaces.find((item) => item.id === workspaceId);
+
+    if (!workspace) {
+      throw new ApiRequestError("not_found", 404, "Workspace was not found.");
+    }
+
+    const payload = await readJsonBody(request, 8192);
+
+    if (!isRecord(payload)) {
+      throw new ApiRequestError("invalid_request", 400, "Provider write-back payload must be an object.");
+    }
+
+    const requestId = getBoundedIdentifier(payload.requestId, 160);
+    const mappingId = getBoundedIdentifier(payload.mappingId, 500);
+
+    if (!requestId) {
+      throw new ApiRequestError("invalid_request", 400, "OpenRoad request id is required.");
+    }
+
+    const result = await writeBackOpenRoadRequestToProvider(
+      {
+        githubAppClient,
+        integrationStore,
+        jiraApiClient,
+        jiraOAuthConfig,
+        jiraOAuthExchangeClient,
+        linearApiClient,
+        linearOAuthConfig,
+        linearOAuthExchangeClient,
+        runIntegrationMutationExclusive,
+        store,
+        tokenVault
+      },
+      {
+        ...(mappingId ? { mappingId } : {}),
+        provider,
+        requestId,
+        workspaceId
+      }
+    );
+    const auditEvent = await recordAuditEvent(teamStore, current.state, access, {
+      summary: `Wrote ${provider} issue from OpenRoad request ${requestId}.`,
+      type: "integration.write_back",
+      workspaceId
+    });
+
+    writeJson(
+      response,
+      200,
+      {
+        ...result,
+        revision: auditEvent?.id ?? `integration-write-back-${Date.now()}`
+      },
+      access
+    );
+  } catch (error) {
+    writeKnownApiError(response, error, access);
+  }
+}
+
 async function handleIntegrationCredentialRevokeRequest(
   request: IncomingMessage,
   response: ServerResponse,
@@ -4875,7 +5052,10 @@ function createOAuthCredentialState({
       ...(token.expiresAt ? { expiresAt: token.expiresAt } : {}),
       installationId: installation.id,
       label: "OAuth",
-      permissions: ["read:external"],
+      permissions: getOAuthCredentialPermissions(provider, [
+        ...token.providerScopes,
+        ...resourceScopes
+      ]),
       providerScopes: [...new Set([...token.providerScopes, ...resourceScopes])],
       ...(token.refreshToken ? { refreshToken: token.refreshToken } : {}),
       tokenType: token.tokenType ?? "bearer"
@@ -4936,9 +5116,45 @@ function resolveLinearOAuthInstallation({
     accountId: account.id,
     accountName: account.name,
     id: oauthState.installationId ?? `linear-oauth-${account.id}`,
-    permissions: linearRequiredInstallationPermissions,
+    permissions: getOAuthInstallationPermissions("linear", token.providerScopes),
     workspaceId
   });
+}
+
+function getOAuthInstallationPermissions(
+  provider: "jira" | "linear",
+  scopes: string[] = []
+): IntegrationPermission[] {
+  const required =
+    provider === "linear" ? linearRequiredInstallationPermissions : jiraRequiredInstallationPermissions;
+  return mergeIntegrationPermissions(
+    required,
+    hasProviderWriteScope(provider, scopes) ? ["write:external"] : []
+  );
+}
+
+function getOAuthCredentialPermissions(
+  provider: "jira" | "linear",
+  scopes: string[] = []
+): IntegrationPermission[] {
+  return hasProviderWriteScope(provider, scopes) ? ["read:external", "write:external"] : ["read:external"];
+}
+
+function hasProviderWriteScope(provider: "jira" | "linear", scopes: string[]) {
+  const normalizedScopes = scopes.map((scope) => scope.toLowerCase());
+
+  if (provider === "linear") {
+    return normalizedScopes.includes("write");
+  }
+
+  return normalizedScopes.includes("write:jira-work") || normalizedScopes.includes("write:issue:jira");
+}
+
+function mergeIntegrationPermissions(
+  required: readonly IntegrationPermission[],
+  optional: readonly IntegrationPermission[]
+): IntegrationPermission[] {
+  return [...new Set([...required, ...optional])];
 }
 
 function resolveJiraOAuthInstallation({
@@ -5003,7 +5219,7 @@ function resolveJiraOAuthInstallation({
     accountId: resource.id,
     accountName: resource.name,
     id: oauthState.installationId ?? "jira-oauth",
-    permissions: jiraRequiredInstallationPermissions,
+    permissions: getOAuthInstallationPermissions("jira", resource.scopes),
     workspaceId
   });
 }
@@ -5117,8 +5333,7 @@ function parseManualIntegrationInstallationPermissions(
     throw new ApiRequestError("invalid_request", 400, "Integration installation permissions must be an array.");
   }
 
-  const optional: IntegrationPermission[] =
-    provider === "jira" ? ["webhook:receive"] : ["write:external", "webhook:receive"];
+  const optional: IntegrationPermission[] = ["write:external", "webhook:receive"];
   const allowed = new Set<IntegrationPermission>([...required, ...optional]);
   const permissions = value.map((item) => {
     const permission = getBoundedText(item, 80);
@@ -8186,6 +8401,11 @@ function writeKnownApiError(
     return;
   }
 
+  if (error instanceof ProviderWriteBackError) {
+    writeApiError(response, error.status, error.code, error.message, access);
+    return;
+  }
+
   if (error instanceof GitHubAppClientError) {
     const status = error.code === "missing_config" ? 503 : (error.status ?? 502);
     writeApiError(
@@ -8193,6 +8413,28 @@ function writeKnownApiError(
       status,
       error.code === "missing_config" ? "not_configured" : "upstream_error",
       error.message,
+      access
+    );
+    return;
+  }
+
+  if (error instanceof LinearApiClientError) {
+    writeApiError(
+      response,
+      error.status ?? 502,
+      "upstream_error",
+      getLinearApiErrorMessage(error),
+      access
+    );
+    return;
+  }
+
+  if (error instanceof JiraApiClientError) {
+    writeApiError(
+      response,
+      error.status ?? 502,
+      "upstream_error",
+      getJiraApiErrorMessage(error),
       access
     );
     return;
@@ -8209,6 +8451,23 @@ function writeKnownApiError(
   }
 
   throw error;
+}
+
+function getLinearApiErrorMessage(error: LinearApiClientError) {
+  if (error.code === "not_found") return "Linear issue was not found.";
+  if (error.code === "invalid_response") return "Linear API response was invalid.";
+  if (error.code === "graphql_error") return "Linear GraphQL request failed.";
+  return error.status
+    ? `Linear API request failed with status ${error.status}.`
+    : "Linear API request failed before response.";
+}
+
+function getJiraApiErrorMessage(error: JiraApiClientError) {
+  if (error.code === "not_found") return "Jira issue was not found.";
+  if (error.code === "invalid_response") return "Jira API response was invalid.";
+  return error.status
+    ? `Jira API request failed with status ${error.status}.`
+    : "Jira API request failed before response.";
 }
 
 function writeJson(

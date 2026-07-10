@@ -27,7 +27,7 @@ export type SafeJiraOAuthSetup = {
 
 export type JiraOAuthState = ProviderOAuthState;
 
-export const jiraRequiredOAuthScopes = ["read:jira-work", "read:jira-user"] as const;
+export const jiraRequiredOAuthScopes = ["read:jira-work", "read:jira-user", "write:jira-work"] as const;
 
 export function jiraOAuthConfigFromEnv(env = process.env): JiraOAuthConfig {
   return {

@@ -24,12 +24,12 @@ describe("Linear OAuth setup helpers", () => {
     expect(setup).toMatchObject({
       configured: true,
       missing: [],
-      requiredScopes: ["read"]
+      requiredScopes: ["read", "write"]
     });
     expect(setup.authorizeUrl).toContain("https://linear.app/oauth/authorize");
     expect(setup.authorizeUrl).toContain("client_id=lin_client");
     expect(setup.authorizeUrl).toContain("response_type=code");
-    expect(setup.authorizeUrl).toContain("scope=read");
+    expect(new URL(setup.authorizeUrl ?? "").searchParams.get("scope")).toBe("read,write");
     expect(decodeLinearOAuthState(state ?? "", config)).toMatchObject({
       createdAt: "2026-07-04T00:00:00.000Z",
       installationId: "linear-install",

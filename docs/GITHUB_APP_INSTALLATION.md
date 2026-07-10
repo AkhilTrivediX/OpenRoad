@@ -111,12 +111,18 @@ Provider-neutral sync jobs can be queued at:
 
 `POST /api/openroad/workspaces/:workspaceId/integrations/github/sync/jobs`
 
-The private runner is `POST /api/openroad/integrations/sync/run`. When GitHub App credentials are configured, the production server auto-wires a GitHub sync worker that refreshes already-linked GitHub issue mappings by targeted issue number. It does not import unmapped repository issues or write back to GitHub.
+The private runner is `POST /api/openroad/integrations/sync/run`. When GitHub App credentials are configured, the production server auto-wires a GitHub sync worker that refreshes already-linked GitHub issue mappings by targeted issue number. It does not import unmapped repository issues.
 
 Browser Settings can now display sanitized GitHub connection/sync status and run manual linked-issue sync when a connected installation and worker are available. It does not expose installation tokens, App private keys, webhook secrets, or raw GitHub payloads.
+
+## Provider Write-Back
+
+`POST /api/openroad/workspaces/:workspaceId/integrations/github/write-back`
+
+GitHub write-back is explicit and request-scoped. It updates only the linked issue title/body through the GitHub App installation token after the stored installation has `write:external`. See [Provider write-back](PROVIDER_WRITE_BACK.md).
 
 ## Deferred Work
 
 - Full browser connect/disconnect flows and expanded sync logs.
 - Setup callback page that carries workspace context from GitHub back into OpenRoad.
-- Conflict handling and provider write-back.
+- Conflict handling.

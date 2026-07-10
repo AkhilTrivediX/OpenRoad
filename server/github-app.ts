@@ -49,6 +49,7 @@ export type GitHubAppClient = {
   getInstallation(installationId: string): Promise<GitHubAppInstallationApiPayload>;
   getRepositoryIssue(options: GitHubRepositoryIssueGetOptions): Promise<GitHubIssue>;
   listRepositoryIssues(options: GitHubRepositoryIssueListOptions): Promise<GitHubIssue[]>;
+  updateRepositoryIssue(options: GitHubRepositoryIssueUpdateOptions): Promise<GitHubIssue>;
 };
 
 export type GitHubInstallationAccessToken = {
@@ -71,6 +72,11 @@ export type GitHubRepositoryIssueGetOptions = {
   repo: string;
 };
 
+export type GitHubRepositoryIssueUpdateOptions = GitHubRepositoryIssueGetOptions & {
+  body: string;
+  title: string;
+};
+
 export type GitHubAppJwtOptions = {
   appId: string;
   nowSeconds?: number;
@@ -78,7 +84,7 @@ export type GitHubAppJwtOptions = {
 };
 
 export const githubAppRequiredPermissions = {
-  issues: "read",
+  issues: "write",
   pull_requests: "read"
 } as const;
 
@@ -224,6 +230,43 @@ export class FetchGitHubAppClient implements GitHubAppClient {
     const body = (await response.json()) as unknown;
     if (!isRecord(body)) {
       throw new GitHubAppClientError("invalid_response", "GitHub issue response was invalid.");
+    }
+
+    return parseGitHubIssuePayload(body);
+  }
+
+  async updateRepositoryIssue(options: GitHubRepositoryIssueUpdateOptions) {
+    const accessToken = await this.createInstallationAccessToken(options.installationId);
+    const response = await this.fetchImpl(
+      `${this.config.apiBaseUrl}/repos/${encodeURIComponent(options.owner)}/${encodeURIComponent(
+        options.repo
+      )}/issues/${encodeURIComponent(String(options.issueNumber))}`,
+      {
+        body: JSON.stringify({
+          body: options.body,
+          title: options.title
+        }),
+        headers: {
+          Accept: "application/vnd.github+json",
+          Authorization: `Bearer ${accessToken.token}`,
+          "Content-Type": "application/json",
+          "X-GitHub-Api-Version": "2022-11-28"
+        },
+        method: "PATCH"
+      }
+    );
+
+    if (!response.ok) {
+      throw new GitHubAppClientError(
+        "github_api_error",
+        `GitHub issue update failed with status ${response.status}.`,
+        response.status
+      );
+    }
+
+    const body = (await response.json()) as unknown;
+    if (!isRecord(body)) {
+      throw new GitHubAppClientError("invalid_response", "GitHub issue update response was invalid.");
     }
 
     return parseGitHubIssuePayload(body);

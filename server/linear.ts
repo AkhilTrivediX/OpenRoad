@@ -28,7 +28,7 @@ export type SafeLinearOAuthSetup = {
 
 export type LinearOAuthState = ProviderOAuthState;
 
-export const linearRequiredOAuthScopes = ["read"] as const;
+export const linearRequiredOAuthScopes = ["read", "write"] as const;
 
 export function linearOAuthConfigFromEnv(env = process.env): LinearOAuthConfig {
   return {

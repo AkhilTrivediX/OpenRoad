@@ -133,7 +133,7 @@ Credential storage requires `integration:manage`, an active Jira installation in
 
 The endpoint queues provider-neutral sync jobs for active Jira installations. The private runner is `POST /api/openroad/integrations/sync/run`.
 
-When `OPENROAD_TOKEN_ENCRYPTION_KEY` is configured and an active Jira credential exists for the installation, the server auto-wires a Jira sync worker. The worker refreshes expired or near-expired OAuth credentials before provider reads, then refreshes already-linked Jira issue mappings only. It does not search projects, import unmapped Jira issues, or write back to Jira.
+When `OPENROAD_TOKEN_ENCRYPTION_KEY` is configured and an active Jira credential exists for the installation, the server auto-wires a Jira sync worker. The worker refreshes expired or near-expired OAuth credentials before provider reads, then refreshes already-linked Jira issue mappings only. It does not search projects or import unmapped Jira issues.
 
 The Jira REST client defaults to `https://api.atlassian.com/ex/jira/{cloudId}/rest/api/2/issue/{issueIdOrKey}` and can be pointed at a fake/self-host test endpoint with `OPENROAD_JIRA_API_BASE_URL`. It uses OAuth bearer authorization server-side and requests a bounded field set for issue sync. Jira `429`, `408`, `409`, and `5xx` responses become retryable sync failures with bounded backoff; malformed responses fail without persisting raw provider payloads.
 
@@ -144,6 +144,12 @@ The Jira REST client defaults to `https://api.atlassian.com/ex/jira/{cloudId}/re
 The endpoint requires `OPENROAD_JIRA_WEBHOOK_SECRET`. It verifies the raw request body with the Jira `X-Hub-Signature` HMAC-SHA256 header before parsing JSON or mutating state. It requires `X-Atlassian-Webhook-Identifier` for idempotency across retries.
 
 Only Jira issue webhooks for active installations with `webhook:receive` can update OpenRoad, and only when the Jira issue is already linked to an OpenRoad request for the same installation/site. Jira issue ids stay scoped by cloud/site id before mapping updates are applied. Unmapped issues are logged as ignored sync events without creating requests. Responses and persisted events never include raw Jira payloads, signatures, webhook secrets, access tokens, refresh tokens, or encrypted credential material.
+
+## Provider Write-Back
+
+`POST /api/openroad/workspaces/:workspaceId/integrations/jira/write-back`
+
+Jira write-back is explicit and request-scoped. It updates only the linked issue summary/description through the encrypted server-side credential after the installation and credential have `write:external`. The description is sent as Atlassian Document Format. Expired OAuth credentials refresh through the existing rotation path when refresh material and OAuth config are present. See [Provider write-back](PROVIDER_WRITE_BACK.md).
 
 ## Deferred
 

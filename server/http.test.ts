@@ -32,7 +32,7 @@ import { FileTeamStore } from "./team";
 import type { AuthOptions } from "./access";
 import { GitHubAppClientError, type GitHubAppClient, type GitHubAppConfig } from "./github-app";
 import type { JiraApiClient } from "./jira-api";
-import type { LinearApiClient } from "./linear-api";
+import { LinearApiClientError, type LinearApiClient } from "./linear-api";
 import type { LinearOAuthConfig, LinearWebhookConfig } from "./linear";
 import type { JiraOAuthConfig, JiraWebhookConfig } from "./jira";
 import {
@@ -3497,6 +3497,373 @@ describe("OpenRoad production server", () => {
     expect(responseText).not.toContain("ciphertext");
   });
 
+  it("writes OpenRoad request updates back to linked GitHub issues without exposing provider secrets", async () => {
+    const githubWrites: Parameters<GitHubAppClient["updateRepositoryIssue"]>[0][] = [];
+    const { integrationStore, store, url } = await startTestServer({
+      githubAppClient: {
+        ...fakeGitHubAppClient(),
+        async updateRepositoryIssue(options) {
+          githubWrites.push(options);
+          return fakeGitHubAppClient().updateRepositoryIssue(options);
+        }
+      },
+      githubAppConfig: completeGitHubAppConfig()
+    });
+    const imported = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/github/issues/import`, {
+      body: JSON.stringify(
+        gitHubImportPayload({
+          installation: {
+            accountId: "AkhilTrivediX",
+            accountName: "AkhilTrivediX",
+            id: "github-install",
+            permissions: ["read:external", "read:openroad", "write:openroad", "write:external"]
+          }
+        })
+      ),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const requestId = imported.body.request.id;
+    await updateStoredRequest(store, "acme", requestId, {
+      description: "Users need a calmer provider write-back loop.",
+      title: "Provider write-back polish"
+    });
+    const statusBefore = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/status`);
+    const response = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/github/write-back`, {
+      body: JSON.stringify({ requestId }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const integrations = await integrationStore.load();
+    const githubStatus = statusBefore.body.providers.find(
+      (provider: { provider: string }) => provider.provider === "github"
+    );
+    const mapping = integrations.state.mappings.find((item) => item.id === response.body.mappingId);
+    const event = integrations.state.syncEvents.find((item) => item.event === "write_back");
+    const responseText = JSON.stringify(response.body);
+
+    expect(imported.status).toBe(201);
+    expect(githubStatus).toMatchObject({
+      capabilities: { writeBack: true },
+      linkedIssueMappings: 1
+    });
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      external: { key: "AkhilTrivediX/OpenRoad#42", type: "issue" },
+      provider: "github",
+      requestId,
+      status: "written"
+    });
+    expect(githubWrites).toEqual([
+      {
+        body: "Users need a calmer provider write-back loop.",
+        installationId: "github-install",
+        issueNumber: 42,
+        owner: "AkhilTrivediX",
+        repo: "OpenRoad",
+        title: "Provider write-back polish"
+      }
+    ]);
+    expect(mapping?.lastSyncedAt).toBeTruthy();
+    expect(event).toMatchObject({
+      provider: "github",
+      result: "synced",
+      workspaceId: "acme"
+    });
+    expect(responseText).not.toContain("installation-token");
+    expect(responseText).not.toContain("PRIVATE KEY");
+  });
+
+  it("rotates expired Linear OAuth credentials before writing linked issues back", async () => {
+    const linearWrites: Array<{ description: string; issueId: string; title: string; token: string }> = [];
+    const tokenVault = testTokenVault();
+    const { integrationStore, store, url } = await startTestServer({
+      linearApiClient: {
+        async getIssue() {
+          throw new Error("Unexpected Linear issue read during write-back.");
+        },
+        async updateIssue(options) {
+          linearWrites.push({
+            description: options.description,
+            issueId: options.issueId,
+            title: options.title,
+            token: options.credential.accessToken
+          });
+        }
+      },
+      linearOAuthConfig: testLinearOAuthConfig(),
+      linearOAuthExchangeClient: {
+        async exchangeCode() {
+          throw new Error("Unexpected Linear OAuth code exchange during write-back.");
+        },
+        async refreshToken(options) {
+          expect(options.refreshToken).toBe("linear-refresh-secret");
+          return {
+            accessToken: "linear-rotated-secret",
+            expiresAt: "2999-07-05T00:00:00.000Z",
+            providerScopes: ["read", "write"],
+            refreshToken: "linear-refresh-rotated",
+            tokenType: "bearer"
+          };
+        }
+      },
+      tokenVault
+    });
+    const imported = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/linear/issues/import`, {
+      body: JSON.stringify(
+        linearImportPayload({
+          installation: {
+            accountId: "linear-team",
+            accountName: "OpenRoad",
+            id: "linear-install",
+            permissions: ["read:external", "read:openroad", "write:openroad", "write:external"]
+          }
+        })
+      ),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const credential = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/linear/credentials`, {
+      body: JSON.stringify(
+        linearCredentialPayload({
+          expiresAt: "2026-07-04T00:00:00.000Z",
+          permissions: ["read:external", "write:external"],
+          providerScopes: ["read", "write"],
+          refreshToken: "linear-refresh-secret"
+        })
+      ),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const requestId = imported.body.request.id;
+    await updateStoredRequest(store, "acme", requestId, {
+      description: "Linear should receive the cleaned OpenRoad description.",
+      title: "Linear write-back"
+    });
+    const statusBefore = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/status`);
+    const response = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/linear/write-back`, {
+      body: JSON.stringify({ requestId }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const integrations = await integrationStore.load();
+    const persistedCredential = integrations.state.credentials.find((item) => item.id === credential.body.credential.id);
+    const openedSecret = persistedCredential?.encryptedSecret
+      ? tokenVault.open(persistedCredential.encryptedSecret, {
+          associatedData: createIntegrationCredentialSecretContext(persistedCredential)
+        })
+      : undefined;
+    const linearStatus = statusBefore.body.providers.find(
+      (provider: { provider: string }) => provider.provider === "linear"
+    );
+    const responseText = JSON.stringify(response.body);
+
+    expect(credential.status).toBe(201);
+    expect(linearStatus).toMatchObject({
+      capabilities: { writeBack: true },
+      linkedIssueMappings: 1
+    });
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      external: { key: "OPEN-42", type: "issue" },
+      provider: "linear",
+      requestId,
+      status: "written"
+    });
+    expect(linearWrites).toEqual([
+      {
+        description: "Linear should receive the cleaned OpenRoad description.",
+        issueId: "lin-issue-123",
+        title: "Linear write-back",
+        token: "linear-rotated-secret"
+      }
+    ]);
+    expect(openedSecret).toMatchObject({
+      accessToken: "linear-rotated-secret",
+      refreshToken: "linear-refresh-rotated"
+    });
+    expect(responseText).not.toContain("linear-access-secret");
+    expect(responseText).not.toContain("linear-refresh-secret");
+    expect(responseText).not.toContain("ciphertext");
+  });
+
+  it("writes OpenRoad request updates back to linked Jira issues", async () => {
+    const jiraWrites: Array<{ cloudId: string; description: string; issueIdOrKey: string; title: string; token: string }> = [];
+    const { integrationStore, store, url } = await startTestServer({
+      jiraApiClient: {
+        async getIssue() {
+          throw new Error("Unexpected Jira issue read during write-back.");
+        },
+        async updateIssue(options) {
+          jiraWrites.push({
+            cloudId: options.cloudId,
+            description: options.description,
+            issueIdOrKey: options.issueIdOrKey,
+            title: options.title,
+            token: options.credential.accessToken
+          });
+        }
+      },
+      tokenVault: testTokenVault()
+    });
+    const imported = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/jira/issues/import`, {
+      body: JSON.stringify(
+        jiraImportPayload({
+          installation: {
+            accountId: "jira-cloud",
+            accountName: "OpenRoad Jira",
+            id: "jira-install",
+            permissions: ["read:external", "read:openroad", "write:openroad", "write:external"]
+          },
+          issue: jiraIssuePayload({
+            cloudId: "jira-cloud",
+            self: "https://api.atlassian.com/ex/jira/jira-cloud/rest/api/3/issue/10042"
+          })
+        })
+      ),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const credential = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/jira/credentials`, {
+      body: JSON.stringify(
+        jiraCredentialPayload({
+          permissions: ["read:external", "write:external"],
+          providerScopes: ["read:jira-work", "write:jira-work"]
+        })
+      ),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const requestId = imported.body.request.id;
+    await updateStoredRequest(store, "acme", requestId, {
+      description: "Jira should receive a concise OpenRoad description.",
+      title: "Jira write-back"
+    });
+    const response = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/jira/write-back`, {
+      body: JSON.stringify({ requestId }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const integrations = await integrationStore.load();
+    const event = integrations.state.syncEvents.find((item) => item.event === "write_back");
+
+    expect(credential.status).toBe(201);
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      external: { key: "OPEN-42", type: "issue" },
+      provider: "jira",
+      requestId,
+      status: "written"
+    });
+    expect(jiraWrites).toEqual([
+      {
+        cloudId: "jira-cloud",
+        description: "Jira should receive a concise OpenRoad description.",
+        issueIdOrKey: "10042",
+        title: "Jira write-back",
+        token: "jira-access-secret"
+      }
+    ]);
+    expect(event).toMatchObject({ provider: "jira", result: "synced" });
+    expect(JSON.stringify(response.body)).not.toContain("jira-access-secret");
+  });
+
+  it("rejects provider write-back without linked writable provider state", async () => {
+    let writeCount = 0;
+    const { url } = await startTestServer({
+      githubAppClient: {
+        ...fakeGitHubAppClient(),
+        async updateRepositoryIssue(options) {
+          writeCount += 1;
+          return fakeGitHubAppClient().updateRepositoryIssue(options);
+        }
+      },
+      githubAppConfig: completeGitHubAppConfig()
+    });
+    const missingMapping = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/github/write-back`, {
+      body: JSON.stringify({ requestId: "missing" }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const imported = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/github/issues/import`, {
+      body: JSON.stringify(gitHubImportPayload()),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const status = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/status`);
+    const noWritePermission = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/github/write-back`, {
+      body: JSON.stringify({ requestId: imported.body.request.id }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const githubStatus = status.body.providers.find(
+      (provider: { provider: string }) => provider.provider === "github"
+    );
+
+    expect(missingMapping.status).toBe(404);
+    expect(missingMapping.body.error.code).toBe("not_found");
+    expect(githubStatus).toMatchObject({ capabilities: { writeBack: false } });
+    expect(noWritePermission.status).toBe(422);
+    expect(noWritePermission.body.error.code).toBe("invalid_state");
+    expect(writeCount).toBe(0);
+  });
+
+  it("sanitizes upstream provider write-back failures", async () => {
+    const { store, url } = await startTestServer({
+      linearApiClient: {
+        async getIssue() {
+          throw new Error("Unexpected Linear issue read during write-back.");
+        },
+        async updateIssue() {
+          throw new LinearApiClientError("linear_api_error", "raw-token-should-not-leak", 429);
+        }
+      },
+      tokenVault: testTokenVault()
+    });
+    const imported = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/linear/issues/import`, {
+      body: JSON.stringify(
+        linearImportPayload({
+          installation: {
+            accountId: "linear-team",
+            accountName: "OpenRoad",
+            id: "linear-install",
+            permissions: ["read:external", "read:openroad", "write:openroad", "write:external"]
+          }
+        })
+      ),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/linear/credentials`, {
+      body: JSON.stringify(
+        linearCredentialPayload({
+          permissions: ["read:external", "write:external"],
+          providerScopes: ["read", "write"]
+        })
+      ),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    await updateStoredRequest(store, "acme", imported.body.request.id, {
+      description: "Failure path body",
+      title: "Failure path title"
+    });
+    const response = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/linear/write-back`, {
+      body: JSON.stringify({ requestId: imported.body.request.id }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const responseText = JSON.stringify(response.body);
+
+    expect(response.status).toBe(429);
+    expect(response.body.error).toMatchObject({
+      code: "upstream_error",
+      message: "Linear API request failed with status 429."
+    });
+    expect(responseText).not.toContain("raw-token-should-not-leak");
+    expect(responseText).not.toContain("linear-access-secret");
+  });
+
   it("keeps refreshable expired OAuth credentials eligible for manual sync status", async () => {
     const { url } = await startTestServer({
       auth: { adminToken: "secret", singleUserMode: false, trustProxyHeaders: true },
@@ -3950,7 +4317,7 @@ describe("OpenRoad production server", () => {
     expect(configuredSetup.body.linearOAuth).toMatchObject({
       configured: true,
       missing: [],
-      requiredScopes: ["read"]
+      requiredScopes: ["read", "write"]
     });
     expect(configuredSetup.body.linearOAuth.authorizeUrl).toContain("https://linear.test/oauth/authorize");
     expect(JSON.stringify(configuredSetup.body)).not.toContain("linear-secret");
@@ -4419,7 +4786,7 @@ describe("OpenRoad production server", () => {
     expect(configuredSetup.body.jiraOAuth).toMatchObject({
       configured: true,
       missing: [],
-      requiredScopes: ["read:jira-work", "read:jira-user"]
+      requiredScopes: ["read:jira-work", "read:jira-user", "write:jira-work"]
     });
     expect(configuredSetup.body.jiraOAuth.authorizeUrl).toContain("https://auth.atlassian.test/authorize");
     expect(JSON.stringify(configuredSetup.body)).not.toContain("jira-secret");
@@ -4611,7 +4978,7 @@ describe("OpenRoad production server", () => {
       "cloud-123:10042",
       "cloud-other:10042"
     ]);
-    expect(second.body.installation.permissions).not.toContain("write:external");
+    expect(second.body.installation.permissions).toContain("write:external");
     expect(second.body.installation.permissions).toContain("webhook:receive");
   });
 
@@ -6092,6 +6459,28 @@ async function fetchJson(url: string, init?: RequestInit) {
   };
 }
 
+async function updateStoredRequest(
+  store: FileOpenRoadStore,
+  workspaceId: string,
+  requestId: string,
+  patch: Partial<Pick<RequestItem, "description" | "title">>
+) {
+  const current = await store.load();
+  await store.replaceState({
+    ...current.state,
+    workspaces: current.state.workspaces.map((workspace) =>
+      workspace.id === workspaceId
+        ? {
+            ...workspace,
+            requests: workspace.requests.map((request) =>
+              request.id === requestId ? { ...request, ...patch } : request
+            )
+          }
+        : workspace
+    )
+  });
+}
+
 function cookiePair(value: string) {
   return value.split(";")[0];
 }
@@ -6529,6 +6918,29 @@ function fakeGitHubAppClient(): GitHubAppClient {
           url: "https://github.com/AkhilTrivediX/OpenRoad/issues/42"
         }
       ];
+    },
+    async updateRepositoryIssue(options) {
+      return {
+        assignees: ["maintainer"],
+        author: "akhil",
+        body: options.body,
+        createdAt: "2026-07-04T00:00:00Z",
+        id: "I_kwDOGH123",
+        labels: ["planned"],
+        number: options.issueNumber,
+        repository: {
+          fullName: `${options.owner}/${options.repo}`,
+          id: "R_kwDOR123",
+          name: options.repo,
+          owner: options.owner,
+          url: `https://github.com/${options.owner}/${options.repo}`,
+          visibility: "public"
+        },
+        state: "open",
+        title: options.title,
+        updatedAt: "2026-07-04T00:30:00Z",
+        url: `https://github.com/${options.owner}/${options.repo}/issues/${options.issueNumber}`
+      };
     }
   };
 }

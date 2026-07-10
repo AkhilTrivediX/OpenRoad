@@ -114,5 +114,5 @@ As an invited teammate, after I accept an invitation and enter the workspace onc
   - In-app browser, production build at `360x740`: auth panels fit within viewport, no document overflow.
 - Accessibility checks: Auth controls use labeled inputs, semantic buttons, `aria-pressed` mode switch state, visible focus inherited from the app shell, and status messages use `role="status"`/`role="alert"` where relevant.
 - Reviewer notes: Passed. Account passwords are limited to existing team users and produce scoped workspace-member sessions; admin-token owner sessions, invitation sessions, public portal, integrations, ops, and release checks remained green.
-- Known unresolved risks: OAuth login, password recovery, email verification, MFA/passkeys, SSO, account deletion, hosted org admin, and billing remain future production slices.
+- Known unresolved risks: OAuth login, email verification, MFA/passkeys, SSO, account deletion, hosted org admin, and billing remain future production slices. Password recovery was completed later in `feat/account-recovery-foundation`.
 - Rollback notes: Restore a pre-schema-4 team metadata backup before downgrading to a build that does not understand account credential records. Product, integration, and session files remain separate but should be restored from the same operational snapshot when rolling back across a release.

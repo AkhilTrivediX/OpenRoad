@@ -197,6 +197,79 @@ describe("FileSessionStore", () => {
     expect(ownerResolved?.actor).toMatchObject({ type: "local-owner" });
   });
 
+  it("revokes active member sessions across all workspaces for one user", async () => {
+    const sessionFile = await createTempSessionFile();
+    const store = new FileSessionStore(sessionFile);
+    const first = await store.createMemberSession({
+      actor: {
+        id: "user-member@example.com",
+        role: "Contributor",
+        type: "workspace-member",
+        workspaceId: "acme"
+      },
+      now: new Date("2026-07-05T00:00:00.000Z")
+    });
+    const second = await store.createMemberSession({
+      actor: {
+        id: "user-member@example.com",
+        role: "Viewer",
+        type: "workspace-member",
+        workspaceId: "maintainer"
+      },
+      now: new Date("2026-07-05T00:00:00.000Z")
+    });
+    const otherUser = await store.createMemberSession({
+      actor: {
+        id: "user-other@example.com",
+        role: "Contributor",
+        type: "workspace-member",
+        workspaceId: "acme"
+      },
+      now: new Date("2026-07-05T00:00:00.000Z")
+    });
+    const owner = await store.createSession({
+      adminToken: "admin-secret",
+      now: new Date("2026-07-05T00:00:00.000Z")
+    });
+
+    const revoked = await store.revokeMemberSessionsForUser({
+      now: new Date("2026-07-05T00:01:00.000Z"),
+      userId: "user-member@example.com"
+    });
+
+    await expect(
+      store.resolveSession({
+        cookieValue: first.cookieValue,
+        now: new Date("2026-07-05T00:02:00.000Z")
+      })
+    ).resolves.toBeUndefined();
+    await expect(
+      store.resolveSession({
+        cookieValue: second.cookieValue,
+        now: new Date("2026-07-05T00:02:00.000Z")
+      })
+    ).resolves.toBeUndefined();
+    await expect(
+      store.resolveSession({
+        cookieValue: otherUser.cookieValue,
+        now: new Date("2026-07-05T00:02:00.000Z")
+      })
+    ).resolves.toMatchObject({
+      actor: {
+        id: "user-other@example.com",
+        type: "workspace-member"
+      }
+    });
+    await expect(
+      store.resolveSession({
+        adminToken: "admin-secret",
+        cookieValue: owner.cookieValue,
+        now: new Date("2026-07-05T00:02:00.000Z")
+      })
+    ).resolves.toMatchObject({ actor: { type: "local-owner" } });
+    expect(revoked).toBe(2);
+  });
+
   it("binds sessions to the active admin token", async () => {
     const sessionFile = await createTempSessionFile();
     const store = new FileSessionStore(sessionFile);

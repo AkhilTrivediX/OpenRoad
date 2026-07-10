@@ -90,6 +90,7 @@ describe("FileTeamStore", () => {
 
     const result = await new FileTeamStore(teamFile).load(openRoadState);
     const persisted = JSON.parse(await readFile(teamFile, "utf8")) as {
+      accountRecoveryRequests: unknown[];
       invitations: unknown[];
       schemaVersion: number;
     };
@@ -97,6 +98,7 @@ describe("FileTeamStore", () => {
     expect(result.status).toBe("migrated");
     expect(result.state.invitations).toEqual([]);
     expect(persisted.schemaVersion).toBe(openRoadTeamSchemaVersion);
+    expect(persisted.accountRecoveryRequests).toEqual([]);
     expect(persisted.invitations).toEqual([]);
   });
 
@@ -128,6 +130,7 @@ describe("FileTeamStore", () => {
 
     const result = await new FileTeamStore(teamFile).load(openRoadState);
     const persisted = JSON.parse(await readFile(teamFile, "utf8")) as {
+      accountRecoveryRequests: unknown[];
       credentials: unknown[];
       invitations: Array<{ id: string }>;
       schemaVersion: number;
@@ -141,6 +144,7 @@ describe("FileTeamStore", () => {
     });
     expect(result.state.credentials).toEqual([]);
     expect(persisted.schemaVersion).toBe(openRoadTeamSchemaVersion);
+    expect(persisted.accountRecoveryRequests).toEqual([]);
     expect(persisted.credentials).toEqual([]);
     expect(persisted.invitations[0].id).toBe("invitation-1");
   });
@@ -164,7 +168,42 @@ describe("FileTeamStore", () => {
 
     expect(result.status).toBe("migrated");
     expect(result.state.schemaVersion).toBe(openRoadTeamSchemaVersion);
+    expect(result.state.accountRecoveryRequests).toEqual([]);
     expect(result.state.credentials).toEqual([]);
+  });
+
+  it("migrates schema v4 team metadata with empty account recovery requests", async () => {
+    const teamFile = await createTempTeamFile();
+    const openRoadState = createInitialOpenRoadState();
+    await writeFile(
+      teamFile,
+      JSON.stringify({
+        auditEvents: [],
+        credentials: [
+          {
+            algorithm: "scrypt-v1",
+            createdAt: "2026-07-10T00:00:00.000Z",
+            id: "credential-local-owner",
+            passwordHash: "hash",
+            salt: "salt",
+            updatedAt: "2026-07-10T00:00:00.000Z",
+            userId: "local-owner"
+          }
+        ],
+        invitations: [],
+        memberships: [],
+        schemaVersion: 4,
+        users: []
+      }),
+      "utf8"
+    );
+
+    const result = await new FileTeamStore(teamFile).load(openRoadState);
+
+    expect(result.status).toBe("migrated");
+    expect(result.state.schemaVersion).toBe(openRoadTeamSchemaVersion);
+    expect(result.state.accountRecoveryRequests).toEqual([]);
+    expect(result.state.credentials[0]).toMatchObject({ userId: "local-owner" });
   });
 
   it("creates invitations without persisting or listing raw accept tokens", async () => {
@@ -261,7 +300,9 @@ describe("FileTeamStore", () => {
   it("rejects malformed invitation delivery metadata", () => {
     expect(() =>
       parseTeamState({
+        accountRecoveryRequests: [],
         auditEvents: [],
+        credentials: [],
         invitations: [
           {
             createdAt: "2026-07-05T00:00:00.000Z",
@@ -380,9 +421,194 @@ describe("FileTeamStore", () => {
     });
   });
 
+  it("creates and consumes account recovery requests without persisting raw tokens", async () => {
+    const teamFile = await createTempTeamFile();
+    const openRoadState = createInitialOpenRoadState();
+    const store = new FileTeamStore(teamFile);
+    await store.load(openRoadState);
+    const created = await store.createInvitation(openRoadState, {
+      createdByActorId: "local-owner",
+      email: "recover@example.com",
+      role: "Contributor",
+      workspaceId: "acme"
+    });
+    const accepted = await store.acceptInvitation(openRoadState, {
+      acceptedName: "Recover User",
+      token: created.acceptToken
+    });
+    await store.setAccountPassword(openRoadState, {
+      password: "original password value",
+      userId: accepted.user.id
+    });
+
+    const first = await store.createAccountRecoveryRequest(openRoadState, {
+      email: "RECOVER@example.com",
+      workspaceId: "acme"
+    });
+    const second = await store.createAccountRecoveryRequest(openRoadState, {
+      email: "recover@example.com",
+      workspaceId: "acme"
+    });
+    const persistedAfterCreate = await readFile(teamFile, "utf8");
+
+    expect(first.recoveryToken).toMatch(/^orec_/);
+    expect(second.recoveryToken).toMatch(/^orec_/);
+    expect(first.recoveryToken).not.toBe(second.recoveryToken);
+    expect("tokenHash" in first.recovery).toBe(false);
+    expect(persistedAfterCreate).not.toContain(first.recoveryToken);
+    expect(persistedAfterCreate).not.toContain(second.recoveryToken);
+    await expect(
+      store.completeAccountRecovery(openRoadState, {
+        password: "recovered password value",
+        token: first.recoveryToken
+      })
+    ).rejects.toMatchObject({ code: "invalid_request" });
+
+    const completed = await store.completeAccountRecovery(openRoadState, {
+      password: "recovered password value",
+      token: second.recoveryToken
+    });
+    const authenticated = await store.authenticateAccountPassword(openRoadState, {
+      email: "recover@example.com",
+      password: "recovered password value"
+    });
+    const persistedAfterComplete = await readFile(teamFile, "utf8");
+
+    expect(completed).toMatchObject({
+      membership: {
+        workspaceId: "acme"
+      },
+      recovery: {
+        email: "recover@example.com",
+        status: "consumed"
+      },
+      user: {
+        email: "recover@example.com"
+      }
+    });
+    expect(authenticated.membership.workspaceId).toBe("acme");
+    await expect(
+      store.authenticateAccountPassword(openRoadState, {
+        email: "recover@example.com",
+        password: "original password value"
+      })
+    ).rejects.toMatchObject({ code: "invalid_request" });
+    await expect(
+      store.completeAccountRecovery(openRoadState, {
+        password: "another recovered password",
+        token: second.recoveryToken
+      })
+    ).rejects.toMatchObject({ code: "invalid_request" });
+    expect(persistedAfterComplete).not.toContain(second.recoveryToken);
+    expect(persistedAfterComplete).not.toContain("recovered password value");
+    expect(persistedAfterComplete).not.toContain("original password value");
+  });
+
+  it("rejects unavailable or ambiguous account recovery requests", async () => {
+    const teamFile = await createTempTeamFile();
+    const openRoadState = createInitialOpenRoadState();
+    const store = new FileTeamStore(teamFile);
+    await store.load(openRoadState);
+
+    await expect(
+      store.createAccountRecoveryRequest(openRoadState, {
+        email: "missing@example.com"
+      })
+    ).rejects.toMatchObject({ code: "invalid_request" });
+
+    const invite = await store.createInvitation(openRoadState, {
+      createdByActorId: "local-owner",
+      email: "no-password@example.com",
+      role: "Viewer",
+      workspaceId: "acme"
+    });
+    await store.acceptInvitation(openRoadState, { token: invite.acceptToken });
+
+    await expect(
+      store.createAccountRecoveryRequest(openRoadState, {
+        email: "no-password@example.com",
+        workspaceId: "acme"
+      })
+    ).rejects.toMatchObject({ code: "invalid_request" });
+
+    await store.setAccountPassword(openRoadState, {
+      password: "owner recovery password",
+      requireCurrentPassword: false,
+      userId: "local-owner"
+    });
+    await expect(
+      store.createAccountRecoveryRequest(openRoadState, {
+        email: "owner@openroad.local"
+      })
+    ).rejects.toMatchObject({
+      code: "invalid_request",
+      message: "Workspace id is required for this account."
+    });
+    await expect(
+      store.createAccountRecoveryRequest(openRoadState, {
+        email: "owner@openroad.local",
+        workspaceId: "missing"
+      })
+    ).rejects.toMatchObject({ code: "not_found" });
+  });
+
+  it("records account recovery delivery metadata with redacted bounded errors", async () => {
+    const teamFile = await createTempTeamFile();
+    const openRoadState = createInitialOpenRoadState();
+    const store = new FileTeamStore(teamFile);
+    await store.load(openRoadState);
+    const invite = await store.createInvitation(openRoadState, {
+      createdByActorId: "local-owner",
+      email: "delivery-recovery@example.com",
+      role: "Contributor",
+      workspaceId: "acme"
+    });
+    const accepted = await store.acceptInvitation(openRoadState, { token: invite.acceptToken });
+    await store.setAccountPassword(openRoadState, {
+      password: "delivery recovery password",
+      userId: accepted.user.id
+    });
+    const recovery = await store.createAccountRecoveryRequest(openRoadState, {
+      email: "delivery-recovery@example.com",
+      workspaceId: "acme"
+    });
+
+    const sent = await store.recordAccountRecoveryDelivery(openRoadState, {
+      deliveryAttemptedAt: "2026-07-10T10:00:00.000Z",
+      deliveryChannel: "jsonl-file",
+      deliveryMessageId: "jsonl:recovery:1",
+      deliveryStatus: "sent",
+      recoveryRequestId: recovery.recovery.id
+    });
+    const failed = await store.recordAccountRecoveryDelivery(openRoadState, {
+      deliveryAttemptedAt: "2026-07-10T10:01:00.000Z",
+      deliveryChannel: "jsonl-file",
+      deliveryError: `reset=${recovery.recoveryToken} password=raw-password ${"x".repeat(300)}`,
+      deliveryStatus: "failed",
+      recoveryRequestId: recovery.recovery.id
+    });
+    const persistedText = await readFile(teamFile, "utf8");
+
+    expect(sent).toMatchObject({
+      deliveryChannel: "jsonl-file",
+      deliveryMessageId: "jsonl:recovery:1",
+      deliveryStatus: "sent"
+    });
+    expect(failed).toMatchObject({
+      deliveryChannel: "jsonl-file",
+      deliveryStatus: "failed"
+    });
+    expect(failed.deliveryError).toHaveLength(240);
+    expect(failed.deliveryError).not.toContain(recovery.recoveryToken);
+    expect(failed.deliveryError).not.toContain("raw-password");
+    expect(persistedText).not.toContain(recovery.recoveryToken);
+    expect(persistedText).not.toContain("raw-password");
+  });
+
   it("rejects malformed account credentials", () => {
     expect(() =>
       parseTeamState({
+        accountRecoveryRequests: [],
         auditEvents: [],
         credentials: [
           {
@@ -527,6 +753,7 @@ describe("FileTeamStore", () => {
       JSON.stringify(
         {
           auditEvents: [],
+          accountRecoveryRequests: [],
           credentials: [],
           invitations: [],
           memberships: [

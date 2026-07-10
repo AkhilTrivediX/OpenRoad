@@ -110,6 +110,12 @@ import {
   type NotificationDeliveryAdapter
 } from "./notifications.js";
 import {
+  createAccountRecoveryDeliveryAdapterFromEnv,
+  resolveAccountRecoveryPublicBaseUrl,
+  type AccountRecoveryDeliveryAdapter,
+  type AccountRecoveryDeliveryAttemptSummary
+} from "./account-recovery-delivery.js";
+import {
   createInvitationDeliveryAdapterFromEnv,
   resolveInvitationDeliveryPublicBaseUrl,
   type InvitationDeliveryAdapter,
@@ -171,6 +177,7 @@ import {
 import {
   TeamStoreError,
   type AuditEvent,
+  type TeamAccountRecoverySummary,
   type TeamInvitationSummary,
   type TeamWorkspaceMemberSummary,
   type TeamStore
@@ -183,6 +190,8 @@ import {
 } from "./session-store.js";
 
 type CreateOpenRoadServerOptions = {
+  accountRecoveryDeliveryAdapter?: AccountRecoveryDeliveryAdapter;
+  accountRecoveryPublicBaseUrl?: string;
   auth?: AuthOptions;
   distDir?: string;
   githubAppClient?: GitHubAppClient;
@@ -315,6 +324,8 @@ export function createPortalRateLimiterFromEnv(env = process.env): PortalRateLim
 }
 
 export function createOpenRoadServer({
+  accountRecoveryDeliveryAdapter = createAccountRecoveryDeliveryAdapterFromEnv(),
+  accountRecoveryPublicBaseUrl = resolveAccountRecoveryPublicBaseUrl(),
   auth,
   distDir = resolve("dist"),
   githubAppConfig = githubAppConfigFromEnv(),
@@ -382,6 +393,8 @@ export function createOpenRoadServer({
           configuredIntegrationSyncProviders,
           jiraOAuthConfig,
           linearOAuthConfig,
+          accountRecoveryDeliveryAdapter,
+          accountRecoveryPublicBaseUrl,
           invitationDeliveryAdapter,
           invitationDeliveryPublicBaseUrl,
           notificationDeliveryAdapter,
@@ -482,6 +495,8 @@ async function handleApiRequest(
   configuredIntegrationSyncProviders: Set<IntegrationProvider>,
   jiraOAuthConfig: JiraOAuthConfig,
   linearOAuthConfig: LinearOAuthConfig,
+  accountRecoveryDeliveryAdapter: AccountRecoveryDeliveryAdapter | undefined,
+  accountRecoveryPublicBaseUrl: string | undefined,
   invitationDeliveryAdapter: InvitationDeliveryAdapter | undefined,
   invitationDeliveryPublicBaseUrl: string | undefined,
   notificationDeliveryAdapter: NotificationDeliveryAdapter | undefined,
@@ -533,6 +548,32 @@ async function handleApiRequest(
 
   if (requestUrl.pathname === "/api/openroad/auth/password/login") {
     await handlePasswordLoginRequest(request, response, store, access, auth, sessionStore, teamStore);
+    return;
+  }
+
+  if (requestUrl.pathname === "/api/openroad/account/recovery/request") {
+    await handleAccountRecoveryRequest(
+      request,
+      response,
+      store,
+      access,
+      teamStore,
+      accountRecoveryDeliveryAdapter,
+      accountRecoveryPublicBaseUrl
+    );
+    return;
+  }
+
+  if (requestUrl.pathname === "/api/openroad/account/recovery/confirm") {
+    await handleAccountRecoveryConfirmRequest(
+      request,
+      response,
+      store,
+      access,
+      auth,
+      sessionStore,
+      teamStore
+    );
     return;
   }
 
@@ -1283,6 +1324,166 @@ async function handlePasswordLoginRequest(
   }
 }
 
+async function handleAccountRecoveryRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  store: OpenRoadStore,
+  access: AccessContext,
+  teamStore: TeamStore | undefined,
+  accountRecoveryDeliveryAdapter: AccountRecoveryDeliveryAdapter | undefined,
+  accountRecoveryPublicBaseUrl: string | undefined
+) {
+  if (request.method !== "POST") {
+    writeApiError(response, 405, "invalid_method", "This endpoint only supports POST.", access);
+    return;
+  }
+
+  try {
+    const payload = await readJsonBody(request, 8192);
+    const recoveryPayload = getAccountRecoveryRequestPayload(payload);
+
+    if (!teamStore || !accountRecoveryDeliveryAdapter || !accountRecoveryPublicBaseUrl) {
+      writeAccountRecoveryRequested(response, access);
+      return;
+    }
+
+    const current = await store.load();
+    let created: Awaited<ReturnType<TeamStore["createAccountRecoveryRequest"]>>;
+
+    try {
+      created = await teamStore.createAccountRecoveryRequest(current.state, recoveryPayload);
+    } catch (error) {
+      if (
+        error instanceof TeamStoreError &&
+        (error.code === "invalid_request" || error.code === "not_found")
+      ) {
+        writeAccountRecoveryRequested(response, access);
+        return;
+      }
+
+      throw error;
+    }
+
+    const delivery = await deliverAccountRecoveryAfterCreate({
+      adapter: accountRecoveryDeliveryAdapter,
+      configuredPublicBaseUrl: accountRecoveryPublicBaseUrl,
+      currentState: current.state,
+      recovery: created.recovery,
+      recoveryToken: created.recoveryToken,
+      teamStore,
+      workspaceId: created.membership.workspaceId
+    });
+
+    await recordAuditEvent(teamStore, current.state, access, {
+      summary: `Created account recovery request for ${created.user.email}.`,
+      type: "auth.account.recovery.request",
+      workspaceId: created.membership.workspaceId
+    });
+
+    if (delivery.status === "failed") {
+      await recordAuditEvent(teamStore, current.state, access, {
+        summary: `Account recovery delivery failed for ${created.user.email}.`,
+        type: "auth.account.recovery.delivery.failed",
+        workspaceId: created.membership.workspaceId
+      });
+    }
+
+    writeAccountRecoveryRequested(response, access);
+  } catch (error) {
+    writeKnownApiError(response, error, access);
+  }
+}
+
+async function handleAccountRecoveryConfirmRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  store: OpenRoadStore,
+  access: AccessContext,
+  auth: AuthOptions | undefined,
+  sessionStore: SessionStore | undefined,
+  teamStore: TeamStore | undefined
+) {
+  if (request.method !== "POST") {
+    writeApiError(response, 405, "invalid_method", "This endpoint only supports POST.", access);
+    return;
+  }
+
+  if (!teamStore) {
+    writeKnownApiError(
+      response,
+      new ApiRequestError("not_configured", 503, "OpenRoad team metadata store is not configured."),
+      access
+    );
+    return;
+  }
+
+  if (!sessionStore) {
+    writeKnownApiError(
+      response,
+      new ApiRequestError("not_configured", 503, "OpenRoad session storage is not configured."),
+      access
+    );
+    return;
+  }
+
+  try {
+    const payload = await readJsonBody(request, 8192);
+    const recoveryPayload = getAccountRecoveryConfirmPayload(payload);
+    const current = await store.load();
+    const result = await teamStore.completeAccountRecovery(current.state, recoveryPayload);
+    const revokedSessions = await sessionStore.revokeMemberSessionsForUser({
+      userId: result.user.id
+    });
+    const memberActor: AccessContext["actor"] = {
+      id: result.user.id,
+      role: result.membership.role,
+      type: "workspace-member",
+      workspaceId: result.membership.workspaceId
+    };
+    const session = await sessionStore.createMemberSession({
+      actor: memberActor,
+      ipAddress: request.socket.remoteAddress,
+      userAgent: getSingleHeader(request.headers, "user-agent")
+    });
+    const memberAccess: AccessContext = {
+      ...access,
+      actor: memberActor
+    };
+
+    await recordAuditEvent(teamStore, current.state, memberAccess, {
+      summary: `Completed account recovery for ${result.user.email}.`,
+      type: "auth.account.recovery.complete",
+      workspaceId: result.membership.workspaceId
+    });
+
+    writeJson(
+      response,
+      200,
+      {
+        actor: sanitizeActor(session.session.actor),
+        authenticated: true,
+        expiresAt: session.session.expiresAt,
+        membership: sanitizeMembership(result.membership),
+        recovery: sanitizeAccountRecoveryForJson(result.recovery),
+        revokedSessions,
+        status: "authenticated",
+        user: sanitizeTeamUser(result.user)
+      },
+      memberAccess,
+      {
+        "Set-Cookie": createSessionCookie(
+          session.cookieValue,
+          session.maxAgeSeconds,
+          request,
+          auth
+        )
+      }
+    );
+  } catch (error) {
+    writeKnownApiError(response, error, access);
+  }
+}
+
 async function handleAccountPasswordRequest(
   request: IncomingMessage,
   response: ServerResponse,
@@ -1657,6 +1858,77 @@ async function deliverInvitationAfterCreate({
       channel: adapter.channel,
       error: message,
       invitation: recorded,
+      status: "failed"
+    };
+  }
+}
+
+async function deliverAccountRecoveryAfterCreate({
+  adapter,
+  configuredPublicBaseUrl,
+  currentState,
+  recovery,
+  recoveryToken,
+  teamStore,
+  workspaceId
+}: {
+  adapter: AccountRecoveryDeliveryAdapter | undefined;
+  configuredPublicBaseUrl: string | undefined;
+  currentState: OpenRoadState;
+  recovery: TeamAccountRecoverySummary;
+  recoveryToken: string;
+  teamStore: TeamStore;
+  workspaceId: string;
+}): Promise<AccountRecoveryDeliveryAttemptSummary & { recovery: TeamAccountRecoverySummary }> {
+  if (!adapter || !configuredPublicBaseUrl) {
+    return {
+      recovery,
+      status: "not_configured"
+    };
+  }
+
+  const attemptedAt = new Date().toISOString();
+  const workspaceName =
+    currentState.workspaces.find((workspace) => workspace.id === workspaceId)?.name ?? workspaceId;
+
+  try {
+    const result = await adapter.deliver(recovery, {
+      baseUrl: configuredPublicBaseUrl,
+      deliveredAt: attemptedAt,
+      recoveryToken,
+      workspaceId,
+      workspaceName
+    });
+    const recorded = await teamStore.recordAccountRecoveryDelivery(currentState, {
+      deliveryAttemptedAt: attemptedAt,
+      deliveryChannel: adapter.channel,
+      deliveryMessageId: sanitizeDeliveryMessageId(result.messageId),
+      deliveryStatus: "sent",
+      recoveryRequestId: recovery.id
+    });
+
+    return {
+      attemptedAt,
+      channel: adapter.channel,
+      messageId: sanitizeDeliveryMessageId(result.messageId),
+      recovery: recorded,
+      status: "sent"
+    };
+  } catch (error) {
+    const message = safeExternalErrorMessage(error, "Account recovery delivery failed.");
+    const recorded = await teamStore.recordAccountRecoveryDelivery(currentState, {
+      deliveryAttemptedAt: attemptedAt,
+      deliveryChannel: adapter.channel,
+      deliveryError: message,
+      deliveryStatus: "failed",
+      recoveryRequestId: recovery.id
+    });
+
+    return {
+      attemptedAt,
+      channel: adapter.channel,
+      error: message,
+      recovery: recorded,
       status: "failed"
     };
   }
@@ -4039,11 +4311,11 @@ function redactSensitiveText(value: string) {
   return value
     .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [redacted]")
     .replace(
-      /([?&](?:accept_token|access_token|refresh_token|invite|token|jwt|secret|client_secret|authorization)=)[^&\s]+/gi,
+      /([?&](?:accept_token|access_token|recovery|reset|refresh_token|invite|token|jwt|secret|client_secret|authorization)=)[^&\s]+/gi,
       "$1[redacted]"
     )
     .replace(
-      /((?:accept[_-]?token|access[_-]?token|refresh[_-]?token|invite|token|secret|client[_-]?secret|password|authorization)\s*[:=]\s*)[^\s,;]+/gi,
+      /((?:accept[_-]?token|access[_-]?token|recovery|reset|refresh[_-]?token|invite|token|secret|client[_-]?secret|password|authorization)\s*[:=]\s*)[^\s,;]+/gi,
       "$1[redacted]"
     )
     .replace(/\b[\w.-]*(?:token|secret|password|credential|authorization)[\w.-]*\b/gi, "[redacted]")
@@ -6144,6 +6416,44 @@ function getPasswordLoginPayload(payload: unknown) {
   };
 }
 
+function getAccountRecoveryRequestPayload(payload: unknown) {
+  if (!isRecord(payload)) {
+    throw new ApiRequestError("invalid_request", 400, "Account recovery payload must be an object.");
+  }
+
+  const email = getBoundedText(payload.email, 254);
+  if (!email) {
+    throw new ApiRequestError("invalid_request", 400, "Email is required.");
+  }
+
+  return {
+    email,
+    workspaceId: getBoundedText(payload.workspaceId, 160)
+  };
+}
+
+function getAccountRecoveryConfirmPayload(payload: unknown) {
+  if (!isRecord(payload)) {
+    throw new ApiRequestError(
+      "invalid_request",
+      400,
+      "Account recovery confirmation payload must be an object."
+    );
+  }
+
+  const token = getBoundedText(payload.token, 512) ?? getBoundedText(payload.recoveryToken, 512);
+  const password = getPasswordText(payload.password);
+  if (!token || !password) {
+    throw new ApiRequestError("invalid_request", 400, "Recovery token and password are required.");
+  }
+
+  return {
+    password,
+    token,
+    workspaceId: getBoundedText(payload.workspaceId, 160)
+  };
+}
+
 function getAccountPasswordPayload(payload: unknown) {
   if (!isRecord(payload)) {
     throw new ApiRequestError("invalid_request", 400, "Account password payload must be an object.");
@@ -6231,6 +6541,10 @@ function sanitizeInvitationForJson(invitation: TeamInvitationSummary) {
   return { ...invitation };
 }
 
+function sanitizeAccountRecoveryForJson(recovery: TeamAccountRecoverySummary) {
+  return { ...recovery };
+}
+
 function sanitizeWorkspaceMemberForJson(member: TeamWorkspaceMemberSummary) {
   return { ...member };
 }
@@ -6250,6 +6564,19 @@ function sanitizeTeamUser(user: { email: string; id: string; name: string }) {
     id: user.id,
     name: user.name
   };
+}
+
+function writeAccountRecoveryRequested(response: ServerResponse, access: AccessContext) {
+  writeJson(
+    response,
+    200,
+    {
+      message:
+        "If this account can be recovered, OpenRoad will send password reset instructions.",
+      status: "requested"
+    },
+    access
+  );
 }
 
 function createSessionCookie(

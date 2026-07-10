@@ -4,10 +4,12 @@ import { createInitialOpenRoadState } from "../domain/openroad";
 import {
   OpenRoadServerAuthRequiredError,
   acceptOpenRoadInvitationSession,
+  confirmOpenRoadAccountRecovery,
   loadServerOpenRoadSession,
   loadServerOpenRoadState,
   loginOpenRoadAccount,
   loginOpenRoadOwner,
+  requestOpenRoadAccountRecovery,
   saveServerOpenRoadState,
   setOpenRoadAccountPassword
 } from "./openroadServer";
@@ -230,6 +232,51 @@ describe("server OpenRoad persistence", () => {
     expect(JSON.parse(String(passwordSetInit.body))).toEqual({
       currentPassword: "member password value",
       password: "member password value next"
+    });
+  });
+
+  it("requests and confirms account recovery with same-origin credentials", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ message: "Check recovery handoff.", status: "requested" }))
+      .mockResolvedValueOnce(jsonResponse({ authenticated: true, status: "authenticated" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const requested = await requestOpenRoadAccountRecovery("member@example.com", "acme");
+    const confirmed = await confirmOpenRoadAccountRecovery(
+      "orec_secret-token",
+      "new recovered password",
+      "acme"
+    );
+
+    expect(requested.status).toBe("requested");
+    expect(confirmed.authenticated).toBe(true);
+    const requestInit = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    const confirmInit = fetchMock.mock.calls[1]?.[1] as RequestInit;
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/openroad/account/recovery/request",
+      expect.objectContaining({
+        credentials: "same-origin",
+        method: "POST"
+      })
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/openroad/account/recovery/confirm",
+      expect.objectContaining({
+        credentials: "same-origin",
+        method: "POST"
+      })
+    );
+    expect(JSON.parse(String(requestInit.body))).toEqual({
+      email: "member@example.com",
+      workspaceId: "acme"
+    });
+    expect(JSON.parse(String(confirmInit.body))).toEqual({
+      password: "new recovered password",
+      token: "orec_secret-token",
+      workspaceId: "acme"
     });
   });
 

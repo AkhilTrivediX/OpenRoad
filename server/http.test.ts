@@ -19,6 +19,10 @@ import {
 } from "../src/domain/openroad";
 import { InMemoryPortalRateLimiter, createOpenRoadServer, type PortalRateLimiter } from "./http";
 import {
+  JsonlAccountRecoveryDeliveryAdapter,
+  type AccountRecoveryDeliveryAdapter
+} from "./account-recovery-delivery";
+import {
   FileIntegrationStore,
   createIntegrationCredentialSecretContext
 } from "./integrations";
@@ -1069,6 +1073,214 @@ describe("OpenRoad production server", () => {
       type: "workspace-member",
       workspaceId: "maintainer"
     });
+  });
+
+  it("requests and confirms account recovery without exposing tokens or passwords", async () => {
+    const recoveryFile = join(
+      await mkdtemp(join(tmpdir(), "openroad-account-recovery-http-")),
+      "recoveries.jsonl"
+    );
+    const { sessionFile, teamFile, url } = await startTestServer({
+      accountRecoveryDeliveryAdapter: new JsonlAccountRecoveryDeliveryAdapter(recoveryFile),
+      accountRecoveryPublicBaseUrl: "https://openroad.example.com/recover",
+      auth: { adminToken: "secret", singleUserMode: false, trustProxyHeaders: true }
+    });
+    const invite = await fetchJson(`${url}/api/openroad/workspaces/acme/invitations`, {
+      body: JSON.stringify({
+        email: "recover-http@example.com",
+        name: "Recover HTTP",
+        role: "Contributor"
+      }),
+      headers: {
+        ...workspaceActorHeaders("acme", "Owner"),
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    const invitationSession = await fetchJson(`${url}/api/openroad/invitations/session`, {
+      body: JSON.stringify({ name: "Recover HTTP", token: invite.body.acceptToken }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const invitationCookie = cookiePair(invitationSession.headers.get("set-cookie") ?? "");
+    await fetchJson(`${url}/api/openroad/account/password`, {
+      body: JSON.stringify({ password: "original recovery password" }),
+      headers: { Cookie: invitationCookie, "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const passwordLogin = await fetchJson(`${url}/api/openroad/auth/password/login`, {
+      body: JSON.stringify({
+        email: "recover-http@example.com",
+        password: "original recovery password"
+      }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const passwordCookie = cookiePair(passwordLogin.headers.get("set-cookie") ?? "");
+
+    const unknown = await fetchJson(`${url}/api/openroad/account/recovery/request`, {
+      body: JSON.stringify({ email: "unknown@example.com" }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const known = await fetchJson(`${url}/api/openroad/account/recovery/request`, {
+      body: JSON.stringify({ email: "RECOVER-HTTP@example.com", workspaceId: "acme" }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const recoveryRecords = (await readFile(recoveryFile, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const recoveryToken = recoveryRecords[0].recoveryToken as string;
+    const teamAfterRequest = await readFile(teamFile, "utf8");
+    const confirm = await fetchJson(`${url}/api/openroad/account/recovery/confirm`, {
+      body: JSON.stringify({
+        password: "new recovered password",
+        token: recoveryToken
+      }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const recoveryCookie = cookiePair(confirm.headers.get("set-cookie") ?? "");
+    const staleInvitationSession = await fetchJson(`${url}/api/openroad/workspaces/acme`, {
+      headers: { Cookie: invitationCookie }
+    });
+    const stalePasswordSession = await fetchJson(`${url}/api/openroad/workspaces/acme`, {
+      headers: { Cookie: passwordCookie }
+    });
+    const recoveredWorkspace = await fetchJson(`${url}/api/openroad/workspaces/acme`, {
+      headers: { Cookie: recoveryCookie }
+    });
+    const oldPasswordLogin = await fetchJson(`${url}/api/openroad/auth/password/login`, {
+      body: JSON.stringify({
+        email: "recover-http@example.com",
+        password: "original recovery password"
+      }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const newPasswordLogin = await fetchJson(`${url}/api/openroad/auth/password/login`, {
+      body: JSON.stringify({
+        email: "recover-http@example.com",
+        password: "new recovered password"
+      }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const replay = await fetchJson(`${url}/api/openroad/account/recovery/confirm`, {
+      body: JSON.stringify({
+        password: "another new password",
+        token: recoveryToken
+      }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const persistedTeam = await readFile(teamFile, "utf8");
+    const persistedSessions = await readFile(sessionFile, "utf8");
+    const audit = await fetchJson(`${url}/api/openroad/audit-events`, {
+      headers: workspaceActorHeaders("acme", "Owner")
+    });
+
+    expect(unknown.status).toBe(200);
+    expect(known.status).toBe(200);
+    expect(known.body).toMatchObject({
+      apiVersion: unknown.body.apiVersion,
+      message: unknown.body.message,
+      status: unknown.body.status
+    });
+    expect(recoveryRecords).toHaveLength(1);
+    expect(recoveryRecords[0]).toMatchObject({
+      email: "recover-http@example.com",
+      recoveryUrl: `https://openroad.example.com/recover?recovery=${recoveryToken}`,
+      workspaceId: "acme",
+      workspaceName: "Acme OSS"
+    });
+    expect(recoveryToken).toMatch(/^orec_/);
+    expect(teamAfterRequest).not.toContain(recoveryToken);
+    expect(confirm.status).toBe(200);
+    expect(confirm.headers.get("set-cookie")).toContain("HttpOnly");
+    expect(confirm.body).toMatchObject({
+      actor: {
+        role: "Contributor",
+        type: "workspace-member",
+        workspaceId: "acme"
+      },
+      authenticated: true,
+      recovery: {
+        status: "consumed"
+      },
+      revokedSessions: 2,
+      status: "authenticated",
+      user: {
+        email: "recover-http@example.com"
+      }
+    });
+    expect(staleInvitationSession.status).toBe(403);
+    expect(stalePasswordSession.status).toBe(403);
+    expect(recoveredWorkspace.status).toBe(200);
+    expect(oldPasswordLogin.status).toBe(400);
+    expect(newPasswordLogin.status).toBe(200);
+    expect(replay.status).toBe(400);
+    expect(JSON.stringify(confirm.body)).not.toContain(recoveryToken);
+    expect(JSON.stringify(confirm.body)).not.toContain("new recovered password");
+    expect(JSON.stringify(confirm.body)).not.toContain("passwordHash");
+    expect(persistedTeam).not.toContain(recoveryToken);
+    expect(persistedTeam).not.toContain("new recovered password");
+    expect(persistedTeam).not.toContain("original recovery password");
+    expect(persistedSessions).not.toContain(recoveryToken);
+    expect(persistedSessions).not.toContain("new recovered password");
+    expect(JSON.stringify(audit.body)).not.toContain(recoveryToken);
+    expect(JSON.stringify(audit.body)).not.toContain("new recovered password");
+  });
+
+  it("keeps account recovery requests generic and token-free when delivery is disabled", async () => {
+    const { teamFile, url } = await startTestServer({
+      auth: { adminToken: "secret", singleUserMode: false }
+    });
+    const setOwnerPassword = await fetchJson(`${url}/api/openroad/account/password`, {
+      body: JSON.stringify({ password: "owner recovery password" }),
+      headers: {
+        Authorization: "Bearer secret",
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+
+    const unknown = await fetchJson(`${url}/api/openroad/account/recovery/request`, {
+      body: JSON.stringify({ email: "unknown@example.com" }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const knownDisabled = await fetchJson(`${url}/api/openroad/account/recovery/request`, {
+      body: JSON.stringify({ email: "owner@openroad.local", workspaceId: "acme" }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const ambiguous = await fetchJson(`${url}/api/openroad/account/recovery/request`, {
+      body: JSON.stringify({ email: "owner@openroad.local" }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const persisted = JSON.parse(await readFile(teamFile, "utf8")) as {
+      accountRecoveryRequests: unknown[];
+    };
+
+    expect(setOwnerPassword.status).toBe(200);
+    expect(unknown.status).toBe(200);
+    expect(knownDisabled.status).toBe(200);
+    expect(ambiguous.status).toBe(200);
+    expect(knownDisabled.body).toMatchObject({
+      apiVersion: unknown.body.apiVersion,
+      message: unknown.body.message,
+      status: unknown.body.status
+    });
+    expect(ambiguous.body).toMatchObject({
+      apiVersion: unknown.body.apiVersion,
+      message: unknown.body.message,
+      status: unknown.body.status
+    });
+    expect(persisted.accountRecoveryRequests).toEqual([]);
   });
 
   it("manages workspace members with owner-only access and secret-free responses", async () => {
@@ -4837,6 +5049,8 @@ async function startTestServer(
     githubAppClient?: GitHubAppClient;
     githubAppConfig?: GitHubAppConfig;
     integrationSyncWorker?: IntegrationSyncWorker;
+    accountRecoveryDeliveryAdapter?: AccountRecoveryDeliveryAdapter;
+    accountRecoveryPublicBaseUrl?: string;
     invitationDeliveryAdapter?: InvitationDeliveryAdapter;
     invitationDeliveryPublicBaseUrl?: string;
     jiraApiClient?: JiraApiClient;
@@ -4866,6 +5080,8 @@ async function startTestServer(
   const teamStore = new FileTeamStore(teamFile);
   await store.load();
   const server = createOpenRoadServer({
+    accountRecoveryDeliveryAdapter: options.accountRecoveryDeliveryAdapter,
+    accountRecoveryPublicBaseUrl: options.accountRecoveryPublicBaseUrl,
     auth: options.auth,
     distDir,
     githubAppClient: options.githubAppClient,

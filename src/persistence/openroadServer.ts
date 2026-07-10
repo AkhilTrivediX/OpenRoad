@@ -51,6 +51,16 @@ type AccountPasswordSetResponse = {
   status: string;
 };
 
+type AccountRecoveryRequestResponse = {
+  message: string;
+  status: string;
+};
+
+type AccountRecoveryConfirmResponse = {
+  authenticated: boolean;
+  status: string;
+};
+
 type ServerWorkspaceListResponse = {
   workspaces?: Array<{ id?: string }>;
 };
@@ -200,6 +210,36 @@ export async function setOpenRoadAccountPassword(password: string, currentPasswo
     method: "POST"
   });
   return (await readJsonResponse(response)) as AccountPasswordSetResponse;
+}
+
+export async function requestOpenRoadAccountRecovery(email: string, workspaceId = "") {
+  const response = await fetch("/api/openroad/account/recovery/request", {
+    body: JSON.stringify({ email, ...(workspaceId ? { workspaceId } : {}) }),
+    credentials: "same-origin",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json"
+    },
+    method: "POST"
+  });
+  return (await readJsonResponse(response)) as AccountRecoveryRequestResponse;
+}
+
+export async function confirmOpenRoadAccountRecovery(
+  token: string,
+  password: string,
+  workspaceId = ""
+) {
+  const response = await fetch("/api/openroad/account/recovery/confirm", {
+    body: JSON.stringify({ token, password, ...(workspaceId ? { workspaceId } : {}) }),
+    credentials: "same-origin",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json"
+    },
+    method: "POST"
+  });
+  return (await readJsonResponse(response)) as AccountRecoveryConfirmResponse;
 }
 
 export async function saveServerOpenRoadState(state: OpenRoadState) {

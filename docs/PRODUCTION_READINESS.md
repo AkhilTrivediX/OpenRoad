@@ -168,12 +168,12 @@ OpenRoad releases must eventually include:
 
 ## Current Readiness Debt
 
-These are known production gaps after the invitation provider delivery foundation.
+These are known production gaps after the account recovery foundation.
 
 - Some UI orchestration still lives inside `App.tsx`; the first helper/module extraction is complete, but component-level splitting remains future work.
 - Product, integration, and team persistence are file-backed, not managed SQL with online migrations.
-- Full-state APIs are protected by single-user/admin-token mode, and admin-token deployments now have httpOnly owner browser sessions plus invitation-token and account-password member browser sessions scoped to one workspace and role.
-- Persistent workspace membership, audit events, owner browser sessions, invitation management UI, member invite sessions, JSONL invitation delivery handoff, HTTP invitation provider delivery, account password login, and owner member role/deactivation controls exist, but built-in SMTP delivery, provider-specific invitation templates, OAuth login, email verification, bulk member operations, account recovery, MFA/passkeys, SSO, and hosted account administration are not implemented.
+- Full-state APIs are protected by single-user/admin-token mode, and admin-token deployments now have httpOnly owner browser sessions plus invitation-token, account-password, and account-recovery member browser sessions scoped to one workspace and role.
+- Persistent workspace membership, audit events, owner browser sessions, invitation management UI, member invite sessions, JSONL invitation delivery handoff, HTTP invitation provider delivery, account password login, JSONL account recovery handoff, and owner member role/deactivation controls exist, but built-in SMTP delivery, provider-specific invitation/recovery templates, OAuth login, email verification, bulk member operations, MFA/passkeys, SSO, and hosted account administration are not implemented.
 - Backup/restore, local self-host smoke commands, and release candidate manifests exist, but published Docker images and hosted release promotion are not implemented.
 - Observability is limited to process logs; structured operational events and dashboards are pending.
 - Public portal write controls, persisted anonymous visitor vote identity, idempotent vote dedupe, and process-local rate limits exist, but notification preferences, CAPTCHA/external bot checks, and distributed abuse controls are pending.
@@ -183,13 +183,13 @@ These are known production gaps after the invitation provider delivery foundatio
 
 ## Next Production Move
 
-Next branch: `feat/account-recovery-foundation`
+Next branch: `feat/provider-connect-disconnect-ui`
 
 Purpose:
 
-- Add a production-safe account recovery foundation for existing team users without weakening invitation, owner-session, or member-session boundaries.
-- Keep recovery tokens hashed, bounded, expiring, auditable, and delivery-provider-neutral.
-- Preserve the existing account password, invitation session, member management, and self-host admin-token workflows.
+- Make GitHub, Linear, and Jira connection management usable from Settings without requiring direct API scripting.
+- Keep provider credentials server-only, encrypted, scoped, and revocable while presenting only safe installation/credential metadata in the browser.
+- Add explicit disconnect confirmations that preserve OpenRoad source-of-truth data, deactivate provider credentials/installations, and keep already-linked requests intelligible.
 - Preserve the existing production gate: feature branch, test plan first, focused tests, `pnpm check`, browser QA when UI changes, smoke test, audit, merge, then push.
 
 Linear/Jira webhooks, provider write-back, OAuth callback exchange, direct provider notification delivery, conflict UI, SSO/MFA, bulk member operations, and hosted account management remain hardening work that should stay behind server-only secret management, background job controls, and/or explicit delivery infrastructure.

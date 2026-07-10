@@ -6,11 +6,14 @@ import { promisify } from "node:util";
 import type { OpenRoadState } from "../src/domain/openroad.js";
 import type { OpenRoadActor, WorkspaceRole } from "./access.js";
 
-export const openRoadTeamSchemaVersion = 4;
+export const openRoadTeamSchemaVersion = 5;
 
+const teamSchemaVersionWithAccountCredentials = 4;
 const teamSchemaVersionWithInvitationDelivery = 3;
 const teamSchemaVersionWithInvitations = 2;
 const teamSchemaVersionWithoutInvitations = 1;
+const defaultAccountRecoveryTtlMs = 1000 * 60 * 60;
+const accountRecoveryRetentionMs = 1000 * 60 * 60 * 24 * 30;
 const defaultInvitationTtlMs = 1000 * 60 * 60 * 24 * 14;
 const accountPasswordAlgorithm = "scrypt-v1";
 const scryptAsync = promisify(scryptCallback);
@@ -60,6 +63,7 @@ export type TeamWorkspaceMemberSummary = {
 
 export type TeamInvitationStatus = "accepted" | "expired" | "pending" | "revoked";
 export type TeamInvitationDeliveryStatus = "failed" | "sent";
+export type TeamAccountRecoveryStatus = "consumed" | "expired" | "pending";
 
 export type TeamInvitation = {
   acceptedAt?: string;
@@ -86,6 +90,27 @@ export type TeamInvitationSummary = Omit<TeamInvitation, "tokenHash"> & {
   status: TeamInvitationStatus;
 };
 
+export type TeamAccountRecoveryRequest = {
+  consumedAt?: string;
+  consumedWorkspaceId?: string;
+  createdAt: string;
+  deliveryAttemptedAt?: string;
+  deliveryChannel?: string;
+  deliveryError?: string;
+  deliveryMessageId?: string;
+  deliveryStatus?: TeamInvitationDeliveryStatus;
+  email: string;
+  expiresAt: string;
+  id: string;
+  tokenHash: string;
+  userId: string;
+  workspaceId?: string;
+};
+
+export type TeamAccountRecoverySummary = Omit<TeamAccountRecoveryRequest, "tokenHash"> & {
+  status: TeamAccountRecoveryStatus;
+};
+
 export type AuditEvent = {
   actorId: string;
   actorType: OpenRoadActor["type"];
@@ -98,6 +123,7 @@ export type AuditEvent = {
 };
 
 export type TeamState = {
+  accountRecoveryRequests: TeamAccountRecoveryRequest[];
   auditEvents: AuditEvent[];
   credentials: TeamAccountCredential[];
   invitations: TeamInvitation[];
@@ -115,6 +141,7 @@ export type TeamStoreLoadResult = {
 };
 
 export type TeamStoreSeedOptions = {
+  accountRecoveryTtlMs?: number;
   invitationTtlMs?: number;
   ownerEmail?: string;
   ownerName?: string;
@@ -174,6 +201,27 @@ export type AuthenticateAccountPasswordInput = {
   workspaceId?: string;
 };
 
+export type CreateAccountRecoveryRequestInput = {
+  email: string;
+  expiresAt?: string;
+  workspaceId?: string;
+};
+
+export type RecordAccountRecoveryDeliveryInput = {
+  deliveryAttemptedAt: string;
+  deliveryChannel: string;
+  deliveryError?: string;
+  deliveryMessageId?: string;
+  deliveryStatus: TeamInvitationDeliveryStatus;
+  recoveryRequestId: string;
+};
+
+export type CompleteAccountRecoveryInput = {
+  password: string;
+  token: string;
+  workspaceId?: string;
+};
+
 export type CreateTeamInvitationResult = {
   acceptToken: string;
   invitation: TeamInvitationSummary;
@@ -197,6 +245,20 @@ export type AuthenticateAccountPasswordResult = {
   user: TeamUser;
 };
 
+export type CreateAccountRecoveryRequestResult = {
+  recovery: TeamAccountRecoverySummary;
+  recoveryToken: string;
+  membership: WorkspaceMembership;
+  user: TeamUser;
+};
+
+export type CompleteAccountRecoveryResult = {
+  credential: TeamAccountCredentialSummary;
+  membership: WorkspaceMembership;
+  recovery: TeamAccountRecoverySummary;
+  user: TeamUser;
+};
+
 export type UpdateWorkspaceMemberRoleResult = {
   member: TeamWorkspaceMemberSummary;
 };
@@ -214,6 +276,14 @@ export type TeamStore = {
     openRoadState: OpenRoadState,
     input: AuthenticateAccountPasswordInput
   ): Promise<AuthenticateAccountPasswordResult>;
+  completeAccountRecovery(
+    openRoadState: OpenRoadState,
+    input: CompleteAccountRecoveryInput
+  ): Promise<CompleteAccountRecoveryResult>;
+  createAccountRecoveryRequest(
+    openRoadState: OpenRoadState,
+    input: CreateAccountRecoveryRequestInput
+  ): Promise<CreateAccountRecoveryRequestResult>;
   createInvitation(
     openRoadState: OpenRoadState,
     input: CreateTeamInvitationInput
@@ -231,6 +301,10 @@ export type TeamStore = {
     openRoadState: OpenRoadState,
     input: RecordTeamInvitationDeliveryInput
   ): Promise<TeamInvitationSummary>;
+  recordAccountRecoveryDelivery(
+    openRoadState: OpenRoadState,
+    input: RecordAccountRecoveryDeliveryInput
+  ): Promise<TeamAccountRecoverySummary>;
   recordAuditEvent(
     openRoadState: OpenRoadState,
     event: Omit<AuditEvent, "createdAt" | "id">
@@ -461,6 +535,176 @@ export class FileTeamStore implements TeamStore {
     }
 
     return { membership, user };
+  }
+
+  async createAccountRecoveryRequest(
+    openRoadState: OpenRoadState,
+    input: CreateAccountRecoveryRequestInput
+  ): Promise<CreateAccountRecoveryRequestResult> {
+    const result = await this.load(openRoadState);
+    const now = new Date();
+    const email = normalizeEmail(input.email);
+    const user = result.state.users.find((item) => item.email.toLowerCase() === email);
+    const credential = user
+      ? result.state.credentials.find((item) => item.userId === user.id)
+      : undefined;
+
+    if (!user || !credential) {
+      throw new TeamStoreError("invalid_request", "Account recovery is unavailable.");
+    }
+
+    const membership = selectAccountMembership(
+      result.state,
+      openRoadState,
+      user.id,
+      input.workspaceId
+    );
+    const recoveryToken = createAccountRecoveryToken();
+    const recovery: TeamAccountRecoveryRequest = {
+      createdAt: now.toISOString(),
+      email: user.email,
+      expiresAt: normalizeFutureIsoDate(
+        input.expiresAt,
+        new Date(now.getTime() + getAccountRecoveryTtlMs(this.seedOptions)).toISOString(),
+        "Account recovery expiration must be in the future."
+      ),
+      id: `recovery-${randomUUID()}`,
+      tokenHash: hashSecret(recoveryToken),
+      userId: user.id,
+      workspaceId: membership.workspaceId
+    };
+    const state: TeamState = {
+      ...result.state,
+      accountRecoveryRequests: [
+        recovery,
+        ...pruneAccountRecoveryRequests(result.state.accountRecoveryRequests, now).map((item) =>
+          item.userId === user.id &&
+          item.workspaceId === membership.workspaceId &&
+          getAccountRecoveryStatus(item, now) === "pending"
+            ? {
+                ...item,
+                consumedAt: now.toISOString(),
+                consumedWorkspaceId: membership.workspaceId
+              }
+            : item
+        )
+      ].slice(0, 1000)
+    };
+
+    await this.writeState(state);
+
+    return {
+      membership,
+      recovery: summarizeAccountRecoveryRequest(recovery, now),
+      recoveryToken,
+      user
+    };
+  }
+
+  async recordAccountRecoveryDelivery(
+    openRoadState: OpenRoadState,
+    input: RecordAccountRecoveryDeliveryInput
+  ): Promise<TeamAccountRecoverySummary> {
+    const result = await this.load(openRoadState);
+    const now = new Date();
+    let recordedRecovery: TeamAccountRecoveryRequest | undefined;
+    const accountRecoveryRequests = result.state.accountRecoveryRequests.map((recovery) => {
+      if (recovery.id !== input.recoveryRequestId) {
+        return recovery;
+      }
+
+      recordedRecovery = {
+        ...recovery,
+        deliveryAttemptedAt: normalizeIsoDate(input.deliveryAttemptedAt, now.toISOString()),
+        deliveryChannel: boundText(input.deliveryChannel, 80) ?? "unknown",
+        deliveryError:
+          input.deliveryStatus === "failed" ? normalizeDeliveryError(input.deliveryError) : undefined,
+        deliveryMessageId: boundText(input.deliveryMessageId, 240),
+        deliveryStatus: normalizeInvitationDeliveryStatus(input.deliveryStatus)
+      };
+      return recordedRecovery;
+    });
+
+    if (!recordedRecovery) {
+      throw new TeamStoreError("not_found", "OpenRoad account recovery request was not found.");
+    }
+
+    await this.writeState({ ...result.state, accountRecoveryRequests });
+    return summarizeAccountRecoveryRequest(recordedRecovery, now);
+  }
+
+  async completeAccountRecovery(
+    openRoadState: OpenRoadState,
+    input: CompleteAccountRecoveryInput
+  ): Promise<CompleteAccountRecoveryResult> {
+    const token = boundText(input.token, 512);
+    if (!token) {
+      throw new TeamStoreError("invalid_request", "Recovery token is required.");
+    }
+
+    const result = await this.load(openRoadState);
+    const now = new Date();
+    const tokenHash = hashSecret(token);
+    const recovery = result.state.accountRecoveryRequests.find((item) =>
+      safeHashEqual(item.tokenHash, tokenHash)
+    );
+
+    if (!recovery || getAccountRecoveryStatus(recovery, now) !== "pending") {
+      throw new TeamStoreError(
+        "invalid_request",
+        "Recovery token is invalid, expired, or no longer active."
+      );
+    }
+
+    const user = result.state.users.find((item) => item.id === recovery.userId);
+    const existingCredential = user
+      ? result.state.credentials.find((item) => item.userId === user.id)
+      : undefined;
+
+    if (!user || !existingCredential) {
+      throw new TeamStoreError("invalid_state", "OpenRoad account recovery state is invalid.");
+    }
+
+    const membership = selectAccountMembership(
+      result.state,
+      openRoadState,
+      user.id,
+      input.workspaceId ?? recovery.workspaceId
+    );
+    const password = normalizeAccountPassword(input.password);
+    const credential = await createAccountCredential({
+      createdAt: existingCredential.createdAt,
+      id: existingCredential.id,
+      password,
+      updatedAt: now.toISOString(),
+      userId: user.id
+    });
+    const accountRecoveryRequests = result.state.accountRecoveryRequests.map((item) =>
+      item.id === recovery.id
+        ? {
+            ...item,
+            consumedAt: now.toISOString(),
+            consumedWorkspaceId: membership.workspaceId
+          }
+        : item
+    );
+    const credentials = result.state.credentials.map((item) =>
+      item.id === existingCredential.id ? credential : item
+    );
+    const consumedRecovery = accountRecoveryRequests.find((item) => item.id === recovery.id)!;
+
+    await this.writeState({
+      ...result.state,
+      accountRecoveryRequests,
+      credentials
+    });
+
+    return {
+      credential: summarizeAccountCredential(credential),
+      membership,
+      recovery: summarizeAccountRecoveryRequest(consumedRecovery, now),
+      user
+    };
   }
 
   async listInvitations(openRoadState: OpenRoadState, workspaceId: string) {
@@ -702,6 +946,7 @@ export function createInitialTeamState(
   const owner = createSeedOwner(seedOptions);
 
   return {
+    accountRecoveryRequests: [],
     auditEvents: [],
     credentials: [],
     invitations: [],
@@ -741,8 +986,13 @@ export function parseTeamState(value: unknown): TeamState {
     return migrateTeamStateV3(value);
   }
 
+  if (value.schemaVersion === teamSchemaVersionWithAccountCredentials) {
+    return migrateTeamStateV4(value);
+  }
+
   if (
     value.schemaVersion !== openRoadTeamSchemaVersion ||
+    !Array.isArray(value.accountRecoveryRequests) ||
     !Array.isArray(value.credentials) ||
     !Array.isArray(value.users) ||
     !Array.isArray(value.memberships) ||
@@ -753,6 +1003,7 @@ export function parseTeamState(value: unknown): TeamState {
   }
 
   if (
+    !value.accountRecoveryRequests.every(isTeamAccountRecoveryRequest) ||
     !value.credentials.every(isTeamAccountCredential) ||
     !value.users.every(isTeamUser) ||
     !value.memberships.every(isWorkspaceMembership) ||
@@ -763,6 +1014,7 @@ export function parseTeamState(value: unknown): TeamState {
   }
 
   return cloneValue({
+    accountRecoveryRequests: value.accountRecoveryRequests,
     auditEvents: value.auditEvents,
     credentials: value.credentials,
     invitations: value.invitations,
@@ -837,6 +1089,7 @@ function migrateTeamStateV1(value: Record<string, unknown>): TeamState {
   }
 
   return cloneValue({
+    accountRecoveryRequests: [],
     auditEvents: value.auditEvents,
     credentials: [],
     invitations: [],
@@ -866,6 +1119,7 @@ function migrateTeamStateV2(value: Record<string, unknown>): TeamState {
   }
 
   return cloneValue({
+    accountRecoveryRequests: [],
     auditEvents: value.auditEvents,
     credentials: [],
     invitations: value.invitations,
@@ -895,8 +1149,41 @@ function migrateTeamStateV3(value: Record<string, unknown>): TeamState {
   }
 
   return cloneValue({
+    accountRecoveryRequests: [],
     auditEvents: value.auditEvents,
     credentials: [],
+    invitations: value.invitations,
+    memberships: value.memberships,
+    schemaVersion: openRoadTeamSchemaVersion,
+    users: value.users
+  });
+}
+
+function migrateTeamStateV4(value: Record<string, unknown>): TeamState {
+  if (
+    !Array.isArray(value.users) ||
+    !Array.isArray(value.memberships) ||
+    !Array.isArray(value.auditEvents) ||
+    !Array.isArray(value.invitations) ||
+    !Array.isArray(value.credentials)
+  ) {
+    throw new TeamStoreError("invalid_state", "OpenRoad team metadata is invalid.");
+  }
+
+  if (
+    !value.users.every(isTeamUser) ||
+    !value.memberships.every(isWorkspaceMembership) ||
+    !value.auditEvents.every(isAuditEvent) ||
+    !value.invitations.every(isTeamInvitation) ||
+    !value.credentials.every(isTeamAccountCredential)
+  ) {
+    throw new TeamStoreError("invalid_state", "OpenRoad team metadata is invalid.");
+  }
+
+  return cloneValue({
+    accountRecoveryRequests: [],
+    auditEvents: value.auditEvents,
+    credentials: value.credentials,
     invitations: value.invitations,
     memberships: value.memberships,
     schemaVersion: openRoadTeamSchemaVersion,
@@ -912,6 +1199,10 @@ function assertWorkspaceExists(openRoadState: OpenRoadState, workspaceId: string
 
 function createInvitationToken() {
   return `oinv_${randomBytes(32).toString("base64url")}`;
+}
+
+function createAccountRecoveryToken() {
+  return `orec_${randomBytes(32).toString("base64url")}`;
 }
 
 function hashSecret(secret: string) {
@@ -932,6 +1223,17 @@ function summarizeInvitation(
   return {
     ...safeInvitation,
     status: getInvitationStatus(invitation, now)
+  };
+}
+
+function summarizeAccountRecoveryRequest(
+  recovery: TeamAccountRecoveryRequest,
+  now = new Date()
+): TeamAccountRecoverySummary {
+  const { tokenHash: _tokenHash, ...safeRecovery } = recovery;
+  return {
+    ...safeRecovery,
+    status: getAccountRecoveryStatus(recovery, now)
   };
 }
 
@@ -966,6 +1268,35 @@ function summarizeWorkspaceMember(
     userId: user.id,
     workspaceId: membership.workspaceId
   };
+}
+
+function selectAccountMembership(
+  state: TeamState,
+  openRoadState: OpenRoadState,
+  userId: string,
+  workspaceId: string | undefined
+) {
+  const activeMemberships = state.memberships.filter(
+    (membership) =>
+      membership.userId === userId &&
+      openRoadState.workspaces.some((workspace) => workspace.id === membership.workspaceId)
+  );
+
+  if (workspaceId) {
+    assertWorkspaceExists(openRoadState, workspaceId);
+    const membership = activeMemberships.find((item) => item.workspaceId === workspaceId);
+    if (membership) return membership;
+    throw new TeamStoreError("invalid_request", "Account recovery is unavailable.");
+  }
+
+  if (activeMemberships.length === 1) return activeMemberships[0];
+
+  throw new TeamStoreError(
+    "invalid_request",
+    activeMemberships.length > 1
+      ? "Workspace id is required for this account."
+      : "Account recovery is unavailable."
+  );
 }
 
 function findWorkspaceMembership(state: TeamState, workspaceId: string, membershipId: string) {
@@ -1032,6 +1363,28 @@ function getInvitationStatus(invitation: TeamInvitation, now = new Date()): Team
   return "pending";
 }
 
+function getAccountRecoveryStatus(
+  recovery: TeamAccountRecoveryRequest,
+  now = new Date()
+): TeamAccountRecoveryStatus {
+  if (recovery.consumedAt) return "consumed";
+  if (Date.parse(recovery.expiresAt) <= now.getTime()) return "expired";
+  return "pending";
+}
+
+function pruneAccountRecoveryRequests(
+  requests: TeamAccountRecoveryRequest[],
+  now = new Date()
+) {
+  const cutoff = now.getTime() - accountRecoveryRetentionMs;
+  return requests.filter((request) => {
+    const createdAt = Date.parse(request.createdAt);
+    if (!Number.isFinite(createdAt)) return false;
+    if (createdAt >= cutoff) return true;
+    return getAccountRecoveryStatus(request, now) === "pending";
+  });
+}
+
 function normalizeEmail(value: string) {
   const email = boundText(value, 254)?.toLowerCase();
   if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
@@ -1040,11 +1393,15 @@ function normalizeEmail(value: string) {
   return email;
 }
 
-function normalizeFutureIsoDate(value: string | undefined, fallback: string) {
+function normalizeFutureIsoDate(
+  value: string | undefined,
+  fallback: string,
+  message = "Invitation expiration must be in the future."
+) {
   const candidate = boundText(value, 80) ?? fallback;
   const parsed = Date.parse(candidate);
   if (!Number.isFinite(parsed) || parsed <= Date.now()) {
-    throw new TeamStoreError("invalid_request", "Invitation expiration must be in the future.");
+    throw new TeamStoreError("invalid_request", message);
   }
   return new Date(parsed).toISOString();
 }
@@ -1140,11 +1497,11 @@ function redactSensitiveText(value: string) {
   return value
     .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [redacted]")
     .replace(
-      /([?&](?:access_token|refresh_token|token|jwt|secret|client_secret|authorization)=)[^&\s]+/gi,
+      /([?&](?:accept_token|access_token|recovery|reset|refresh_token|token|jwt|secret|client_secret|authorization)=)[^&\s]+/gi,
       "$1[redacted]"
     )
     .replace(
-      /((?:access[_-]?token|refresh[_-]?token|token|secret|client[_-]?secret|password|authorization)\s*[:=]\s*)[^\s,;]+/gi,
+      /((?:accept[_-]?token|access[_-]?token|recovery|reset|refresh[_-]?token|token|secret|client[_-]?secret|password|authorization)\s*[:=]\s*)[^\s,;]+/gi,
       "$1[redacted]"
     )
     .replace(/\b[\w.-]*(?:token|secret|password|credential|authorization)[\w.-]*\b/gi, "[redacted]")
@@ -1165,6 +1522,12 @@ function getInvitationTtlMs(seedOptions: TeamStoreSeedOptions) {
   return seedOptions.invitationTtlMs && seedOptions.invitationTtlMs > 0
     ? seedOptions.invitationTtlMs
     : defaultInvitationTtlMs;
+}
+
+function getAccountRecoveryTtlMs(seedOptions: TeamStoreSeedOptions) {
+  return seedOptions.accountRecoveryTtlMs && seedOptions.accountRecoveryTtlMs > 0
+    ? seedOptions.accountRecoveryTtlMs
+    : defaultAccountRecoveryTtlMs;
 }
 
 function boundText(value: unknown, maxLength: number) {
@@ -1201,6 +1564,28 @@ function isTeamAccountCredential(value: unknown): value is TeamAccountCredential
     typeof value.salt === "string" &&
     typeof value.updatedAt === "string" &&
     typeof value.userId === "string"
+  );
+}
+
+function isTeamAccountRecoveryRequest(value: unknown): value is TeamAccountRecoveryRequest {
+  return (
+    isRecord(value) &&
+    (value.consumedAt === undefined || typeof value.consumedAt === "string") &&
+    (value.consumedWorkspaceId === undefined || typeof value.consumedWorkspaceId === "string") &&
+    typeof value.createdAt === "string" &&
+    (value.deliveryAttemptedAt === undefined || typeof value.deliveryAttemptedAt === "string") &&
+    (value.deliveryChannel === undefined || typeof value.deliveryChannel === "string") &&
+    (value.deliveryError === undefined || typeof value.deliveryError === "string") &&
+    (value.deliveryMessageId === undefined || typeof value.deliveryMessageId === "string") &&
+    (value.deliveryStatus === undefined ||
+      value.deliveryStatus === "failed" ||
+      value.deliveryStatus === "sent") &&
+    typeof value.email === "string" &&
+    typeof value.expiresAt === "string" &&
+    typeof value.id === "string" &&
+    typeof value.tokenHash === "string" &&
+    typeof value.userId === "string" &&
+    (value.workspaceId === undefined || typeof value.workspaceId === "string")
   );
 }
 

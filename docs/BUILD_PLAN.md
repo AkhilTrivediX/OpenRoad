@@ -454,6 +454,28 @@ Acceptance:
 - Self-host is a real deployment path, not a late marketing checkbox.
 - Backup and restore are documented before public release.
 
+### Observability Foundation
+
+Branch: `feat/observability-foundation`
+
+Status: planned.
+
+Build:
+
+- Durable private operational event ledger.
+- Sanitized event categories for server errors, notification delivery, provider sync, webhook ingestion, hosted webhook registration, state/admin actions, and ops workflows.
+- Private ops events API with workspace/provider/category/severity filters.
+- Ops status summary for recent operational health signals.
+- Backup, restore, release, deployment, and API contract docs.
+
+Acceptance:
+
+- Operators can inspect recent structured events without scraping process logs.
+- Events are bounded, private, and free of secrets, raw provider payloads, stack traces, environment dumps, and workspace exports.
+- Workspace-scoped actors see only their own workspace events.
+- Audit events remain the user/action history and are not replaced by ops events.
+- Existing production gates remain green.
+
 ## Feature 5: Roadmap Now/Next/Later
 
 Branch: `feat/roadmap-now-next-later`

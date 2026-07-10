@@ -10,7 +10,8 @@ import {
   runGitHubManualSync,
   runProviderManualSync,
   storeProviderCredential,
-  verifyGitHubAppInstallation
+  verifyGitHubAppInstallation,
+  writeBackProviderIssue
 } from "./openroadIntegrations";
 
 describe("OpenRoad integration status client", () => {
@@ -39,7 +40,8 @@ describe("OpenRoad integration status client", () => {
               liveSync: true,
               manualSync: true,
               setup: true,
-              webhooks: true
+              webhooks: true,
+              writeBack: true
             },
             connection: "connected",
             disconnectedAccounts: [
@@ -91,7 +93,10 @@ describe("OpenRoad integration status client", () => {
       activeInstallations: 1,
       connection: "connected",
       linkedIssueMappings: 2,
-      provider: "github"
+      provider: "github",
+      capabilities: {
+        writeBack: true
+      }
     });
     expect(status.providers[0]?.disconnectedAccounts[0]?.providerAccountName).toBe("Old [redacted]");
     expect(fetchImpl).toHaveBeenCalledWith(
@@ -270,6 +275,88 @@ describe("OpenRoad integration status client", () => {
       message: "A GitHub sync job is already queued. The private runner is unavailable in this session.",
       status: "deduped"
     });
+  });
+
+  it("writes provider issues back with a compact same-origin request", async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({
+        external: {
+          id: "lin-issue-123",
+          key: "OPEN-42",
+          type: "issue",
+          url: "https://linear.app/openroad/issue/OPEN-42/write-back"
+        },
+        installationId: "linear-install",
+        mappingId: "mapping-linear",
+        message: "Wrote Linear issue from OpenRoad request.",
+        provider: "linear",
+        requestId: "request-123",
+        status: "written",
+        writtenAt: "2026-07-04T01:00:00.000Z"
+      })
+    );
+
+    const result = await writeBackProviderIssue(
+      "linear",
+      "acme",
+      "request-123",
+      "mapping-linear",
+      fetchImpl as typeof fetch
+    );
+
+    expect(result).toEqual({
+      external: {
+        id: "lin-issue-123",
+        key: "OPEN-42",
+        type: "issue",
+        url: "https://linear.app/openroad/issue/OPEN-42/write-back"
+      },
+      installationId: "linear-install",
+      mappingId: "mapping-linear",
+      message: "Wrote Linear issue from OpenRoad request.",
+      provider: "linear",
+      requestId: "request-123",
+      status: "written",
+      writtenAt: "2026-07-04T01:00:00.000Z"
+    });
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "/api/openroad/workspaces/acme/integrations/linear/write-back",
+      expect.objectContaining({
+        body: JSON.stringify({ mappingId: "mapping-linear", requestId: "request-123" }),
+        credentials: "same-origin",
+        method: "POST"
+      })
+    );
+  });
+
+  it("redacts provider write-back action failures", async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse(
+        {
+          error: {
+            code: "upstream_error",
+            message: "Linear token=raw-secret failed."
+          }
+        },
+        502
+      )
+    );
+
+    const result = await writeBackProviderIssue(
+      "linear",
+      "acme",
+      "request-123",
+      undefined,
+      fetchImpl as typeof fetch
+    );
+
+    expect(result).toEqual({
+      message: "Linear [redacted]=[redacted] failed.",
+      provider: "linear",
+      requestId: "request-123",
+      status: "unavailable"
+    });
+    expect(JSON.stringify(result)).not.toContain("raw-secret");
   });
 
   it("manages provider setup metadata with same-origin credentials and redacted results", async () => {

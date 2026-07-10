@@ -42,6 +42,7 @@ export type IntegrationProviderStatus = {
     manualSync: boolean;
     setup: boolean;
     webhooks: boolean;
+    writeBack: boolean;
   };
   connection: IntegrationConnectionState;
   disconnectedAccounts: IntegrationStatusAccountSummary[];
@@ -77,6 +78,22 @@ export type ProviderManualSyncResult = {
   jobStatus?: IntegrationStatusJobSummary["status"];
   message: string;
   status: "deduped" | "failed" | "forbidden" | "queued" | "succeeded" | "unavailable";
+};
+
+export type ProviderWriteBackResult = {
+  external?: {
+    id: string;
+    key?: string;
+    type: "issue";
+    url?: string;
+  };
+  installationId?: string;
+  mappingId?: string;
+  message: string;
+  provider: IntegrationProvider;
+  requestId?: string;
+  status: "forbidden" | "unavailable" | "written";
+  writtenAt?: string;
 };
 
 export type IntegrationCredentialSecretType = "access-token" | "refresh-token";
@@ -171,7 +188,8 @@ export function createStandaloneIntegrationStatus(
         liveSync: false,
         manualSync: false,
         setup: false,
-        webhooks: false
+        webhooks: false,
+        writeBack: false
       },
       connection: "optional",
       disconnectedAccounts: [],
@@ -315,6 +333,42 @@ export function runGitHubManualSync(
   fetchImpl: typeof fetch = fetch
 ) {
   return runProviderManualSync("github", workspaceId, installationId, fetchImpl);
+}
+
+export async function writeBackProviderIssue(
+  provider: Extract<IntegrationProvider, "github" | "jira" | "linear">,
+  workspaceId: string,
+  requestId: string,
+  mappingId?: string,
+  fetchImpl: typeof fetch = fetch
+): Promise<ProviderWriteBackResult> {
+  const result = await postJsonSafely(
+    `/api/openroad/workspaces/${encodeURIComponent(workspaceId)}/integrations/${provider}/write-back`,
+    compactBody({ mappingId, requestId }),
+    fetchImpl
+  );
+
+  if (!result.ok) {
+    return {
+      message: safeIntegrationErrorMessage(result.status, result.payload),
+      provider,
+      requestId,
+      status: result.status === 403 ? "forbidden" : "unavailable"
+    };
+  }
+
+  return {
+    external: parseWriteBackExternal(result.payload),
+    installationId: getRecordIdentifier(result.payload, "installationId"),
+    mappingId: getRecordIdentifier(result.payload, "mappingId"),
+    message:
+      getRecordText(result.payload, "message") ??
+      `${providerLabels[provider]} issue updated from OpenRoad.`,
+    provider,
+    requestId: getRecordIdentifier(result.payload, "requestId") ?? requestId,
+    status: "written",
+    writtenAt: getRecordText(result.payload, "writtenAt")
+  };
 }
 
 export async function listProviderInstallations(
@@ -799,7 +853,24 @@ function parseCapabilities(value: unknown): IntegrationProviderStatus["capabilit
     liveSync: getRecordBoolean(record, "liveSync"),
     manualSync: getRecordBoolean(record, "manualSync"),
     setup: getRecordBoolean(record, "setup"),
-    webhooks: getRecordBoolean(record, "webhooks")
+    webhooks: getRecordBoolean(record, "webhooks"),
+    writeBack: getRecordBoolean(record, "writeBack")
+  };
+}
+
+function parseWriteBackExternal(value: unknown): ProviderWriteBackResult["external"] {
+  const external = isRecord(value) && isRecord(value.external) ? value.external : undefined;
+  if (!external) return undefined;
+
+  const id = getRecordIdentifier(external, "id");
+  const type = getRecordText(external, "type");
+  if (!id || type !== "issue") return undefined;
+
+  return {
+    id,
+    key: getRecordText(external, "key"),
+    type,
+    url: getRecordText(external, "url")
   };
 }
 

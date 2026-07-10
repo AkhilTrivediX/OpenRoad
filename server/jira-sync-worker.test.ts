@@ -106,6 +106,49 @@ describe("Jira REST API client", () => {
       })
     ).rejects.toMatchObject({ code: "jira_api_error", status: 429 });
   });
+
+  it("updates Jira issues through the v3 edit endpoint with ADF description", async () => {
+    const requests: Array<{ authorization: string | null; body: Record<string, unknown>; method?: string; url: string }> = [];
+    const client = new FetchJiraApiClient(
+      { apiBaseUrl: "https://api.atlassian.test/ex/jira" },
+      async (url, init) => {
+        requests.push({
+          authorization: new Headers(init?.headers).get("authorization"),
+          body: JSON.parse(String(init?.body)) as Record<string, unknown>,
+          method: init?.method,
+          url: String(url)
+        });
+
+        return new Response(null, { status: 204 });
+      }
+    );
+
+    await client.updateIssue({
+      cloudId: "cloud-123",
+      credential: { accessToken: "jira-token" },
+      description: "First paragraph\n\nSecond paragraph",
+      issueIdOrKey: "OPEN-42",
+      title: "Updated Jira title"
+    });
+
+    expect(requests).toHaveLength(1);
+    expect(requests[0].authorization).toBe("Bearer jira-token");
+    expect(requests[0].method).toBe("PUT");
+    expect(requests[0].url).toBe("https://api.atlassian.test/ex/jira/cloud-123/rest/api/3/issue/OPEN-42");
+    expect(requests[0].body).toMatchObject({
+      fields: {
+        description: {
+          content: [
+            { content: [{ text: "First paragraph", type: "text" }], type: "paragraph" },
+            { content: [{ text: "Second paragraph", type: "text" }], type: "paragraph" }
+          ],
+          type: "doc",
+          version: 1
+        },
+        summary: "Updated Jira title"
+      }
+    });
+  });
 });
 
 describe("Jira integration sync worker", () => {

@@ -94,6 +94,45 @@ describe("Linear GraphQL API client", () => {
     expect(authorizations).toEqual(["linear-api-key"]);
   });
 
+  it("updates Linear issues with title and description", async () => {
+    const requests: Array<{ authorization: string | null; body: Record<string, unknown> }> = [];
+    const client = new FetchLinearApiClient(
+      { apiUrl: "https://linear.test/graphql" },
+      async (_url, init) => {
+        requests.push({
+          authorization: new Headers(init?.headers).get("authorization"),
+          body: JSON.parse(String(init?.body)) as Record<string, unknown>
+        });
+
+        return Response.json({
+          data: {
+            issueUpdate: {
+              success: true
+            }
+          }
+        });
+      }
+    );
+
+    await client.updateIssue({
+      credential: { accessToken: "linear-token", authorizationMode: "bearer" },
+      description: "Updated from OpenRoad",
+      issueId: "lin-issue-123",
+      title: "Updated title"
+    });
+
+    expect(requests).toHaveLength(1);
+    expect(requests[0].authorization).toBe("Bearer linear-token");
+    expect(String(requests[0].body.query)).toContain("issueUpdate");
+    expect(requests[0].body.variables).toEqual({
+      id: "lin-issue-123",
+      input: {
+        description: "Updated from OpenRoad",
+        title: "Updated title"
+      }
+    });
+  });
+
   it("maps GraphQL errors, missing issues, and malformed payloads safely", async () => {
     const graphQLErrorClient = new FetchLinearApiClient(
       { apiUrl: "https://linear.test/graphql" },

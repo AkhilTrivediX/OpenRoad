@@ -1377,6 +1377,30 @@ describe("OpenRoad workspace shell", () => {
     expect(within(within(inspector).getByRole("form", { name: "Add comment" })).getByRole("button", { name: "Add comment" })).toBeInTheDocument();
   });
 
+  it("shows provider write-back only for writable provider-sourced requests", async () => {
+    vi.stubEnv("VITE_OPENROAD_SERVER_SYNC", "on");
+    const fetchMock = createSettingsIntegrationFetchMock({
+      githubWriteBack: true,
+      requestSource: "GitHub"
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    const writeBackButton = await screen.findByRole("button", { name: "Write back to GitHub" });
+    await user.click(writeBackButton);
+
+    expect(await screen.findByText("Wrote GitHub issue from OpenRoad request.")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/openroad/workspaces/acme/integrations/github/write-back",
+      expect.objectContaining({
+        body: JSON.stringify({ requestId: "api-rate-limit-visibility" }),
+        method: "POST"
+      })
+    );
+  });
+
   it("shows assistant triage and creates a private changelog draft only after approval", async () => {
     const user = userEvent.setup();
     render(<App />);
@@ -1979,8 +2003,21 @@ function createMemberInvitationLoginFetchMock() {
   });
 }
 
-function createSettingsIntegrationFetchMock(options: { jiraReady?: boolean; linearReady?: boolean } = {}) {
+function createSettingsIntegrationFetchMock(
+  options: {
+    githubWriteBack?: boolean;
+    jiraReady?: boolean;
+    linearReady?: boolean;
+    requestSource?: string;
+  } = {}
+) {
   const state = createInitialOpenRoadState();
+  if (options.requestSource) {
+    state.workspaces[0].requests[0] = {
+      ...state.workspaces[0].requests[0],
+      source: options.requestSource
+    };
+  }
 
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input.toString();
@@ -2018,7 +2055,8 @@ function createSettingsIntegrationFetchMock(options: { jiraReady?: boolean; line
               liveSync: true,
               manualSync: true,
               setup: true,
-              webhooks: true
+              webhooks: true,
+              writeBack: Boolean(options.githubWriteBack)
             },
             connection: "connected",
             label: "GitHub",
@@ -2067,7 +2105,8 @@ function createSettingsIntegrationFetchMock(options: { jiraReady?: boolean; line
               liveSync: Boolean(options.jiraReady),
               manualSync: Boolean(options.jiraReady),
               setup: false,
-              webhooks: false
+              webhooks: false,
+              writeBack: Boolean(options.jiraReady)
             },
             connection: options.jiraReady ? "connected" : "optional",
             label: "Jira",
@@ -2103,7 +2142,8 @@ function createSettingsIntegrationFetchMock(options: { jiraReady?: boolean; line
               liveSync: Boolean(options.linearReady),
               manualSync: Boolean(options.linearReady),
               setup: false,
-              webhooks: false
+              webhooks: false,
+              writeBack: Boolean(options.linearReady)
             },
             connection: options.linearReady ? "connected" : "optional",
             label: "Linear",
@@ -2136,6 +2176,24 @@ function createSettingsIntegrationFetchMock(options: { jiraReady?: boolean; line
 
     if (url === "/api/openroad/workspaces/acme/integrations/jira/sync/jobs") {
       return jsonResponse({ job: { id: "sync-job-1", status: "queued" }, status: "queued" }, 201);
+    }
+
+    if (url === "/api/openroad/workspaces/acme/integrations/github/write-back" && method === "POST") {
+      const body = JSON.parse(String(init?.body ?? "{}")) as { requestId: string };
+      return jsonResponse({
+        external: {
+          id: "I_kwDOGH123",
+          key: "AkhilTrivediX/OpenRoad#42",
+          type: "issue"
+        },
+        installationId: "github-install",
+        mappingId: "mapping-github",
+        message: "Wrote GitHub issue from OpenRoad request.",
+        provider: "github",
+        requestId: body.requestId,
+        status: "written",
+        writtenAt: "2026-07-04T01:00:00.000Z"
+      });
     }
 
     if (url === "/api/openroad/integrations/sync/run") {

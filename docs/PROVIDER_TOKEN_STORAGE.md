@@ -78,6 +78,5 @@ Changing `OPENROAD_TOKEN_ENCRYPTION_KEY` without re-encrypting existing credenti
 
 ## Deferred Work
 
-- Provider write-back.
 - External KMS or multi-key rotation.
 - Multi-process mutation locking.

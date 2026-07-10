@@ -99,9 +99,15 @@ As a workspace owner, I want OpenRoad to push a refined request title/descriptio
 
 - Branch: `feat/provider-write-back`
 - Implementation commit SHA: Pending.
-- Date: Pending.
-- Commands run: Pending.
-- Browser/viewports tested: Pending.
-- Reviewer notes: Pending.
+- Date: 2026-07-10.
+- Commands run:
+  - `pnpm vitest run server/github-app.test.ts server/linear-sync-worker.test.ts server/jira-sync-worker.test.ts` -> 3 files, 38 tests passed.
+  - `pnpm vitest run server/http.test.ts` -> 105 tests passed.
+  - `pnpm vitest run src/persistence/openroadIntegrations.test.ts src/App.test.tsx` -> 78 tests passed after adding the request inspector write-back affordance; `src/persistence/openroadIntegrations.test.ts` rerun -> 11 tests passed after redaction expectation alignment.
+  - `pnpm check` -> 34 files, 430 tests passed, then `pnpm build` completed client and server builds.
+  - `pnpm release:verify` -> release manifest dry-run passed for current build artifacts.
+  - Built-server smoke against `server-dist/server/index.js` on `http://127.0.0.1:4217` with temporary file-backed state and `OPENROAD_TOKEN_ENCRYPTION_KEY` -> `OpenRoad smoke passed: health, contract, portal, private-denied, private-token`.
+- Browser/viewports tested: In-app browser desktop viewport `1280x720` against temporary built server on `http://127.0.0.1:4218`; authenticated with a temporary local admin token; selected request inspector action row measured at `389x36`, showed `Add vote` and `Archive request`, no standalone write-back control, no action overlap, and no console errors.
+- Reviewer notes: Passed. GitHub, Linear, and Jira write-back derive provider targets from active stored mappings, require active `write:external` installations, and keep provider tokens server-only. Linear/Jira credentials require `write:external`; expired Linear OAuth write-back coverage verifies refresh-token rotation before provider write. Provider client tests cover GitHub `PATCH`, Linear `issueUpdate`, and Jira v3 ADF update bodies. HTTP tests cover provider success paths, missing mapping, missing write permission, sanitized upstream failures, mapping `lastSyncedAt`, sync events, audit-safe responses, and no provider secret leakage. Browser UI keeps the control hidden for standalone requests and exposes the request inspector action only when sanitized provider status reports write-back for a provider-sourced request.
 - Known unresolved risks: Conflict UI, provider status transitions, label/tag mapping, bulk write-back, hosted webhook registration automation, automatic provider issue creation, and distributed write locks remain later production slices.
-- Rollback notes: Pending.
+- Rollback notes: Revert this branch and redeploy the previous build. No state or integration metadata schema migration is introduced. Provider issues explicitly updated before rollback remain changed in the provider; restore provider-side history manually if needed.

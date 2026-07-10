@@ -136,6 +136,7 @@ import {
   runProviderManualSync,
   storeProviderCredential,
   verifyGitHubAppInstallation,
+  writeBackProviderIssue,
   type IntegrationCredentialMetadata,
   type IntegrationProviderStatus,
   type WorkspaceIntegrationStatus
@@ -315,6 +316,8 @@ export function App() {
   const [providerCredentials, setProviderCredentials] = useState(createProviderCredentialMetadata);
   const [integrationSetupBusy, setIntegrationSetupBusy] = useState<string | undefined>();
   const [syncingProvider, setSyncingProvider] = useState<"github" | "jira" | "linear" | undefined>();
+  const [writingBackProvider, setWritingBackProvider] = useState<IntegrationProviderId | undefined>();
+  const [requestWriteBackMessage, setRequestWriteBackMessage] = useState("");
   const [invitationAccess, setInvitationAccess] = useState<WorkspaceInvitationAccess>(() =>
     createStandaloneInvitationAccess(resolveInitialWorkspaceId(loadResult.state, loadSelectedWorkspaceId()))
   );
@@ -882,6 +885,16 @@ export function App() {
         : null,
     [isAssistantEnabled, roadmapItems, selectedRequest, workspace]
   );
+  const selectedWriteBackProvider = useMemo(() => {
+    const providerId = selectedRequest ? getRequestSourceProvider(selectedRequest) : undefined;
+    if (!providerId || selectedRequest?.archived) return undefined;
+    const provider = integrationStatus.providers.find((item) => item.provider === providerId);
+    return provider?.capabilities.writeBack ? provider : undefined;
+  }, [integrationStatus.providers, selectedRequest]);
+
+  useEffect(() => {
+    setRequestWriteBackMessage("");
+  }, [selectedRequest?.id]);
   const selectedWorkItem = useMemo(() => {
     const selectedWorkItemId = selectedWorkItemIdByWorkspace[workspace.id];
     return (
@@ -1269,6 +1282,28 @@ export function App() {
       }
     } finally {
       setSyncingProvider(undefined);
+    }
+  }
+
+  async function writeBackSelectedRequest() {
+    if (!selectedRequest || !selectedWriteBackProvider || writingBackProvider) return;
+
+    setWritingBackProvider(selectedWriteBackProvider.provider);
+    setRequestWriteBackMessage(`Writing to ${selectedWriteBackProvider.label}...`);
+
+    try {
+      const result = await writeBackProviderIssue(
+        selectedWriteBackProvider.provider,
+        workspace.id,
+        selectedRequest.id
+      );
+      setRequestWriteBackMessage(result.message);
+
+      if (result.status === "written" && serverPersistenceEnabled) {
+        await refreshIntegrationWorkspaceState();
+      }
+    } finally {
+      setWritingBackProvider(undefined);
     }
   }
 
@@ -2995,6 +3030,24 @@ export function App() {
                     )}
                     {selectedRequest.archived ? "Restore request" : "Archive request"}
                   </button>
+                  {selectedWriteBackProvider ? (
+                    <button
+                      className="secondary-action"
+                      disabled={Boolean(writingBackProvider)}
+                      onClick={() => void writeBackSelectedRequest()}
+                      type="button"
+                    >
+                      <RadioTower aria-hidden="true" size={14} />
+                      {writingBackProvider === selectedWriteBackProvider.provider
+                        ? "Writing..."
+                        : `Write back to ${selectedWriteBackProvider.label}`}
+                    </button>
+                  ) : null}
+                  {requestWriteBackMessage ? (
+                    <span className="request-action-message" role="status">
+                      {requestWriteBackMessage}
+                    </span>
+                  ) : null}
                 </div>
 
                 <form
@@ -5732,6 +5785,14 @@ function getProviderCode(provider: IntegrationProviderStatus) {
   if (provider.provider === "github") return "GH";
   if (provider.provider === "jira") return "JR";
   return "LN";
+}
+
+function getRequestSourceProvider(request: RequestItem): IntegrationProviderId | undefined {
+  const source = request.source.trim().toLowerCase();
+  if (source.includes("github")) return "github";
+  if (source.includes("jira")) return "jira";
+  if (source.includes("linear")) return "linear";
+  return undefined;
 }
 
 function getIntegrationStatusTone(status: WorkspaceIntegrationStatus) {

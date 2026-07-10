@@ -137,6 +137,7 @@ API-only invitation acceptance remains available at `POST /api/openroad/invitati
 - `GET /api/openroad/workspaces/:workspaceId/integrations/:provider/credentials`
 - `POST /api/openroad/workspaces/:workspaceId/integrations/:provider/credentials`
 - `POST /api/openroad/workspaces/:workspaceId/integrations/:provider/credentials/:credentialId/revoke`
+- `POST /api/openroad/workspaces/:workspaceId/integrations/:provider/write-back`
 - `POST /api/openroad/workspaces/:workspaceId/integrations/:provider/sync/jobs`
 - `GET /api/openroad/workspaces/:workspaceId/invitations`
 - `POST /api/openroad/workspaces/:workspaceId/invitations`

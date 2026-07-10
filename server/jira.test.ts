@@ -25,7 +25,7 @@ describe("Jira OAuth setup helpers", () => {
     expect(setup).toMatchObject({
       configured: true,
       missing: [],
-      requiredScopes: ["read:jira-work", "read:jira-user"]
+      requiredScopes: ["read:jira-work", "read:jira-user", "write:jira-work"]
     });
     expect(setup.authorizeUrl).toContain("https://auth.atlassian.test/authorize");
     expect(setup.authorizeUrl).toContain("audience=api.atlassian.com");
@@ -33,7 +33,7 @@ describe("Jira OAuth setup helpers", () => {
     expect(setup.authorizeUrl).toContain("response_type=code");
     expect(setup.authorizeUrl).toContain("prompt=consent");
     expect(new URL(setup.authorizeUrl ?? "").searchParams.get("scope")).toBe(
-      "read:jira-work read:jira-user"
+      "read:jira-work read:jira-user write:jira-work"
     );
     expect(decodeJiraOAuthState(state ?? "", config)).toMatchObject({
       createdAt: "2026-07-04T00:00:00.000Z",

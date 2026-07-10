@@ -38,7 +38,7 @@ describe("GitHub App installation helpers", () => {
       missing: [],
       requiredEvents: ["issues", "pull_request"],
       requiredPermissions: {
-        issues: "read",
+        issues: "write",
         pull_requests: "read"
       }
     });
@@ -282,6 +282,71 @@ describe("GitHub App installation helpers", () => {
     expect(JSON.stringify(issue)).not.toContain("installation-token");
   });
 
+  it("updates a repository issue with title and body only", async () => {
+    const { privateKey } = generateKeyPairSync("rsa", {
+      modulusLength: 2048,
+      privateKeyEncoding: { format: "pem", type: "pkcs8" },
+      publicKeyEncoding: { format: "pem", type: "spki" }
+    });
+    const requests: Array<{ body?: unknown; method?: string; url: string }> = [];
+    const client = new FetchGitHubAppClient(
+      {
+        apiBaseUrl: "https://api.github.test",
+        appBaseUrl: "https://github.test",
+        appId: "12345",
+        privateKey,
+        slug: "openroad-test",
+        webhookSecretConfigured: false
+      },
+      async (url, init) => {
+        requests.push({
+          body: init?.body ? JSON.parse(String(init.body)) : undefined,
+          method: init?.method,
+          url: String(url)
+        });
+        const authorization = init?.headers
+          ? new Headers(init.headers).get("authorization") ?? ""
+          : "";
+
+        if (String(url).endsWith("/access_tokens")) {
+          return new Response(JSON.stringify({ token: "installation-token" }), { status: 201 });
+        }
+
+        expect(String(url)).toBe("https://api.github.test/repos/AkhilTrivediX/OpenRoad/issues/42");
+        expect(authorization).toBe("Bearer installation-token");
+        expect(new Headers(init?.headers).get("content-type")).toBe("application/json");
+        return new Response(
+          JSON.stringify(
+            gitHubIssuePayload({
+              body: "Updated body",
+              node_id: "I_kwDOGH123",
+              number: 42,
+              title: "Updated title"
+            })
+          ),
+          { status: 200 }
+        );
+      }
+    );
+
+    const issue = await client.updateRepositoryIssue({
+      body: "Updated body",
+      installationId: "98765",
+      issueNumber: 42,
+      owner: "AkhilTrivediX",
+      repo: "OpenRoad",
+      title: "Updated title"
+    });
+
+    expect(issue.title).toBe("Updated title");
+    expect(requests[1]).toMatchObject({
+      body: { body: "Updated body", title: "Updated title" },
+      method: "PATCH",
+      url: "https://api.github.test/repos/AkhilTrivediX/OpenRoad/issues/42"
+    });
+    expect(JSON.stringify(requests)).not.toContain("installation-token");
+  });
+
   it("reads private keys from file when env uses a file path", async ({ task }) => {
     const root = join(process.env.TMP ?? process.env.TEMP ?? ".", `openroad-github-app-${Date.now()}-${task.name}`);
     const privateKeyFile = join(root, "app.pem");
@@ -303,7 +368,7 @@ describe("GitHub App installation helpers", () => {
         },
         id: 98765,
         permissions: {
-          issues: "read",
+          issues: "write",
           pull_requests: "read"
         },
         repository_selection: "selected"
@@ -313,7 +378,7 @@ describe("GitHub App installation helpers", () => {
 
     expect(installation).toMatchObject({
       id: "github-installation-98765",
-      permissions: ["read:openroad", "write:openroad", "read:external"],
+      permissions: ["read:openroad", "write:openroad", "read:external", "write:external"],
       provider: "github",
       providerAccountId: "118957648",
       providerAccountName: "AkhilTrivediX",

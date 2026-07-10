@@ -18,8 +18,14 @@ export type JiraIssueGetOptions = {
   issueIdOrKey: string;
 };
 
+export type JiraIssueUpdateOptions = JiraIssueGetOptions & {
+  description: string;
+  title: string;
+};
+
 export type JiraApiClient = {
   getIssue(options: JiraIssueGetOptions): Promise<JiraIssue>;
+  updateIssue(options: JiraIssueUpdateOptions): Promise<void>;
 };
 
 export class JiraApiClientError extends Error {
@@ -86,6 +92,41 @@ export class FetchJiraApiClient implements JiraApiClient {
       throw new JiraApiClientError("invalid_response", "Jira issue response was invalid.");
     }
   }
+
+  async updateIssue(options: JiraIssueUpdateOptions) {
+    let response: Response;
+
+    try {
+      response = await this.fetchImpl(createIssueUpdateUrl(this.config, options), {
+        body: JSON.stringify({
+          fields: {
+            description: createAdfDocument(options.description),
+            summary: options.title
+          }
+        }),
+        headers: {
+          Accept: "application/json",
+          Authorization: `Bearer ${options.credential.accessToken}`,
+          "Content-Type": "application/json"
+        },
+        method: "PUT"
+      });
+    } catch {
+      throw new JiraApiClientError("jira_api_error", "Jira API request failed before response.");
+    }
+
+    if (response.status === 404) {
+      throw new JiraApiClientError("not_found", "Jira issue was not found.", 404);
+    }
+
+    if (!response.ok) {
+      throw new JiraApiClientError(
+        "jira_api_error",
+        `Jira issue update failed with status ${response.status}.`,
+        response.status
+      );
+    }
+  }
 }
 
 export function jiraApiConfigFromEnv(env = process.env): JiraApiConfig {
@@ -102,6 +143,37 @@ function createIssueUrl(config: JiraApiConfig, options: JiraIssueGetOptions) {
   url.searchParams.set("fields", jiraIssueFields.join(","));
   url.searchParams.set("fieldsByKeys", "false");
   return url;
+}
+
+function createIssueUpdateUrl(config: JiraApiConfig, options: JiraIssueUpdateOptions) {
+  return new URL(
+    `${encodeURIComponent(options.cloudId)}/rest/api/3/issue/${encodeURIComponent(options.issueIdOrKey)}`,
+    `${config.apiBaseUrl}/`
+  );
+}
+
+function createAdfDocument(value: string) {
+  const paragraphs = value
+    .split(/\r?\n{2,}/)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean)
+    .slice(0, 20);
+
+  return {
+    content: (paragraphs.length ? paragraphs : [""]).map((paragraph) => ({
+      content: paragraph
+        ? [
+            {
+              text: paragraph,
+              type: "text"
+            }
+          ]
+        : [],
+      type: "paragraph"
+    })),
+    type: "doc",
+    version: 1
+  };
 }
 
 async function readJson(response: Response) {

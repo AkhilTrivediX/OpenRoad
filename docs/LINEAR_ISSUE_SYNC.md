@@ -120,7 +120,13 @@ Imported Linear issues become private OpenRoad requests by default. Linear issue
 
 Linear issue assignees are preserved in the imported description and tags. OpenRoad’s controlled owner field maps assigned Linear issues to `Maintainer` and unassigned Linear issues to `Unassigned`.
 
+## Provider Write-Back
+
+`POST /api/openroad/workspaces/:workspaceId/integrations/linear/write-back`
+
+Linear write-back is explicit and request-scoped. It updates only the linked issue title/description through the encrypted server-side credential after the installation and credential have `write:external`. Expired OAuth credentials refresh through the existing rotation path when refresh material and OAuth config are present. See [Provider write-back](PROVIDER_WRITE_BACK.md).
+
 ## Deferred Work
 
 - Full browser import UI and Linear sync logs.
-- Provider write-back and conflict handling.
+- Conflict handling.

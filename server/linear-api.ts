@@ -14,8 +14,14 @@ export type LinearIssueGetOptions = {
   issueId: string;
 };
 
+export type LinearIssueUpdateOptions = LinearIssueGetOptions & {
+  description: string;
+  title: string;
+};
+
 export type LinearApiClient = {
   getIssue(options: LinearIssueGetOptions): Promise<LinearIssue>;
+  updateIssue(options: LinearIssueUpdateOptions): Promise<void>;
 };
 
 export class LinearApiClientError extends Error {
@@ -70,6 +76,14 @@ const linearIssueQuery = `
   }
 `;
 
+const linearIssueUpdateMutation = `
+  mutation OpenRoadLinearIssueUpdate($id: String!, $input: IssueUpdateInput!) {
+    issueUpdate(id: $id, input: $input) {
+      success
+    }
+  }
+`;
+
 export class FetchLinearApiClient implements LinearApiClient {
   constructor(
     private readonly config: LinearApiConfig = linearApiConfigFromEnv(),
@@ -77,18 +91,61 @@ export class FetchLinearApiClient implements LinearApiClient {
   ) {}
 
   async getIssue(options: LinearIssueGetOptions) {
+    const payload = await this.postGraphQL({
+      credential: options.credential,
+      query: linearIssueQuery,
+      variables: {
+        id: options.issueId
+      }
+    });
+    const issue = getLinearIssueFromGraphQLPayload(payload);
+
+    if (!issue) {
+      throw new LinearApiClientError("not_found", "Linear issue was not found.", 404);
+    }
+
+    try {
+      return parseLinearIssuePayload(issue);
+    } catch {
+      throw new LinearApiClientError("invalid_response", "Linear issue response was invalid.");
+    }
+  }
+
+  async updateIssue(options: LinearIssueUpdateOptions) {
+    const payload = await this.postGraphQL({
+      credential: options.credential,
+      query: linearIssueUpdateMutation,
+      variables: {
+        id: options.issueId,
+        input: {
+          description: options.description,
+          title: options.title
+        }
+      }
+    });
+    const result = isRecord(payload.data) ? payload.data.issueUpdate : undefined;
+
+    if (!isRecord(result) || result.success !== true) {
+      throw new LinearApiClientError("invalid_response", "Linear issue update response was invalid.");
+    }
+  }
+
+  private async postGraphQL({
+    credential,
+    query,
+    variables
+  }: {
+    credential: LinearApiCredential;
+    query: string;
+    variables: Record<string, unknown>;
+  }) {
     let response: Response;
 
     try {
       response = await this.fetchImpl(this.config.apiUrl, {
-        body: JSON.stringify({
-          query: linearIssueQuery,
-          variables: {
-            id: options.issueId
-          }
-        }),
+        body: JSON.stringify({ query, variables }),
         headers: {
-          Authorization: createAuthorizationHeader(options.credential),
+          Authorization: createAuthorizationHeader(credential),
           "Content-Type": "application/json"
         },
         method: "POST"
@@ -106,17 +163,15 @@ export class FetchLinearApiClient implements LinearApiClient {
     }
 
     const payload = await readJson(response);
-    const issue = getLinearIssueFromGraphQLPayload(payload);
-
-    if (!issue) {
-      throw new LinearApiClientError("not_found", "Linear issue was not found.", 404);
+    if (!isRecord(payload)) {
+      throw new LinearApiClientError("invalid_response", "Linear API response was invalid.");
     }
 
-    try {
-      return parseLinearIssuePayload(issue);
-    } catch {
-      throw new LinearApiClientError("invalid_response", "Linear issue response was invalid.");
+    if (Array.isArray(payload.errors) && payload.errors.length > 0) {
+      throw new LinearApiClientError("graphql_error", "Linear GraphQL request returned errors.");
     }
+
+    return payload;
   }
 }
 

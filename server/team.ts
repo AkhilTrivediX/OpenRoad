@@ -6,8 +6,9 @@ import { promisify } from "node:util";
 import type { OpenRoadState } from "../src/domain/openroad.js";
 import type { OpenRoadActor, WorkspaceRole } from "./access.js";
 
-export const openRoadTeamSchemaVersion = 5;
+export const openRoadTeamSchemaVersion = 6;
 
+const teamSchemaVersionWithAccountRecovery = 5;
 const teamSchemaVersionWithAccountCredentials = 4;
 const teamSchemaVersionWithInvitationDelivery = 3;
 const teamSchemaVersionWithInvitations = 2;
@@ -15,6 +16,8 @@ const teamSchemaVersionWithoutInvitations = 1;
 const defaultAccountRecoveryTtlMs = 1000 * 60 * 60;
 const accountRecoveryRetentionMs = 1000 * 60 * 60 * 24 * 30;
 const defaultInvitationTtlMs = 1000 * 60 * 60 * 24 * 14;
+const operationalEventRetention = 1000;
+const operationalEventMetadataLimit = 20;
 const accountPasswordAlgorithm = "scrypt-v1";
 const scryptAsync = promisify(scryptCallback);
 
@@ -122,12 +125,55 @@ export type AuditEvent = {
   workspaceId?: string;
 };
 
+export type OperationalEventSeverity = "info" | "warning" | "error";
+
+export type OperationalEventCategory =
+  | "api"
+  | "auth"
+  | "integration"
+  | "notification"
+  | "ops"
+  | "portal"
+  | "state"
+  | "sync"
+  | "webhook"
+  | "workspace";
+
+export type OperationalEventStatus =
+  | "blocked"
+  | "duplicate"
+  | "failed"
+  | "ignored"
+  | "started"
+  | "succeeded";
+
+export type OperationalEventProvider = "github" | "jira" | "linear";
+
+export type OperationalEventMetadataValue = string | number | boolean | null;
+
+export type OperationalEvent = {
+  actorId: string;
+  actorType: OpenRoadActor["type"];
+  category: OperationalEventCategory;
+  createdAt: string;
+  id: string;
+  metadata?: Record<string, OperationalEventMetadataValue>;
+  provider?: OperationalEventProvider;
+  requestId: string;
+  severity: OperationalEventSeverity;
+  status?: OperationalEventStatus;
+  summary: string;
+  type: string;
+  workspaceId?: string;
+};
+
 export type TeamState = {
   accountRecoveryRequests: TeamAccountRecoveryRequest[];
   auditEvents: AuditEvent[];
   credentials: TeamAccountCredential[];
   invitations: TeamInvitation[];
   memberships: WorkspaceMembership[];
+  operationalEvents: OperationalEvent[];
   schemaVersion: typeof openRoadTeamSchemaVersion;
   users: TeamUser[];
 };
@@ -309,6 +355,10 @@ export type TeamStore = {
     openRoadState: OpenRoadState,
     event: Omit<AuditEvent, "createdAt" | "id">
   ): Promise<AuditEvent>;
+  recordOperationalEvent(
+    openRoadState: OpenRoadState,
+    event: Omit<OperationalEvent, "createdAt" | "id">
+  ): Promise<OperationalEvent>;
   revokeInvitation(
     openRoadState: OpenRoadState,
     input: RevokeTeamInvitationInput
@@ -401,6 +451,27 @@ export class FileTeamStore implements TeamStore {
     };
     await this.writeState(state);
     return auditEvent;
+  }
+
+  async recordOperationalEvent(
+    openRoadState: OpenRoadState,
+    event: Omit<OperationalEvent, "createdAt" | "id">
+  ) {
+    const result = await this.load(openRoadState);
+    const operationalEvent = normalizeOperationalEvent({
+      ...event,
+      createdAt: new Date().toISOString(),
+      id: `op-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    });
+    const state = {
+      ...result.state,
+      operationalEvents: [operationalEvent, ...result.state.operationalEvents].slice(
+        0,
+        operationalEventRetention
+      )
+    };
+    await this.writeState(state);
+    return operationalEvent;
   }
 
   async createInvitation(
@@ -957,6 +1028,7 @@ export function createInitialTeamState(
       userId: owner.id,
       workspaceId: workspace.id
     })),
+    operationalEvents: [],
     schemaVersion: openRoadTeamSchemaVersion,
     users: [owner]
   };
@@ -990,6 +1062,10 @@ export function parseTeamState(value: unknown): TeamState {
     return migrateTeamStateV4(value);
   }
 
+  if (value.schemaVersion === teamSchemaVersionWithAccountRecovery) {
+    return migrateTeamStateV5(value);
+  }
+
   if (
     value.schemaVersion !== openRoadTeamSchemaVersion ||
     !Array.isArray(value.accountRecoveryRequests) ||
@@ -997,7 +1073,8 @@ export function parseTeamState(value: unknown): TeamState {
     !Array.isArray(value.users) ||
     !Array.isArray(value.memberships) ||
     !Array.isArray(value.auditEvents) ||
-    !Array.isArray(value.invitations)
+    !Array.isArray(value.invitations) ||
+    !Array.isArray(value.operationalEvents)
   ) {
     throw new TeamStoreError("invalid_state", "OpenRoad team metadata is invalid.");
   }
@@ -1008,7 +1085,8 @@ export function parseTeamState(value: unknown): TeamState {
     !value.users.every(isTeamUser) ||
     !value.memberships.every(isWorkspaceMembership) ||
     !value.auditEvents.every(isAuditEvent) ||
-    !value.invitations.every(isTeamInvitation)
+    !value.invitations.every(isTeamInvitation) ||
+    !value.operationalEvents.every(isOperationalEvent)
   ) {
     throw new TeamStoreError("invalid_state", "OpenRoad team metadata is invalid.");
   }
@@ -1019,6 +1097,7 @@ export function parseTeamState(value: unknown): TeamState {
     credentials: value.credentials,
     invitations: value.invitations,
     memberships: value.memberships,
+    operationalEvents: value.operationalEvents,
     schemaVersion: openRoadTeamSchemaVersion,
     users: value.users
   });
@@ -1094,6 +1173,7 @@ function migrateTeamStateV1(value: Record<string, unknown>): TeamState {
     credentials: [],
     invitations: [],
     memberships: value.memberships,
+    operationalEvents: [],
     schemaVersion: openRoadTeamSchemaVersion,
     users: value.users
   });
@@ -1124,6 +1204,7 @@ function migrateTeamStateV2(value: Record<string, unknown>): TeamState {
     credentials: [],
     invitations: value.invitations,
     memberships: value.memberships,
+    operationalEvents: [],
     schemaVersion: openRoadTeamSchemaVersion,
     users: value.users
   });
@@ -1154,6 +1235,7 @@ function migrateTeamStateV3(value: Record<string, unknown>): TeamState {
     credentials: [],
     invitations: value.invitations,
     memberships: value.memberships,
+    operationalEvents: [],
     schemaVersion: openRoadTeamSchemaVersion,
     users: value.users
   });
@@ -1186,6 +1268,42 @@ function migrateTeamStateV4(value: Record<string, unknown>): TeamState {
     credentials: value.credentials,
     invitations: value.invitations,
     memberships: value.memberships,
+    operationalEvents: [],
+    schemaVersion: openRoadTeamSchemaVersion,
+    users: value.users
+  });
+}
+
+function migrateTeamStateV5(value: Record<string, unknown>): TeamState {
+  if (
+    !Array.isArray(value.users) ||
+    !Array.isArray(value.memberships) ||
+    !Array.isArray(value.auditEvents) ||
+    !Array.isArray(value.invitations) ||
+    !Array.isArray(value.credentials) ||
+    !Array.isArray(value.accountRecoveryRequests)
+  ) {
+    throw new TeamStoreError("invalid_state", "OpenRoad team metadata is invalid.");
+  }
+
+  if (
+    !value.users.every(isTeamUser) ||
+    !value.memberships.every(isWorkspaceMembership) ||
+    !value.auditEvents.every(isAuditEvent) ||
+    !value.invitations.every(isTeamInvitation) ||
+    !value.credentials.every(isTeamAccountCredential) ||
+    !value.accountRecoveryRequests.every(isTeamAccountRecoveryRequest)
+  ) {
+    throw new TeamStoreError("invalid_state", "OpenRoad team metadata is invalid.");
+  }
+
+  return cloneValue({
+    accountRecoveryRequests: value.accountRecoveryRequests,
+    auditEvents: value.auditEvents,
+    credentials: value.credentials,
+    invitations: value.invitations,
+    memberships: value.memberships,
+    operationalEvents: [],
     schemaVersion: openRoadTeamSchemaVersion,
     users: value.users
   });
@@ -1493,6 +1611,96 @@ function normalizeDeliveryError(value: unknown) {
   return redactSensitiveText(text).slice(0, 240);
 }
 
+function normalizeOperationalEvent(event: OperationalEvent): OperationalEvent {
+  const metadata = sanitizeOperationalEventMetadata(event.metadata);
+  const provider = normalizeOperationalEventProvider(event.provider);
+  const status = normalizeOperationalEventStatus(event.status);
+
+  return {
+    actorId: boundText(event.actorId, 160) ?? "unknown-actor",
+    actorType: normalizeOperationalEventActorType(event.actorType),
+    category: normalizeOperationalEventCategory(event.category),
+    createdAt: boundText(event.createdAt, 64) ?? new Date().toISOString(),
+    id: boundText(event.id, 160) ?? `op-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    ...(metadata ? { metadata } : {}),
+    ...(provider ? { provider } : {}),
+    requestId: boundText(event.requestId, 160) ?? "unknown-request",
+    severity: normalizeOperationalEventSeverity(event.severity),
+    ...(status ? { status } : {}),
+    summary:
+      redactSensitiveText(boundText(event.summary, 500) ?? "Operational event recorded.").slice(
+        0,
+        500
+      ) || "Operational event recorded.",
+    type: normalizeOperationalEventType(event.type),
+    ...(boundText(event.workspaceId, 160) ? { workspaceId: boundText(event.workspaceId, 160) } : {})
+  };
+}
+
+function sanitizeOperationalEventMetadata(value: unknown) {
+  if (!isRecord(value) || Array.isArray(value)) return undefined;
+
+  const metadata: Record<string, OperationalEventMetadataValue> = {};
+
+  for (const [rawKey, rawValue] of Object.entries(value)) {
+    if (Object.keys(metadata).length >= operationalEventMetadataLimit) break;
+
+    const key = normalizeOperationalMetadataKey(rawKey);
+    if (!key) continue;
+
+    metadata[key] = sanitizeOperationalMetadataValue(key, rawValue);
+  }
+
+  return Object.keys(metadata).length > 0 ? metadata : undefined;
+}
+
+function sanitizeOperationalMetadataValue(
+  key: string,
+  value: unknown
+): OperationalEventMetadataValue {
+  if (isSensitiveOperationalMetadataKey(key)) return "[redacted]";
+  if (value === null) return null;
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (typeof value === "string") return redactSensitiveText(value).slice(0, 300);
+  return String(value).slice(0, 120);
+}
+
+function normalizeOperationalMetadataKey(value: string) {
+  const normalized = value.trim().replace(/[^a-zA-Z0-9_.:-]+/g, "_").slice(0, 80);
+  return normalized ? normalized : undefined;
+}
+
+function isSensitiveOperationalMetadataKey(value: string) {
+  return /token|secret|password|credential|authorization|ciphertext|private|client_secret/i.test(
+    value
+  );
+}
+
+function normalizeOperationalEventActorType(value: unknown): OpenRoadActor["type"] {
+  return isOperationalActorType(value) ? value : "service-account";
+}
+
+function normalizeOperationalEventCategory(value: unknown): OperationalEventCategory {
+  return isOperationalEventCategory(value) ? value : "ops";
+}
+
+function normalizeOperationalEventProvider(value: unknown) {
+  return isOperationalEventProvider(value) ? value : undefined;
+}
+
+function normalizeOperationalEventSeverity(value: unknown): OperationalEventSeverity {
+  return isOperationalEventSeverity(value) ? value : "info";
+}
+
+function normalizeOperationalEventStatus(value: unknown) {
+  return isOperationalEventStatus(value) ? value : undefined;
+}
+
+function normalizeOperationalEventType(value: unknown) {
+  return normalizeOptionalText(value, 160)?.replace(/[^a-zA-Z0-9_.:-]+/g, ".") ?? "ops.event";
+}
+
 function redactSensitiveText(value: string) {
   return value
     .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [redacted]")
@@ -1614,6 +1822,85 @@ function isAuditEvent(value: unknown): value is AuditEvent {
     typeof value.summary === "string" &&
     typeof value.type === "string" &&
     (value.workspaceId === undefined || typeof value.workspaceId === "string")
+  );
+}
+
+function isOperationalEvent(value: unknown): value is OperationalEvent {
+  return (
+    isRecord(value) &&
+    typeof value.actorId === "string" &&
+    isOperationalActorType(value.actorType) &&
+    isOperationalEventCategory(value.category) &&
+    typeof value.createdAt === "string" &&
+    typeof value.id === "string" &&
+    (value.metadata === undefined || isOperationalEventMetadata(value.metadata)) &&
+    (value.provider === undefined || isOperationalEventProvider(value.provider)) &&
+    typeof value.requestId === "string" &&
+    isOperationalEventSeverity(value.severity) &&
+    (value.status === undefined || isOperationalEventStatus(value.status)) &&
+    typeof value.summary === "string" &&
+    typeof value.type === "string" &&
+    (value.workspaceId === undefined || typeof value.workspaceId === "string")
+  );
+}
+
+function isOperationalEventMetadata(value: unknown) {
+  return (
+    isRecord(value) &&
+    !Array.isArray(value) &&
+    Object.keys(value).length <= operationalEventMetadataLimit &&
+    Object.values(value).every(
+      (item) =>
+        item === null ||
+        typeof item === "boolean" ||
+        typeof item === "number" ||
+        typeof item === "string"
+    )
+  );
+}
+
+function isOperationalActorType(value: unknown): value is OpenRoadActor["type"] {
+  return (
+    value === "integration" ||
+    value === "local-owner" ||
+    value === "public-visitor" ||
+    value === "requester" ||
+    value === "service-account" ||
+    value === "workspace-member"
+  );
+}
+
+function isOperationalEventCategory(value: unknown): value is OperationalEventCategory {
+  return (
+    value === "api" ||
+    value === "auth" ||
+    value === "integration" ||
+    value === "notification" ||
+    value === "ops" ||
+    value === "portal" ||
+    value === "state" ||
+    value === "sync" ||
+    value === "webhook" ||
+    value === "workspace"
+  );
+}
+
+function isOperationalEventProvider(value: unknown): value is OperationalEventProvider {
+  return value === "github" || value === "jira" || value === "linear";
+}
+
+function isOperationalEventSeverity(value: unknown): value is OperationalEventSeverity {
+  return value === "error" || value === "info" || value === "warning";
+}
+
+function isOperationalEventStatus(value: unknown): value is OperationalEventStatus {
+  return (
+    value === "blocked" ||
+    value === "duplicate" ||
+    value === "failed" ||
+    value === "ignored" ||
+    value === "started" ||
+    value === "succeeded"
   );
 }
 

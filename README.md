@@ -54,7 +54,7 @@ OpenRoad now has a working standalone product loop, production server foundation
 - Release candidate manifest tooling for version, checksum, support-window, and dry-run publishing verification.
 - Docker Compose, backup/restore, and smoke-check commands for self-host operators.
 
-Current production limits are explicit: built-in SMTP delivery, provider-specific invitation/recovery/notification templates, direct recovery provider delivery, OAuth login, email verification, managed database migrations, hosted release promotion, deeper observability, hosted organization administration, bulk member operations, Linear/Jira hosted webhook creation, and real model-backed AI adapters with consent/prompt redaction/audit logs are planned next-stage work. Admin-token self-hosting has an httpOnly owner browser session path, invitation tokens can create scoped member browser sessions, existing users can sign in with account passwords, password recovery can be routed through a sensitive JSONL handoff without exposing raw reset tokens in team metadata, and requester notifications can be handed to JSONL or a server-configured HTTP provider.
+Current production limits are explicit: built-in SMTP delivery, provider-specific invitation/recovery/notification templates, direct recovery provider delivery, OAuth login, email verification, managed database migrations, hosted release promotion, dashboards/metrics exporters, hosted organization administration, bulk member operations, Linear/Jira hosted webhook creation, and real model-backed AI adapters with consent/prompt redaction/audit logs are planned next-stage work. Admin-token self-hosting has an httpOnly owner browser session path, invitation tokens can create scoped member browser sessions, existing users can sign in with account passwords, password recovery can be routed through a sensitive JSONL handoff without exposing raw reset tokens in team metadata, requester notifications can be handed to JSONL or a server-configured HTTP provider, and private structured operational events can be inspected without scraping process logs.
 
 Current docs:
 
@@ -198,6 +198,7 @@ The server exposes:
 - `POST /api/openroad/workspaces/:workspaceId/members/:membershipId/deactivate`
 - `POST /api/openroad/integrations/sync/run`
 - `GET /api/openroad/audit-events`
+- `GET /api/openroad/ops/events`
 - `GET /api/openroad/ops/status`
 - `GET /api/openroad/workspaces/:workspaceId/portal`
 - `POST /api/openroad/workspaces/:workspaceId/portal/requests/:requestId/vote`

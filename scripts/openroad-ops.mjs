@@ -23,7 +23,7 @@ export async function createBackup(options = {}) {
   const sessionArchiveName = "openroad-sessions.json";
   const teamArchiveName = "openroad-team.json";
 
-  const [dataJson, integrationSource, sessionSource, teamJson, packageJson] = await Promise.all([
+  const [dataJson, integrationSource, sessionSource, teamSourceJson, packageJson] = await Promise.all([
     readJsonFile(dataFile, "OpenRoad state file"),
     readIntegrationSource(integrationFile),
     readSessionSource(sessionFile),
@@ -32,20 +32,21 @@ export async function createBackup(options = {}) {
   ]);
   const integrationJson = sanitizeIntegrationState(integrationSource.json);
   const sessionJson = sanitizeSessionState(sessionSource.json);
+  const teamJson = sanitizeTeamState(teamSourceJson);
 
   validateOpenRoadState(dataJson);
-  validateTeamState(teamJson);
 
   await mkdir(outputDir, { recursive: true });
   await mkdir(backupDir, { recursive: false });
   await copyFile(dataFile, join(backupDir, dataArchiveName));
   await writeJsonFile(join(backupDir, integrationArchiveName), integrationJson);
   await writeJsonFile(join(backupDir, sessionArchiveName), sessionJson);
-  await copyFile(teamFile, join(backupDir, teamArchiveName));
+  await writeJsonFile(join(backupDir, teamArchiveName), teamJson);
 
-  const [dataStats, teamStats] = await Promise.all([stat(dataFile), stat(teamFile)]);
+  const dataStats = await stat(dataFile);
   const integrationSize = Buffer.byteLength(`${JSON.stringify(integrationJson, null, 2)}\n`);
   const sessionSize = Buffer.byteLength(`${JSON.stringify(sessionJson, null, 2)}\n`);
+  const teamSize = Buffer.byteLength(`${JSON.stringify(teamJson, null, 2)}\n`);
   const manifest = {
     app: {
       name: stringOrFallback(packageJson.name, "openroad"),
@@ -76,7 +77,7 @@ export async function createBackup(options = {}) {
       team: {
         archiveName: teamArchiveName,
         schemaVersion: teamJson.schemaVersion,
-        sizeBytes: teamStats.size,
+        sizeBytes: teamSize,
         sourcePath: teamFile
       }
     },
@@ -124,7 +125,7 @@ export async function restoreBackup(options = {}) {
     validateOpenRoadState(dataJson);
     sanitizeIntegrationState(integrationJson);
     sanitizeSessionState(sessionJson);
-    validateTeamState(teamJson);
+    sanitizeTeamState(teamJson);
   } else {
     await assertReadable(dataSource, "backup OpenRoad state file");
     await assertReadable(integrationSource, "backup OpenRoad integration metadata file");
@@ -158,7 +159,11 @@ export async function restoreBackup(options = {}) {
     sessionFile,
     sanitizeSessionState((await readSessionSource(sessionSource)).json)
   );
-  await copyFile(teamSource, teamFile);
+  if (options.force) {
+    await copyFile(teamSource, teamFile);
+  } else {
+    await writeJsonFile(teamFile, sanitizeTeamState(await readJsonFile(teamSource, "backup OpenRoad team metadata file")));
+  }
 
   return {
     restored: {
@@ -366,7 +371,8 @@ function validateTeamState(value) {
     !Array.isArray(value.auditEvents) ||
     (value.schemaVersion >= 2 && !Array.isArray(value.invitations)) ||
     (value.schemaVersion >= 4 && !Array.isArray(value.credentials)) ||
-    (value.schemaVersion >= 5 && !Array.isArray(value.accountRecoveryRequests))
+    (value.schemaVersion >= 5 && !Array.isArray(value.accountRecoveryRequests)) ||
+    (value.schemaVersion >= 6 && !Array.isArray(value.operationalEvents))
   ) {
     throw new OpsError("invalid_team_state", "OpenRoad team metadata backup is missing required collections.");
   }
@@ -423,6 +429,173 @@ function sanitizeSessionState(value) {
     schemaVersion: value.schemaVersion,
     sessions: value.sessions.map(sanitizeSessionRecord)
   };
+}
+
+function sanitizeTeamState(value) {
+  validateTeamState(value);
+
+  return {
+    ...(value.schemaVersion >= 5
+      ? { accountRecoveryRequests: value.accountRecoveryRequests.map(sanitizeTeamAccountRecoveryRequest) }
+      : {}),
+    auditEvents: value.auditEvents.map(sanitizeAuditEvent),
+    ...(value.schemaVersion >= 4 ? { credentials: value.credentials.map(sanitizeTeamCredential) } : {}),
+    ...(value.schemaVersion >= 2 ? { invitations: value.invitations.map(sanitizeTeamInvitation) } : {}),
+    memberships: value.memberships.map(sanitizeWorkspaceMembership),
+    ...(value.schemaVersion >= 6
+      ? { operationalEvents: value.operationalEvents.map(sanitizeOperationalEvent) }
+      : {}),
+    schemaVersion: value.schemaVersion,
+    users: value.users.map(sanitizeTeamUser)
+  };
+}
+
+function sanitizeTeamUser(user) {
+  if (!isRecord(user)) return user;
+
+  return {
+    createdAt: user.createdAt,
+    email: user.email,
+    id: user.id,
+    name: user.name
+  };
+}
+
+function sanitizeWorkspaceMembership(membership) {
+  if (!isRecord(membership)) return membership;
+
+  return {
+    createdAt: membership.createdAt,
+    id: membership.id,
+    role: membership.role,
+    userId: membership.userId,
+    workspaceId: membership.workspaceId
+  };
+}
+
+function sanitizeAuditEvent(event) {
+  if (!isRecord(event)) return event;
+
+  return {
+    actorId: event.actorId,
+    actorType: event.actorType,
+    createdAt: event.createdAt,
+    id: event.id,
+    requestId: event.requestId,
+    summary: redactSensitiveText(String(event.summary ?? "").slice(0, 500)),
+    type: event.type,
+    ...(event.workspaceId ? { workspaceId: event.workspaceId } : {})
+  };
+}
+
+function sanitizeTeamCredential(credential) {
+  if (!isRecord(credential)) return credential;
+
+  return {
+    algorithm: credential.algorithm,
+    createdAt: credential.createdAt,
+    id: credential.id,
+    passwordHash: credential.passwordHash,
+    salt: credential.salt,
+    updatedAt: credential.updatedAt,
+    userId: credential.userId
+  };
+}
+
+function sanitizeTeamInvitation(invitation) {
+  if (!isRecord(invitation)) return invitation;
+
+  return {
+    ...(invitation.acceptedAt ? { acceptedAt: invitation.acceptedAt } : {}),
+    ...(invitation.acceptedByUserId ? { acceptedByUserId: invitation.acceptedByUserId } : {}),
+    createdAt: invitation.createdAt,
+    createdByActorId: invitation.createdByActorId,
+    ...(invitation.deliveryAttemptedAt ? { deliveryAttemptedAt: invitation.deliveryAttemptedAt } : {}),
+    ...(invitation.deliveryChannel ? { deliveryChannel: invitation.deliveryChannel } : {}),
+    ...(invitation.deliveryError
+      ? { deliveryError: redactSensitiveText(String(invitation.deliveryError).slice(0, 500)) }
+      : {}),
+    ...(invitation.deliveryMessageId
+      ? { deliveryMessageId: redactSensitiveText(String(invitation.deliveryMessageId).slice(0, 500)) }
+      : {}),
+    ...(invitation.deliveryStatus ? { deliveryStatus: invitation.deliveryStatus } : {}),
+    email: invitation.email,
+    expiresAt: invitation.expiresAt,
+    id: invitation.id,
+    ...(invitation.invitedName ? { invitedName: invitation.invitedName } : {}),
+    ...(invitation.revokedAt ? { revokedAt: invitation.revokedAt } : {}),
+    ...(invitation.revokedByActorId ? { revokedByActorId: invitation.revokedByActorId } : {}),
+    role: invitation.role,
+    tokenHash: invitation.tokenHash,
+    workspaceId: invitation.workspaceId
+  };
+}
+
+function sanitizeTeamAccountRecoveryRequest(recovery) {
+  if (!isRecord(recovery)) return recovery;
+
+  return {
+    ...(recovery.consumedAt ? { consumedAt: recovery.consumedAt } : {}),
+    ...(recovery.consumedWorkspaceId ? { consumedWorkspaceId: recovery.consumedWorkspaceId } : {}),
+    createdAt: recovery.createdAt,
+    ...(recovery.deliveryAttemptedAt ? { deliveryAttemptedAt: recovery.deliveryAttemptedAt } : {}),
+    ...(recovery.deliveryChannel ? { deliveryChannel: recovery.deliveryChannel } : {}),
+    ...(recovery.deliveryError
+      ? { deliveryError: redactSensitiveText(String(recovery.deliveryError).slice(0, 500)) }
+      : {}),
+    ...(recovery.deliveryMessageId
+      ? { deliveryMessageId: redactSensitiveText(String(recovery.deliveryMessageId).slice(0, 500)) }
+      : {}),
+    ...(recovery.deliveryStatus ? { deliveryStatus: recovery.deliveryStatus } : {}),
+    email: recovery.email,
+    expiresAt: recovery.expiresAt,
+    id: recovery.id,
+    tokenHash: recovery.tokenHash,
+    userId: recovery.userId,
+    ...(recovery.workspaceId ? { workspaceId: recovery.workspaceId } : {})
+  };
+}
+
+function sanitizeOperationalEvent(event) {
+  if (!isRecord(event)) return event;
+
+  return {
+    actorId: event.actorId,
+    actorType: event.actorType,
+    category: event.category,
+    createdAt: event.createdAt,
+    id: event.id,
+    ...(isRecord(event.metadata) ? { metadata: sanitizeOperationalMetadata(event.metadata) } : {}),
+    ...(event.provider ? { provider: event.provider } : {}),
+    requestId: event.requestId,
+    severity: event.severity,
+    ...(event.status ? { status: event.status } : {}),
+    summary: redactSensitiveText(String(event.summary ?? "").slice(0, 500)),
+    type: event.type,
+    ...(event.workspaceId ? { workspaceId: event.workspaceId } : {})
+  };
+}
+
+function sanitizeOperationalMetadata(metadata) {
+  return Object.fromEntries(
+    Object.entries(metadata)
+      .slice(0, 20)
+      .map(([key, value]) => [
+        key.replace(/[^a-zA-Z0-9_.:-]+/g, "_").slice(0, 80),
+        sanitizeOperationalMetadataValue(key, value)
+      ])
+      .filter(([key]) => key)
+  );
+}
+
+function sanitizeOperationalMetadataValue(key, value) {
+  if (/token|secret|password|credential|authorization|ciphertext|private|client_secret/i.test(key)) {
+    return "[redacted]";
+  }
+  if (value === null || typeof value === "boolean") return value;
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (typeof value === "string") return redactSensitiveText(value).slice(0, 300);
+  return String(value).slice(0, 120);
 }
 
 function sanitizeSessionRecord(session) {

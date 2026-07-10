@@ -173,6 +173,24 @@ export const routeProtections: RouteProtection[] = [
     scope: "global"
   },
   {
+    methods: ["GET"],
+    path: "/api/openroad/audit-events",
+    permission: "state:read",
+    scope: "global"
+  },
+  {
+    methods: ["GET"],
+    path: "/api/openroad/ops/events",
+    permission: "state:read",
+    scope: "global"
+  },
+  {
+    methods: ["GET"],
+    path: "/api/openroad/ops/status",
+    permission: "state:read",
+    scope: "global"
+  },
+  {
     methods: ["POST"],
     path: "/api/openroad/integrations/sync/run",
     permission: "state:write",

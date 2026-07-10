@@ -103,11 +103,17 @@ As a self-host or hosted OpenRoad operator, I can call a private operations endp
 ## Evidence
 
 - Branch: `feat/observability-foundation`
-- Implementation commit SHA: Pending.
+- Implementation commit SHA: branch implementation commit; see `feat/observability-foundation` HEAD.
 - Date: 2026-07-10.
-- Commands run: Pending.
-- Acceptance criteria status: Pending.
+- Commands run:
+  - `pnpm build:server`: passed.
+  - `pnpm vitest run server\team.test.ts server\http.test.ts server\access.test.ts scripts\openroad-ops.test.mjs scripts\openroad-release.test.mjs`: passed, 5 files / 163 tests.
+  - `pnpm check`: passed, 34 files / 453 tests plus production client and server builds.
+  - `pnpm release:verify`: passed; dry-run release manifest reports team metadata schema `6`.
+  - Built-server `pnpm ops:smoke -- --base-url http://127.0.0.1:4261 --workspace-id acme --admin-token observability-smoke-token`: passed.
+  - Built-server observability probe on port `4263`: authorized `POST /api/openroad/integrations/sync/run` returned `503` and `GET /api/openroad/ops/events?category=sync` returned one sanitized `integration.sync.run` event with `severity: "error"` and `metadata.errorCode: "not_configured"`.
+- Acceptance criteria status: Passed for the implemented foundation slice.
 - Browser/viewports tested: No UI changes planned.
 - Accessibility checks: No UI changes planned.
-- Reviewer notes: Pending.
-- Rollback notes: Pending final implementation details.
+- Reviewer notes: No UI surface added. Observability persistence is best-effort; failures are logged and do not block product workflows.
+- Rollback notes: Restore a pre-schema-6 `OPENROAD_TEAM_FILE` backup before downgrading to a schema-5 build, or intentionally remove `operationalEvents` after backup if performing a manual downgrade.

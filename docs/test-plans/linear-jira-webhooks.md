@@ -109,6 +109,7 @@ As a workspace owner with Linear or Jira connected, I want OpenRoad to refresh a
   - `pnpm vitest run server/http.test.ts server/access.test.ts`
   - `pnpm check` (401 tests passed, client build passed, server build passed)
   - `pnpm release:verify` (dry-run manifest passed)
+  - Built `server-dist` smoke via `pnpm ops:smoke -- --base-url http://127.0.0.1:4197 --workspace-id acme --admin-token smoke-secret` against temporary data files (health, contract, portal, private-denied, private-token passed)
 - Browser/viewports tested: Not required for this server/API slice; no UI layout or browser interaction code changed.
 - Reviewer notes: Linear and Jira webhook routes now require server-only secrets, verify raw-body HMAC signatures before JSON mutation, dedupe delivery ids, update only already-linked issue mappings for active installations with `webhook:receive`, and persist sanitized sync events without raw provider payloads. Jira issue ids remain scoped through the existing installation/site mapping before request updates. Manual Jira installation/import permissions now preserve `webhook:receive` while still rejecting unsupported write-back capability.
 - Known unresolved risks: Provider write-back, hosted OAuth callback exchange, conflict UI, registration automation, distributed locks, and external queue infrastructure remain later production slices.

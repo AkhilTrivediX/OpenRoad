@@ -84,10 +84,15 @@ As a workspace owner connecting Linear or Jira, I want OpenRoad to receive the p
 ## Evidence
 
 - Branch: `feat/oauth-callback-exchange`
-- Implementation commit SHA: Pending.
-- Date: Pending.
-- Commands run: Pending.
-- Browser/viewports tested: Pending.
-- Reviewer notes: Pending.
+- Implementation commit SHA: `7c1138b`
+- Date: 2026-07-10
+- Commands run:
+  - `pnpm vitest run server/linear.test.ts server/jira.test.ts server/oauth-clients.test.ts server/access.test.ts server/http.test.ts`
+  - `pnpm exec tsc -p tsconfig.server.json --noEmit`
+  - `pnpm check`
+  - `pnpm release:verify`
+  - `pnpm ops:smoke -- --base-url http://127.0.0.1:4199 --workspace-id acme --admin-token smoke-secret`
+- Browser/viewports tested: Not applicable; this slice changes server OAuth callback exchange, access contracts, env/docs, and API tests without app UI rendering changes.
+- Reviewer notes: Linear/Jira callback exchange is server-only, uses signed provider state, checks workspace `integration:manage` before provider token exchange, requires a ready token vault, stores sanitized encrypted credentials limited to `read:external`, rejects ambiguous Jira multi-site callbacks unless an existing installation is selected, and redirects browsers only to same-origin Settings status URLs.
 - Known unresolved risks: Refresh-token rotation, provider write-back, conflict UI, automatic Jira site picker UI, hosted webhook registration automation, and external callback state storage remain later production slices.
-- Rollback notes: Pending.
+- Rollback notes: Revert `7c1138b` or unset provider OAuth client secrets to disable setup/callback exchange; revoke callback-created credentials through Settings/API if needed and restore `OPENROAD_INTEGRATION_FILE` from a pre-callback backup if operator policy requires full removal.

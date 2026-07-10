@@ -110,6 +110,13 @@ import {
   type NotificationDeliveryAdapter
 } from "./notifications.js";
 import {
+  buildInvitationAcceptUrl,
+  createInvitationDeliveryAdapterFromEnv,
+  resolveInvitationDeliveryPublicBaseUrl,
+  type InvitationDeliveryAdapter,
+  type InvitationDeliveryAttemptSummary
+} from "./invitation-delivery.js";
+import {
   IntegrationSyncJobError,
   claimDueIntegrationSyncJobs,
   completeIntegrationSyncJob,
@@ -182,6 +189,8 @@ type CreateOpenRoadServerOptions = {
   githubAppConfig?: GitHubAppConfig;
   integrationStore?: IntegrationStore;
   integrationSyncWorker?: IntegrationSyncWorker;
+  invitationDeliveryAdapter?: InvitationDeliveryAdapter;
+  invitationDeliveryPublicBaseUrl?: string;
   jiraApiClient?: JiraApiClient;
   jiraOAuthConfig?: JiraOAuthConfig;
   linearApiClient?: LinearApiClient;
@@ -312,6 +321,8 @@ export function createOpenRoadServer({
   githubAppClient = new FetchGitHubAppClient(githubAppConfig),
   integrationStore,
   integrationSyncWorker,
+  invitationDeliveryAdapter = createInvitationDeliveryAdapterFromEnv(),
+  invitationDeliveryPublicBaseUrl = resolveInvitationDeliveryPublicBaseUrl(),
   jiraApiClient = new FetchJiraApiClient(),
   jiraOAuthConfig = jiraOAuthConfigFromEnv(),
   linearApiClient = new FetchLinearApiClient(),
@@ -371,6 +382,8 @@ export function createOpenRoadServer({
           configuredIntegrationSyncProviders,
           jiraOAuthConfig,
           linearOAuthConfig,
+          invitationDeliveryAdapter,
+          invitationDeliveryPublicBaseUrl,
           notificationDeliveryAdapter,
           runNotificationDeliveryExclusive,
           runIntegrationMutationExclusive,
@@ -469,6 +482,8 @@ async function handleApiRequest(
   configuredIntegrationSyncProviders: Set<IntegrationProvider>,
   jiraOAuthConfig: JiraOAuthConfig,
   linearOAuthConfig: LinearOAuthConfig,
+  invitationDeliveryAdapter: InvitationDeliveryAdapter | undefined,
+  invitationDeliveryPublicBaseUrl: string | undefined,
   notificationDeliveryAdapter: NotificationDeliveryAdapter | undefined,
   runNotificationDeliveryExclusive: NotificationDeliveryRunner,
   runIntegrationMutationExclusive: NotificationDeliveryRunner,
@@ -905,7 +920,10 @@ async function handleApiRequest(
       response,
       store,
       access,
+      auth,
       teamStore,
+      invitationDeliveryAdapter,
+      invitationDeliveryPublicBaseUrl,
       workspaceInvitationsMatch[1]
     );
     return;
@@ -1287,7 +1305,10 @@ async function handleWorkspaceInvitationCollectionRequest(
   response: ServerResponse,
   store: OpenRoadStore,
   access: AccessContext,
+  auth: AuthOptions | undefined,
   teamStore: TeamStore | undefined,
+  invitationDeliveryAdapter: InvitationDeliveryAdapter | undefined,
+  invitationDeliveryPublicBaseUrl: string | undefined,
   encodedWorkspaceId: string
 ) {
   if (request.method !== "GET" && request.method !== "POST") {
@@ -1323,6 +1344,18 @@ async function handleWorkspaceInvitationCollectionRequest(
       createdByActorId: access.actor.id,
       workspaceId
     });
+    const deliveryResult = await deliverInvitationAfterCreate({
+      acceptToken: result.acceptToken,
+      adapter: invitationDeliveryAdapter,
+      configuredPublicBaseUrl: invitationDeliveryPublicBaseUrl,
+      currentState: current.state,
+      invitation: result.invitation,
+      request,
+      auth,
+      teamStore,
+      workspaceId
+    });
+    const { invitation, ...delivery } = deliveryResult;
 
     await recordAuditEvent(teamStore, current.state, access, {
       summary: `Created invitation for ${result.invitation.email} as ${result.invitation.role}.`,
@@ -1335,13 +1368,95 @@ async function handleWorkspaceInvitationCollectionRequest(
       201,
       {
         acceptToken: result.acceptToken,
-        invitation: sanitizeInvitationForJson(result.invitation),
+        delivery,
+        invitation: sanitizeInvitationForJson(invitation),
         status: "pending"
       },
       access
     );
   } catch (error) {
     writeKnownApiError(response, error, access);
+  }
+}
+
+async function deliverInvitationAfterCreate({
+  acceptToken,
+  adapter,
+  configuredPublicBaseUrl,
+  currentState,
+  invitation,
+  request,
+  auth,
+  teamStore,
+  workspaceId
+}: {
+  acceptToken: string;
+  adapter: InvitationDeliveryAdapter | undefined;
+  configuredPublicBaseUrl: string | undefined;
+  currentState: OpenRoadState;
+  invitation: TeamInvitationSummary;
+  request: IncomingMessage;
+  auth: AuthOptions | undefined;
+  teamStore: TeamStore;
+  workspaceId: string;
+}): Promise<InvitationDeliveryAttemptSummary & { invitation: TeamInvitationSummary }> {
+  if (!adapter) {
+    return {
+      invitation,
+      status: "not_configured"
+    };
+  }
+
+  const attemptedAt = new Date().toISOString();
+  const baseUrl = configuredPublicBaseUrl ?? resolveRequestOrigin(request, auth);
+  const acceptUrl = buildInvitationAcceptUrl(baseUrl, acceptToken);
+  const workspaceName =
+    currentState.workspaces.find((workspace) => workspace.id === workspaceId)?.name ?? workspaceId;
+
+  try {
+    const result = await adapter.deliver(invitation, {
+      acceptToken,
+      baseUrl,
+      deliveredAt: attemptedAt,
+      workspaceId,
+      workspaceName
+    });
+    const recorded = await teamStore.recordInvitationDelivery(currentState, {
+      deliveryAttemptedAt: attemptedAt,
+      deliveryChannel: adapter.channel,
+      deliveryMessageId: result.messageId,
+      deliveryStatus: "sent",
+      invitationId: invitation.id,
+      workspaceId
+    });
+
+    return {
+      acceptUrl,
+      attemptedAt,
+      channel: adapter.channel,
+      invitation: recorded,
+      messageId: getBoundedText(result.messageId, 240),
+      status: "sent"
+    };
+  } catch (error) {
+    const message = safeExternalErrorMessage(error, "Invitation delivery failed.");
+    const recorded = await teamStore.recordInvitationDelivery(currentState, {
+      deliveryAttemptedAt: attemptedAt,
+      deliveryChannel: adapter.channel,
+      deliveryError: message,
+      deliveryStatus: "failed",
+      invitationId: invitation.id,
+      workspaceId
+    });
+
+    return {
+      acceptUrl,
+      attemptedAt,
+      channel: adapter.channel,
+      error: message,
+      invitation: recorded,
+      status: "failed"
+    };
   }
 }
 
@@ -3565,7 +3680,7 @@ function redactSensitiveText(value: string) {
       "$1[redacted]"
     )
     .replace(
-      /((?:access[_-]?token|refresh[_-]?token|secret|client[_-]?secret|password|authorization)\s*[:=]\s*)[^\s,;]+/gi,
+      /((?:access[_-]?token|refresh[_-]?token|token|secret|client[_-]?secret|password|authorization)\s*[:=]\s*)[^\s,;]+/gi,
       "$1[redacted]"
     )
     .replace(/\b[\w.-]*(?:token|secret|password|credential|authorization)[\w.-]*\b/gi, "[redacted]")
@@ -5756,6 +5871,31 @@ function isSecureRequest(request: IncomingMessage, auth: AuthOptions | undefined
   return forwardedProto?.split(",")[0]?.trim().toLowerCase() === "https";
 }
 
+function resolveRequestOrigin(request: IncomingMessage, auth: AuthOptions | undefined) {
+  const forwardedHost = auth?.trustProxyHeaders
+    ? getFirstHeaderValue(getSingleHeader(request.headers, "x-forwarded-host"))
+    : undefined;
+  const host =
+    forwardedHost ??
+    getFirstHeaderValue(getSingleHeader(request.headers, "host")) ??
+    "openroad.local";
+  const forwardedProto = auth?.trustProxyHeaders
+    ? getFirstHeaderValue(getSingleHeader(request.headers, "x-forwarded-proto"))
+    : undefined;
+  const protocol =
+    forwardedProto === "http" || forwardedProto === "https"
+      ? forwardedProto
+      : isSecureRequest(request, auth)
+        ? "https"
+        : "http";
+
+  return `${protocol}://${host}`;
+}
+
+function getFirstHeaderValue(value: string | undefined) {
+  return value?.split(",")[0]?.trim() || undefined;
+}
+
 function safeSecretEqual(left: string, right: string) {
   const leftBuffer = Buffer.from(left, "utf8");
   const rightBuffer = Buffer.from(right, "utf8");
@@ -5777,6 +5917,11 @@ function getBoundedText(value: unknown, maxLength: number) {
   const normalized = value.trim();
   if (!normalized) return undefined;
   return normalized.slice(0, maxLength);
+}
+
+function safeExternalErrorMessage(error: unknown, fallback: string) {
+  const text = error instanceof Error ? error.message : String(error);
+  return getBoundedText(redactSensitiveText(text), 240) ?? fallback;
 }
 
 function getBoundedIdentifier(value: unknown, maxLength: number) {

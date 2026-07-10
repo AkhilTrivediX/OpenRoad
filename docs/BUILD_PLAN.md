@@ -10,7 +10,7 @@ Each feature must also satisfy `docs/PRODUCTION_READINESS.md` before merging to 
 
 Current stage: Stage 2 Team Beta foundation in progress.
 
-The standalone loop now covers workspaces, requests, triage, internal work, roadmap planning, changelog drafts, public portal preview, local durability, production APIs, basic tenancy boundaries, file-backed team metadata, audit events, self-host operations, owner browser sessions and owner sign-in for admin-token deployments, team invitation/account-access APIs, scoped member browser sessions from invitation tokens, app-level crash recovery, a first app-module boundary, hardened public portal write APIs with persisted visitor vote identity, the provider-neutral integration adapter contract, a payload-backed GitHub issue import/link API, server-only GitHub App installation verification, live GitHub issue fetch through verified installations, signed GitHub webhooks, safe disconnect handling, encrypted server-only provider credential storage, provider-neutral background sync job foundations, GitHub/Linear/Jira workers for already-linked issue mappings, progressive Settings visibility with GitHub/Linear/Jira manual sync controls, Linear issue import/link, Jira issue import/link with explicit field mapping, requester notification preferences/outbox events plus JSONL delivery handoff, deterministic local assistant triage, and release candidate manifest tooling. The next production work should deliver invitation links through a server-side channel and then build durable account login, while provider connect/disconnect, Linear/Jira webhooks, direct provider notification delivery, and real model-backed AI adapters remain separate hardening slices.
+The standalone loop now covers workspaces, requests, triage, internal work, roadmap planning, changelog drafts, public portal preview, local durability, production APIs, basic tenancy boundaries, file-backed team metadata, audit events, self-host operations, owner browser sessions and owner sign-in for admin-token deployments, team invitation/account-access APIs, scoped member browser sessions from invitation tokens, server-side JSONL invitation delivery handoff, app-level crash recovery, a first app-module boundary, hardened public portal write APIs with persisted visitor vote identity, the provider-neutral integration adapter contract, a payload-backed GitHub issue import/link API, server-only GitHub App installation verification, live GitHub issue fetch through verified installations, signed GitHub webhooks, safe disconnect handling, encrypted server-only provider credential storage, provider-neutral background sync job foundations, GitHub/Linear/Jira workers for already-linked issue mappings, progressive Settings visibility with GitHub/Linear/Jira manual sync controls, Linear issue import/link, Jira issue import/link with explicit field mapping, requester notification preferences/outbox events plus JSONL delivery handoff, deterministic local assistant triage, and release candidate manifest tooling. The next production work should build durable account login, while provider connect/disconnect, Linear/Jira webhooks, direct invitation/provider notification delivery, and real model-backed AI adapters remain separate hardening slices.
 
 ## Feature 1: Workspace Shell
 
@@ -270,6 +270,29 @@ Acceptance:
 - Contributor or higher member sessions can save workspace-scoped data; viewer sessions remain read-only.
 - Owner sessions remain admin-token-bound and keep full-state behavior.
 - Raw invitation tokens, session secrets, admin tokens, and token hashes are never returned or persisted in browser-visible state.
+
+### Invitation Email Delivery
+
+Branch: `feat/invitation-email-delivery`
+
+Status: implemented and production-checked.
+
+Build:
+
+- Server-side invitation delivery adapter contract.
+- JSONL file handoff for self-host mail/helpdesk workers.
+- `OPENROAD_INVITATION_DELIVERY_MODE`, `OPENROAD_INVITATION_DELIVERY_FILE`, and `OPENROAD_PUBLIC_APP_URL` configuration.
+- Team metadata schema `3` with bounded invitation delivery status fields.
+- Invite accept URLs that prefill the member join form through `?invite=`.
+- Safe docs, backup/release schema notes, and failure handling.
+
+Acceptance:
+
+- Invitation delivery is disabled by default and preserves manual token copy behavior.
+- File mode appends one sensitive JSONL record with the raw accept token and accept URL for an external worker.
+- Raw accept tokens remain out of team metadata, list APIs, audit events, backups, and browser-visible persisted state.
+- Delivery failures do not drop invitations; owners still receive the one-time token and can revoke or retry operationally.
+- Member invite sessions, owner sessions, and workspace isolation continue to pass.
 
 ### Production Server Foundation
 

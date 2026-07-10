@@ -31,6 +31,7 @@ import type { JiraApiClient } from "./jira-api";
 import type { LinearApiClient } from "./linear-api";
 import type { LinearOAuthConfig } from "./linear";
 import type { JiraOAuthConfig } from "./jira";
+import type { InvitationDeliveryAdapter } from "./invitation-delivery";
 import type { NotificationDeliveryAdapter } from "./notifications";
 import { createIntegrationTokenVault, type IntegrationTokenVault } from "./token-vault";
 import type { IntegrationSyncWorker } from "./sync-jobs";
@@ -559,6 +560,129 @@ describe("OpenRoad production server", () => {
       ])
     );
     expect(JSON.stringify(audit.body)).not.toContain(acceptToken);
+  });
+
+  it("delivers created workspace invitations through a configured adapter", async () => {
+    const deliveries: Array<{ acceptToken: string; baseUrl: string; email: string; workspaceName: string }> = [];
+    const adapter: InvitationDeliveryAdapter = {
+      channel: "test-invite",
+      async deliver(invitation, context) {
+        deliveries.push({
+          acceptToken: context.acceptToken,
+          baseUrl: context.baseUrl,
+          email: invitation.email,
+          workspaceName: context.workspaceName
+        });
+        return { messageId: `test:${invitation.id}` };
+      }
+    };
+    const { teamFile, url } = await startTestServer({
+      auth: { singleUserMode: false, trustProxyHeaders: true },
+      invitationDeliveryAdapter: adapter,
+      invitationDeliveryPublicBaseUrl: "https://openroad.example.com/join"
+    });
+
+    const created = await fetchJson(`${url}/api/openroad/workspaces/acme/invitations`, {
+      body: JSON.stringify({
+        email: "Delivery@Example.COM",
+        name: "Delivery User",
+        role: "Contributor"
+      }),
+      headers: {
+        ...workspaceActorHeaders("acme", "Owner"),
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    const acceptToken = created.body.acceptToken as string;
+    const teamStateAfterCreate = await readFile(teamFile, "utf8");
+    const listed = await fetchJson(`${url}/api/openroad/workspaces/acme/invitations`, {
+      headers: workspaceActorHeaders("acme", "Owner")
+    });
+
+    expect(created.status).toBe(201);
+    expect(created.body).toMatchObject({
+      delivery: {
+        acceptUrl: `https://openroad.example.com/join?invite=${acceptToken}`,
+        channel: "test-invite",
+        messageId: expect.stringContaining("test:"),
+        status: "sent"
+      },
+      invitation: {
+        deliveryChannel: "test-invite",
+        deliveryStatus: "sent",
+        email: "delivery@example.com",
+        status: "pending"
+      }
+    });
+    expect(deliveries).toEqual([
+      {
+        acceptToken,
+        baseUrl: "https://openroad.example.com/join",
+        email: "delivery@example.com",
+        workspaceName: "Acme OSS"
+      }
+    ]);
+    expect(listed.body.invitations[0]).toMatchObject({
+      deliveryChannel: "test-invite",
+      deliveryStatus: "sent",
+      email: "delivery@example.com"
+    });
+    expect(teamStateAfterCreate).not.toContain(acceptToken);
+    expect(JSON.stringify(created.body)).not.toContain("tokenHash");
+    expect(JSON.stringify(listed.body)).not.toContain("tokenHash");
+  });
+
+  it("keeps invitations usable when configured invitation delivery fails", async () => {
+    const adapter: InvitationDeliveryAdapter = {
+      channel: "failing-invite",
+      async deliver() {
+        throw new Error(`Provider rejected message secret=${"x".repeat(260)}`);
+      }
+    };
+    const { teamFile, url } = await startTestServer({
+      auth: { singleUserMode: false, trustProxyHeaders: true },
+      invitationDeliveryAdapter: adapter
+    });
+
+    const created = await fetchJson(`${url}/api/openroad/workspaces/acme/invitations`, {
+      body: JSON.stringify({ email: "fallback@example.com", role: "Viewer" }),
+      headers: {
+        ...workspaceActorHeaders("acme", "Owner"),
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    const acceptToken = created.body.acceptToken as string;
+    const accepted = await fetchJson(`${url}/api/openroad/invitations/accept`, {
+      body: JSON.stringify({ token: acceptToken }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const persisted = JSON.parse(await readFile(teamFile, "utf8")) as {
+      invitations: Array<{ deliveryError?: string; deliveryStatus?: string }>;
+    };
+
+    expect(created.status).toBe(201);
+    expect(created.body).toMatchObject({
+      delivery: {
+        channel: "failing-invite",
+        status: "failed"
+      },
+      invitation: {
+        deliveryChannel: "failing-invite",
+        deliveryStatus: "failed",
+        email: "fallback@example.com",
+        status: "pending"
+      }
+    });
+    expect(created.body.delivery.error).not.toContain("x".repeat(80));
+    expect(persisted.invitations[0].deliveryError).not.toContain("x".repeat(80));
+    expect(accepted.status).toBe(200);
+    expect(accepted.body.invitation).toMatchObject({
+      email: "fallback@example.com",
+      status: "accepted"
+    });
   });
 
   it("creates member browser sessions from accepted invitations", async () => {
@@ -4217,6 +4341,8 @@ async function startTestServer(
     githubAppClient?: GitHubAppClient;
     githubAppConfig?: GitHubAppConfig;
     integrationSyncWorker?: IntegrationSyncWorker;
+    invitationDeliveryAdapter?: InvitationDeliveryAdapter;
+    invitationDeliveryPublicBaseUrl?: string;
     jiraApiClient?: JiraApiClient;
     jiraOAuthConfig?: JiraOAuthConfig;
     linearApiClient?: LinearApiClient;
@@ -4250,6 +4376,8 @@ async function startTestServer(
     githubAppConfig: options.githubAppConfig,
     integrationStore,
     integrationSyncWorker: options.integrationSyncWorker,
+    invitationDeliveryAdapter: options.invitationDeliveryAdapter,
+    invitationDeliveryPublicBaseUrl: options.invitationDeliveryPublicBaseUrl,
     jiraApiClient: options.jiraApiClient,
     jiraOAuthConfig: options.jiraOAuthConfig,
     linearApiClient: options.linearApiClient,

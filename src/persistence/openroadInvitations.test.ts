@@ -16,6 +16,11 @@ describe("openroad invitation persistence client", () => {
           {
             createdAt: "2026-07-05T00:00:00.000Z",
             createdByActorId: "local-owner",
+            deliveryAttemptedAt: "2026-07-10T10:00:00.000Z",
+            deliveryChannel: "jsonl-file",
+            deliveryError: "token=should-redact",
+            deliveryMessageId: "jsonl:invitation-1",
+            deliveryStatus: "sent",
             email: "teammate@example.com",
             expiresAt: "2026-07-19T00:00:00.000Z",
             id: "invitation-1",
@@ -37,6 +42,9 @@ describe("openroad invitation persistence client", () => {
     expect(result.status).toBe("ready");
     expect(result.invitations[0]).toMatchObject({
       email: "teammate@example.com",
+      deliveryChannel: "jsonl-file",
+      deliveryError: "token=[redacted]",
+      deliveryStatus: "sent",
       role: "Maintainer",
       status: "pending"
     });

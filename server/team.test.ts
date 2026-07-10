@@ -10,7 +10,8 @@ import { createInitialOpenRoadState } from "../src/domain/openroad";
 import {
   FileTeamStore,
   TeamStoreError,
-  openRoadTeamSchemaVersion
+  openRoadTeamSchemaVersion,
+  parseTeamState
 } from "./team";
 
 describe("FileTeamStore", () => {
@@ -99,6 +100,48 @@ describe("FileTeamStore", () => {
     expect(persisted.invitations).toEqual([]);
   });
 
+  it("migrates schema v2 team metadata and preserves invitation records", async () => {
+    const teamFile = await createTempTeamFile();
+    const openRoadState = createInitialOpenRoadState();
+    await writeFile(
+      teamFile,
+      JSON.stringify({
+        auditEvents: [],
+        invitations: [
+          {
+            createdAt: "2026-07-05T00:00:00.000Z",
+            createdByActorId: "local-owner",
+            email: "teammate@example.com",
+            expiresAt: "2999-07-19T00:00:00.000Z",
+            id: "invitation-1",
+            role: "Viewer",
+            tokenHash: "a".repeat(64),
+            workspaceId: "acme"
+          }
+        ],
+        memberships: [],
+        schemaVersion: 2,
+        users: []
+      }),
+      "utf8"
+    );
+
+    const result = await new FileTeamStore(teamFile).load(openRoadState);
+    const persisted = JSON.parse(await readFile(teamFile, "utf8")) as {
+      invitations: Array<{ id: string }>;
+      schemaVersion: number;
+    };
+
+    expect(result.status).toBe("migrated");
+    expect(result.state.schemaVersion).toBe(openRoadTeamSchemaVersion);
+    expect(result.state.invitations[0]).toMatchObject({
+      email: "teammate@example.com",
+      id: "invitation-1"
+    });
+    expect(persisted.schemaVersion).toBe(openRoadTeamSchemaVersion);
+    expect(persisted.invitations[0].id).toBe("invitation-1");
+  });
+
   it("creates invitations without persisting or listing raw accept tokens", async () => {
     const teamFile = await createTempTeamFile();
     const openRoadState = createInitialOpenRoadState();
@@ -137,6 +180,81 @@ describe("FileTeamStore", () => {
       status: "pending"
     });
     expect("tokenHash" in listed[0]).toBe(false);
+  });
+
+  it("records invitation delivery metadata without exposing token hashes in summaries", async () => {
+    const teamFile = await createTempTeamFile();
+    const openRoadState = createInitialOpenRoadState();
+    const store = new FileTeamStore(teamFile);
+    await store.load(openRoadState);
+    const created = await store.createInvitation(openRoadState, {
+      createdByActorId: "local-owner",
+      email: "delivery@example.com",
+      role: "Contributor",
+      workspaceId: "acme"
+    });
+
+    const sent = await store.recordInvitationDelivery(openRoadState, {
+      deliveryAttemptedAt: "2026-07-10T10:00:00.000Z",
+      deliveryChannel: "jsonl-file",
+      deliveryMessageId: "jsonl:invitation:1",
+      deliveryStatus: "sent",
+      invitationId: created.invitation.id,
+      workspaceId: "acme"
+    });
+    const failed = await store.recordInvitationDelivery(openRoadState, {
+      deliveryAttemptedAt: "2026-07-10T10:01:00.000Z",
+      deliveryChannel: "jsonl-file",
+      deliveryError: "x".repeat(300),
+      deliveryStatus: "failed",
+      invitationId: created.invitation.id,
+      workspaceId: "acme"
+    });
+    const persistedText = await readFile(teamFile, "utf8");
+    const listed = await store.listInvitations(openRoadState, "acme");
+
+    expect(sent).toMatchObject({
+      deliveryAttemptedAt: "2026-07-10T10:00:00.000Z",
+      deliveryChannel: "jsonl-file",
+      deliveryMessageId: "jsonl:invitation:1",
+      deliveryStatus: "sent"
+    });
+    expect(failed).toMatchObject({
+      deliveryAttemptedAt: "2026-07-10T10:01:00.000Z",
+      deliveryChannel: "jsonl-file",
+      deliveryStatus: "failed"
+    });
+    expect(failed.deliveryError).toHaveLength(240);
+    expect(listed[0]).toMatchObject({
+      deliveryStatus: "failed",
+      email: "delivery@example.com"
+    });
+    expect("tokenHash" in listed[0]).toBe(false);
+    expect(persistedText).not.toContain(created.acceptToken);
+  });
+
+  it("rejects malformed invitation delivery metadata", () => {
+    expect(() =>
+      parseTeamState({
+        auditEvents: [],
+        invitations: [
+          {
+            createdAt: "2026-07-05T00:00:00.000Z",
+            createdByActorId: "local-owner",
+            deliveryStatus: "sent-now",
+            email: "bad@example.com",
+            expiresAt: "2999-07-19T00:00:00.000Z",
+            id: "invitation-bad",
+            role: "Viewer",
+            tokenHash: "a".repeat(64),
+            workspaceId: "acme"
+          }
+        ],
+        memberships: [],
+        schemaVersion: openRoadTeamSchemaVersion,
+        users: []
+      })
+    ).toThrow(TeamStoreError);
   });
 
   it("accepts invitations once and creates durable users and memberships", async () => {

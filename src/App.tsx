@@ -123,8 +123,12 @@ import {
   loginOpenRoadOwner,
   loadServerOpenRoadState,
   requestOpenRoadAccountRecovery,
+  requestOpenRoadAssistantTriage,
   saveServerOpenRoadState,
   setOpenRoadAccountPassword,
+  type ServerAssistantConsent,
+  type ServerAssistantFallbackReason,
+  type ServerAssistantTriageResult,
   type ServerOpenRoadScope
 } from "./persistence/openroadServer";
 import {
@@ -199,6 +203,13 @@ type ProviderCredentialDraft = {
   tokenType: string;
 };
 
+type AssistantModelState = "error" | "fallback" | "idle" | "loading" | "ready";
+
+const emptyAssistantConsent: ServerAssistantConsent = {
+  shareRequesterIdentity: false,
+  shareWorkspaceContext: false
+};
+
 function createProviderInstallationDrafts(): Record<IntegrationProviderId, ProviderInstallationDraft> {
   return {
     github: { installationId: "", providerAccountId: "", providerAccountName: "" },
@@ -251,8 +262,29 @@ function getActiveNavTarget() {
   return navTargets.has(target) ? target : "inbox";
 }
 
+function assistantFallbackMessage(reason?: ServerAssistantFallbackReason) {
+  if (reason === "provider_not_configured") {
+    return "Local suggestions shown. Model assist is not configured for this server.";
+  }
+
+  if (reason === "consent_required") {
+    return "Local suggestions shown. Consent is required before model assist.";
+  }
+
+  if (reason === "invalid_model_output") {
+    return "Local suggestions shown. Model output was not usable.";
+  }
+
+  if (reason === "provider_failed") {
+    return "Local suggestions shown. Model assist is unavailable.";
+  }
+
+  return "Local suggestions shown.";
+}
+
 export function App() {
   const [serverPersistenceEnabled] = useState(() => isServerPersistenceEnabled());
+  const assistantRequestKeyRef = useRef("");
   const hasLoadedServerState = useRef(!serverPersistenceEnabled);
   const hasServerSaveFailed = useRef(false);
   const skipNextServerSave = useRef(false);
@@ -373,6 +405,13 @@ export function App() {
     useState<PortalCommentDraft>(emptyPortalCommentDraft);
   const [workCommentDraft, setWorkCommentDraft] = useState("");
   const [isAssistantEnabled, setIsAssistantEnabled] = useState(true);
+  const [assistantConsentDraft, setAssistantConsentDraft] =
+    useState<ServerAssistantConsent>(emptyAssistantConsent);
+  const [assistantModelMessage, setAssistantModelMessage] = useState("");
+  const [assistantModelResult, setAssistantModelResult] =
+    useState<ServerAssistantTriageResult | null>(null);
+  const [assistantModelState, setAssistantModelState] =
+    useState<AssistantModelState>("idle");
   const [activeNavTarget, setActiveNavTarget] = useState(() => getActiveNavTarget());
   const [duplicateMergeTargetId, setDuplicateMergeTargetId] = useState("");
   const [selectedRequestIdByWorkspace, setSelectedRequestIdByWorkspace] = useState<
@@ -393,6 +432,8 @@ export function App() {
   );
   const isServerMemberSession =
     serverPersistenceEnabled && serverAccessScope === "workspace-member";
+  const canUseServerAssistant =
+    serverPersistenceEnabled && ownerLoginState === "idle" && serverAccessScope !== "local";
   const workspaceOwnerMemberCount = useMemo(
     () => memberAccess.members.filter((member) => member.role === "Owner").length,
     [memberAccess.members]
@@ -884,13 +925,38 @@ export function App() {
         : [],
     [selectedRequest, workspace.notifications.outbox]
   );
-  const selectedAssistantSuggestion = useMemo(
+  const selectedLocalAssistantSuggestion = useMemo(
     () =>
-      selectedRequest && isAssistantEnabled
+      selectedRequest
         ? createAssistantTriageSuggestion(workspace, selectedRequest, roadmapItems)
         : null,
-    [isAssistantEnabled, roadmapItems, selectedRequest, workspace]
+    [roadmapItems, selectedRequest, workspace]
   );
+  const selectedAssistantSuggestion = useMemo(() => {
+    if (!isAssistantEnabled || !selectedRequest || !selectedLocalAssistantSuggestion) return null;
+    if (
+      assistantModelResult?.requestId === selectedRequest.id &&
+      assistantModelResult.workspaceId === workspace.id
+    ) {
+      return assistantModelResult.suggestion;
+    }
+    return selectedLocalAssistantSuggestion;
+  }, [
+    assistantModelResult,
+    isAssistantEnabled,
+    selectedLocalAssistantSuggestion,
+    selectedRequest,
+    workspace.id
+  ]);
+
+  useEffect(() => {
+    assistantRequestKeyRef.current = `${workspace.id}:${selectedRequest?.id ?? ""}`;
+    setAssistantConsentDraft(emptyAssistantConsent);
+    setAssistantModelMessage("");
+    setAssistantModelResult(null);
+    setAssistantModelState("idle");
+  }, [canUseServerAssistant, selectedRequest?.id, workspace.id]);
+
   const selectedWriteBackProvider = useMemo(() => {
     const providerId = selectedRequest ? getRequestSourceProvider(selectedRequest) : undefined;
     if (!providerId || selectedRequest?.archived) return undefined;
@@ -1644,6 +1710,77 @@ export function App() {
       title: sourceChoice.title,
       workItemIds: sourceChoice.workItemIds
     }));
+  }
+
+  function resetAssistantModelFeedback() {
+    setAssistantModelMessage("");
+    setAssistantModelResult(null);
+    setAssistantModelState("idle");
+  }
+
+  function updateAssistantWorkspaceConsent(enabled: boolean) {
+    setAssistantConsentDraft((draft) => ({
+      shareRequesterIdentity: enabled ? draft.shareRequesterIdentity : false,
+      shareWorkspaceContext: enabled
+    }));
+    resetAssistantModelFeedback();
+  }
+
+  function updateAssistantIdentityConsent(enabled: boolean) {
+    if (!assistantConsentDraft.shareWorkspaceContext && enabled) return;
+
+    setAssistantConsentDraft((draft) => ({
+      ...draft,
+      shareRequesterIdentity: enabled
+    }));
+    resetAssistantModelFeedback();
+  }
+
+  async function refreshAssistantWithModel() {
+    if (
+      !canUseServerAssistant ||
+      !selectedRequest ||
+      !assistantConsentDraft.shareWorkspaceContext ||
+      assistantModelState === "loading"
+    ) {
+      return;
+    }
+
+    const requestId = selectedRequest.id;
+    const workspaceId = workspace.id;
+    const requestKey = `${workspaceId}:${requestId}`;
+    const consent = { ...assistantConsentDraft };
+
+    setAssistantModelMessage("Checking model assist...");
+    setAssistantModelState("loading");
+
+    try {
+      const result = await requestOpenRoadAssistantTriage({
+        consent,
+        requestId,
+        workspaceId
+      });
+      if (assistantRequestKeyRef.current !== requestKey) return;
+
+      setAssistantModelResult(result);
+
+      if (result.model.externalUsed) {
+        setAssistantModelMessage(
+          "Model refined the summary. Duplicates and draft suggestions stay approval-only."
+        );
+        setAssistantModelState("ready");
+        return;
+      }
+
+      setAssistantModelMessage(assistantFallbackMessage(result.model.fallbackReason));
+      setAssistantModelState("fallback");
+    } catch {
+      if (assistantRequestKeyRef.current !== requestKey) return;
+
+      setAssistantModelMessage("Model assist is unavailable. Local suggestions are still shown.");
+      setAssistantModelResult(null);
+      setAssistantModelState("error");
+    }
   }
 
   function createAssistantChangelogDraft() {
@@ -3341,6 +3478,75 @@ export function App() {
 
                     {selectedAssistantSuggestion ? (
                       <>
+                        {canUseServerAssistant ? (
+                          <div
+                            className="assistant-model-controls"
+                            aria-label="Model assist consent"
+                          >
+                            <p
+                              className={`assistant-model-status ${assistantModelState}`}
+                              aria-live="polite"
+                            >
+                              {assistantModelMessage ||
+                                "Local suggestions shown. Model assist needs consent for this request."}
+                            </p>
+
+                            <div className="assistant-consent-grid">
+                              <label className="check-field assistant-consent-field">
+                                <input
+                                  checked={assistantConsentDraft.shareWorkspaceContext}
+                                  disabled={assistantModelState === "loading"}
+                                  onChange={(event) =>
+                                    updateAssistantWorkspaceConsent(event.target.checked)
+                                  }
+                                  type="checkbox"
+                                />
+                                <span>
+                                  <strong>Share workspace context</strong>
+                                  <small>
+                                    Uses bounded request, duplicate, and linked-work signals.
+                                  </small>
+                                </span>
+                              </label>
+
+                              <label className="check-field assistant-consent-field">
+                                <input
+                                  checked={assistantConsentDraft.shareRequesterIdentity}
+                                  disabled={
+                                    !assistantConsentDraft.shareWorkspaceContext ||
+                                    assistantModelState === "loading"
+                                  }
+                                  onChange={(event) =>
+                                    updateAssistantIdentityConsent(event.target.checked)
+                                  }
+                                  type="checkbox"
+                                />
+                                <span>
+                                  <strong>Include requester identity</strong>
+                                  <small>Otherwise requester email and name stay redacted.</small>
+                                </span>
+                              </label>
+                            </div>
+
+                            <div className="assistant-model-actions">
+                              <button
+                                className="secondary-action compact"
+                                disabled={
+                                  !assistantConsentDraft.shareWorkspaceContext ||
+                                  assistantModelState === "loading"
+                                }
+                                onClick={refreshAssistantWithModel}
+                                type="button"
+                              >
+                                <RadioTower aria-hidden="true" size={14} />
+                                {assistantModelState === "loading"
+                                  ? "Checking model"
+                                  : "Use model assist"}
+                              </button>
+                            </div>
+                          </div>
+                        ) : null}
+
                         <div className="assistant-summary">
                           <div>
                             <span>Problem</span>

@@ -11,6 +11,7 @@ OpenRoad supports Jira import, linking, encrypted credential storage, live sync,
 - Provider-neutral external mappings in `OPENROAD_INTEGRATION_FILE`.
 - Workspace-scoped installation metadata.
 - Encrypted server-only credential records through the provider-neutral credential API when `OPENROAD_TOKEN_ENCRYPTION_KEY` is configured.
+- Server-side OAuth refresh-token rotation for expired or near-expired Jira credentials before live issue sync.
 - Provider-neutral background sync jobs for active Jira installations.
 - Live Jira Cloud REST sync for already-linked issue mappings through the private sync runner when an active encrypted Jira credential is stored.
 - Signed Jira issue webhooks for already-linked issue mappings.
@@ -132,7 +133,7 @@ Credential storage requires `integration:manage`, an active Jira installation in
 
 The endpoint queues provider-neutral sync jobs for active Jira installations. The private runner is `POST /api/openroad/integrations/sync/run`.
 
-When `OPENROAD_TOKEN_ENCRYPTION_KEY` is configured and an active Jira credential exists for the installation, the server auto-wires a Jira sync worker. The worker refreshes already-linked Jira issue mappings only. It does not search projects, import unmapped Jira issues, or write back to Jira.
+When `OPENROAD_TOKEN_ENCRYPTION_KEY` is configured and an active Jira credential exists for the installation, the server auto-wires a Jira sync worker. The worker refreshes expired or near-expired OAuth credentials before provider reads, then refreshes already-linked Jira issue mappings only. It does not search projects, import unmapped Jira issues, or write back to Jira.
 
 The Jira REST client defaults to `https://api.atlassian.com/ex/jira/{cloudId}/rest/api/2/issue/{issueIdOrKey}` and can be pointed at a fake/self-host test endpoint with `OPENROAD_JIRA_API_BASE_URL`. It uses OAuth bearer authorization server-side and requests a bounded field set for issue sync. Jira `429`, `408`, `409`, and `5xx` responses become retryable sync failures with bounded backoff; malformed responses fail without persisting raw provider payloads.
 

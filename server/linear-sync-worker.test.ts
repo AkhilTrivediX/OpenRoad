@@ -28,10 +28,15 @@ import {
   type LinearApiClient,
   type LinearIssueGetOptions
 } from "./linear-api";
+import type { LinearOAuthConfig } from "./linear";
 import {
   canConfigureLinearIntegrationSyncWorker,
   createLinearIntegrationSyncWorker
 } from "./linear-sync-worker";
+import {
+  OAuthExchangeClientError,
+  type LinearOAuthExchangeClient
+} from "./oauth-clients";
 import { FileIntegrationStore } from "./integrations";
 import { FileOpenRoadStore } from "./store";
 import { createIntegrationTokenVault } from "./token-vault";
@@ -188,6 +193,188 @@ describe("Linear integration sync worker", () => {
     expect(integrations.state.mappings.find((mapping) => mapping.id === seeded.mappings[1].id)?.lastSyncedAt).toBeUndefined();
   });
 
+  it("refreshes expired OAuth credentials before fetching Linear issues", async () => {
+    const refreshes: string[] = [];
+    const { calls, integrationStore, linearClient, store, tokenVault, worker } = await createWorkerFixture({
+      linearOAuthExchangeClient: {
+        async exchangeCode() {
+          throw new Error("Unexpected Linear code exchange.");
+        },
+        async refreshToken(options) {
+          refreshes.push(options.refreshToken);
+          return {
+            accessToken: "linear-token-new",
+            expiresAt: "2026-07-04T13:00:00.000Z",
+            providerScopes: ["read"],
+            refreshToken: "linear-refresh-new",
+            tokenType: "bearer"
+          };
+        }
+      }
+    });
+    const issue = linearIssue({ id: "lin-issue-one", identifier: "OPEN-1", title: "Old Linear one" });
+    await seedLinkedIssues(
+      { integrationStore, store },
+      [issue],
+      {
+        credentialOverrides: {
+          expiresAt: "2026-07-04T11:00:00.000Z",
+          providerScopes: ["read"],
+          secretTypes: ["access-token", "refresh-token"]
+        },
+        secret: {
+          accessToken: "linear-token-old",
+          refreshToken: "linear-refresh-old"
+        }
+      }
+    );
+    linearClient.getIssue = async (options) => {
+      calls.push(options);
+      return { ...issue, title: "Updated after Linear refresh" };
+    };
+
+    const result = await worker.process(syncJob());
+    const integrations = await integrationStore.load();
+    const persistedCredential = integrations.state.credentials[0];
+    const opened = tokenVault.open(persistedCredential.encryptedSecret as any, {
+      associatedData: createIntegrationCredentialSecretContext(persistedCredential)
+    });
+
+    expect(result).toMatchObject({ kind: "success" });
+    expect(refreshes).toEqual(["linear-refresh-old"]);
+    expect(calls.map((call) => call.credential.accessToken)).toEqual(["linear-token-new"]);
+    expect(persistedCredential.expiresAt).toBe("2026-07-04T13:00:00.000Z");
+    expect(opened).toEqual({
+      accessToken: "linear-token-new",
+      refreshToken: "linear-refresh-new"
+    });
+    expect(JSON.stringify(integrations.state)).not.toContain("linear-token-old");
+    expect(JSON.stringify(integrations.state)).not.toContain("linear-token-new");
+    expect(JSON.stringify(integrations.state)).not.toContain("linear-refresh-new");
+  });
+
+  it("refreshes near-expiry Linear OAuth credentials before provider calls", async () => {
+    const refreshes: string[] = [];
+    const { calls, integrationStore, linearClient, store, worker } = await createWorkerFixture({
+      linearOAuthExchangeClient: {
+        async exchangeCode() {
+          throw new Error("Unexpected Linear code exchange.");
+        },
+        async refreshToken(options) {
+          refreshes.push(options.refreshToken);
+          return {
+            accessToken: "linear-token-near-new",
+            expiresAt: "2026-07-04T13:00:00.000Z",
+            providerScopes: ["read"],
+            refreshToken: "linear-refresh-near-new",
+            tokenType: "bearer"
+          };
+        }
+      }
+    });
+    const issue = linearIssue({ id: "lin-issue-one", identifier: "OPEN-1", title: "Old Linear one" });
+    await seedLinkedIssues(
+      { integrationStore, store },
+      [issue],
+      {
+        credentialOverrides: {
+          expiresAt: "2026-07-04T12:04:00.000Z",
+          secretTypes: ["access-token", "refresh-token"]
+        },
+        secret: {
+          accessToken: "linear-token-near-old",
+          refreshToken: "linear-refresh-near-old"
+        }
+      }
+    );
+    linearClient.getIssue = async (options) => {
+      calls.push(options);
+      return { ...issue, title: "Updated after near-expiry refresh" };
+    };
+
+    const result = await worker.process(syncJob());
+
+    expect(result).toMatchObject({ kind: "success" });
+    expect(refreshes).toEqual(["linear-refresh-near-old"]);
+    expect(calls.map((call) => call.credential.accessToken)).toEqual(["linear-token-near-new"]);
+  });
+
+  it("does not fetch Linear issues when an expired credential cannot refresh", async () => {
+    const { calls, integrationStore, store, worker } = await createWorkerFixture();
+    const issue = linearIssue({ id: "lin-issue-one", identifier: "OPEN-1", title: "Old Linear one" });
+    await seedLinkedIssues(
+      { integrationStore, store },
+      [issue],
+      {
+        credentialOverrides: {
+          expiresAt: "2026-07-04T11:00:00.000Z"
+        },
+        secret: {
+          accessToken: "linear-token-old"
+        }
+      }
+    );
+
+    const result = await worker.process(syncJob());
+
+    expect(result).toMatchObject({
+      error: "Linear credential is expired or near expiry and does not include a refresh token.",
+      kind: "fatal-error"
+    });
+    expect(calls).toEqual([]);
+  });
+
+  it("does not mutate Linear credentials when refresh is retryable", async () => {
+    const { calls, integrationStore, store, tokenVault, worker } = await createWorkerFixture({
+      linearOAuthExchangeClient: {
+        async exchangeCode() {
+          throw new Error("Unexpected Linear code exchange.");
+        },
+        async refreshToken() {
+          throw new OAuthExchangeClientError(
+            "oauth_exchange_failed",
+            "provider body mentioned linear-refresh-old",
+            429
+          );
+        }
+      }
+    });
+    const issue = linearIssue({ id: "lin-issue-one", identifier: "OPEN-1", title: "Old Linear one" });
+    await seedLinkedIssues(
+      { integrationStore, store },
+      [issue],
+      {
+        credentialOverrides: {
+          expiresAt: "2026-07-04T11:00:00.000Z",
+          secretTypes: ["access-token", "refresh-token"]
+        },
+        secret: {
+          accessToken: "linear-token-old",
+          refreshToken: "linear-refresh-old"
+        }
+      }
+    );
+
+    const result = await worker.process(syncJob());
+    const integrations = await integrationStore.load();
+    const persistedCredential = integrations.state.credentials[0];
+    const opened = tokenVault.open(persistedCredential.encryptedSecret as any, {
+      associatedData: createIntegrationCredentialSecretContext(persistedCredential)
+    });
+
+    expect(result).toMatchObject({
+      error: "Linear OAuth refresh failed with retryable status 429.",
+      kind: "retryable-error",
+      retryAfterSeconds: 300
+    });
+    expect(JSON.stringify(result)).not.toContain("linear-refresh-old");
+    expect(calls).toEqual([]);
+    expect(opened).toEqual({
+      accessToken: "linear-token-old",
+      refreshToken: "linear-refresh-old"
+    });
+  });
+
   it("reports missing live issues without deleting OpenRoad requests or mappings", async () => {
     const { integrationStore, linearClient, store, worker } = await createWorkerFixture();
     const issue = linearIssue({ id: "lin-issue-one", identifier: "OPEN-1", title: "Old Linear one" });
@@ -290,7 +477,12 @@ describe("Linear integration sync worker", () => {
   });
 });
 
-async function createWorkerFixture() {
+async function createWorkerFixture(
+  options: {
+    linearOAuthConfig?: LinearOAuthConfig;
+    linearOAuthExchangeClient?: LinearOAuthExchangeClient;
+  } = {}
+) {
   const root = await mkdtemp(join(tmpdir(), "openroad-linear-sync-worker-"));
   const store = new FileOpenRoadStore(join(root, "openroad-state.json"));
   const integrationStore = new FileIntegrationStore(join(root, "openroad-integrations.json"));
@@ -305,9 +497,21 @@ async function createWorkerFixture() {
       throw new LinearApiClientError("not_found", "not found", 404);
     }
   };
+  const linearOAuthExchangeClient =
+    options.linearOAuthExchangeClient ??
+    ({
+      async exchangeCode() {
+        throw new Error("Unexpected Linear code exchange.");
+      },
+      async refreshToken() {
+        throw new Error("Unexpected Linear token refresh.");
+      }
+    } satisfies LinearOAuthExchangeClient);
   const worker = createLinearIntegrationSyncWorker({
     integrationStore,
     linearApiClient: linearClient,
+    linearOAuthConfig: options.linearOAuthConfig ?? testLinearOAuthConfig(),
+    linearOAuthExchangeClient,
     now: () => new Date("2026-07-04T12:00:00.000Z"),
     runIntegrationMutationExclusive: (task) => task(),
     store,
@@ -319,7 +523,11 @@ async function createWorkerFixture() {
 
 async function seedLinkedIssues(
   stores: { integrationStore: FileIntegrationStore; store: FileOpenRoadStore },
-  issues: LinearIssue[]
+  issues: LinearIssue[],
+  options: {
+    credentialOverrides?: Partial<IntegrationCredential>;
+    secret?: { accessToken: string; refreshToken?: string };
+  } = {}
 ) {
   const tokenVault = createIntegrationTokenVault({
     encryptionKey: "linear-sync-worker-test-key-000000",
@@ -332,7 +540,7 @@ async function seedLinkedIssues(
     id: "linear-install",
     workspaceId: "acme"
   });
-  const credential = createCredential(tokenVault);
+  const credential = createCredential(tokenVault, options.credentialOverrides, options.secret);
   const requests = issues.map((issue, index) =>
     createOpenRoadRequestFromLinearIssue(issue, {
       now: "2026-07-04T00:00:00.000Z",
@@ -374,7 +582,9 @@ async function seedLinkedIssues(
 }
 
 function createCredential(
-  tokenVault: Extract<ReturnType<typeof createIntegrationTokenVault>, { status: "ready" }>
+  tokenVault: Extract<ReturnType<typeof createIntegrationTokenVault>, { status: "ready" }>,
+  overrides: Partial<IntegrationCredential> = {},
+  secret: { accessToken: string; refreshToken?: string } = { accessToken: "linear-token" }
 ): IntegrationCredential {
   const credential: IntegrationCredential = {
     createdAt: "2026-07-04T00:00:00.000Z",
@@ -387,15 +597,26 @@ function createCredential(
     status: "active",
     tokenType: "bearer",
     updatedAt: "2026-07-04T00:00:00.000Z",
-    workspaceId: "acme"
+    workspaceId: "acme",
+    ...overrides
   };
 
   return {
     ...credential,
     encryptedSecret: tokenVault.seal(
-      { accessToken: "linear-token" },
+      secret,
       { associatedData: createIntegrationCredentialSecretContext(credential) }
     )
+  };
+}
+
+function testLinearOAuthConfig(): LinearOAuthConfig {
+  return {
+    appBaseUrl: "https://linear.test",
+    clientId: "lin-client",
+    clientSecret: "linear-secret",
+    redirectUri: "https://openroad.test/api/openroad/integrations/linear/oauth/callback",
+    tokenUrl: "https://api.linear.test/oauth/token"
   };
 }
 

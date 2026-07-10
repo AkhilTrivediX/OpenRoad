@@ -3497,6 +3497,56 @@ describe("OpenRoad production server", () => {
     expect(responseText).not.toContain("ciphertext");
   });
 
+  it("keeps refreshable expired OAuth credentials eligible for manual sync status", async () => {
+    const { url } = await startTestServer({
+      auth: { adminToken: "secret", singleUserMode: false, trustProxyHeaders: true },
+      linearOAuthConfig: testLinearOAuthConfig(),
+      tokenVault: testTokenVault()
+    });
+
+    await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/linear/issues/import`, {
+      body: JSON.stringify(linearImportPayload()),
+      headers: {
+        Authorization: "Bearer secret",
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    const credential = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/linear/credentials`, {
+      body: JSON.stringify(
+        linearCredentialPayload({
+          expiresAt: "2026-07-04T01:00:00.000Z",
+          refreshToken: "linear-refresh-secret"
+        })
+      ),
+      headers: {
+        Authorization: "Bearer secret",
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    const status = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/status`, {
+      headers: workspaceActorHeaders("acme", "Viewer")
+    });
+    const linear = status.body.providers.find(
+      (provider: { provider: string }) => provider.provider === "linear"
+    );
+    const responseText = JSON.stringify(status.body);
+
+    expect(credential.status).toBe(201);
+    expect(linear).toMatchObject({
+      activeCredentials: 1,
+      capabilities: {
+        liveSync: true,
+        manualSync: true
+      },
+      linkedIssueMappings: 1,
+      syncWorkerConfigured: true
+    });
+    expect(responseText).not.toContain("linear-refresh-secret");
+    expect(responseText).not.toContain("ciphertext");
+  });
+
   it("maps auto-configured GitHub sync worker failures through the private runner", async () => {
     const failures = [
       new GitHubAppClientError("github_api_error", "raw-token-should-not-leak", 429),

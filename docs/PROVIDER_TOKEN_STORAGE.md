@@ -1,6 +1,6 @@
 # Provider Token Storage
 
-OpenRoad now has server-only encrypted credential storage primitives for GitHub, Linear, and Jira integrations. Linear and Jira OAuth callbacks can exchange provider authorization codes server-side and store encrypted credentials without putting provider tokens in browser state or core OpenRoad workspace data. Linear and Jira live sync use these encrypted credentials for already-linked issue mappings.
+OpenRoad now has server-only encrypted credential storage primitives for GitHub, Linear, and Jira integrations. Linear and Jira OAuth callbacks can exchange provider authorization codes server-side and store encrypted credentials without putting provider tokens in browser state or core OpenRoad workspace data. Linear and Jira live sync use these encrypted credentials for already-linked issue mappings and rotate OAuth refresh tokens server-side when access tokens expire.
 
 ## Environment
 
@@ -59,6 +59,8 @@ Revoking a credential marks it `revoked`, records `revokedAt`, and removes encry
 
 Linear and Jira callbacks use the same credential records as the manual credential API. Callback-created credentials are limited to `read:external`, labeled `OAuth`, and scoped to the decoded workspace plus active provider installation. Provider authorization codes, access tokens, refresh tokens, client secrets, authorization headers, and encrypted credential internals are not returned in callback responses or audit events.
 
+When a Linear or Jira OAuth credential is expired or near expiry, the provider sync worker opens the encrypted refresh token server-side, exchanges it with the provider token endpoint, and replaces the encrypted access-token and refresh-token payload under the existing integration metadata mutation lock. Refresh failures never erase the old encrypted credential and API/status responses continue to expose metadata only.
+
 OAuth callback exchange is disabled with `503 not_configured` unless the provider OAuth client settings, integration metadata store, and `OPENROAD_TOKEN_ENCRYPTION_KEY` token vault are all configured.
 
 ## Backup And Rotation
@@ -77,6 +79,5 @@ Changing `OPENROAD_TOKEN_ENCRYPTION_KEY` without re-encrypting existing credenti
 ## Deferred Work
 
 - Provider write-back.
-- OAuth refresh-token rotation.
 - External KMS or multi-key rotation.
 - Multi-process mutation locking.

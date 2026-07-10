@@ -28,10 +28,15 @@ import {
   type JiraApiClient,
   type JiraIssueGetOptions
 } from "./jira-api";
+import type { JiraOAuthConfig } from "./jira";
 import {
   canConfigureJiraIntegrationSyncWorker,
   createJiraIntegrationSyncWorker
 } from "./jira-sync-worker";
+import {
+  OAuthExchangeClientError,
+  type JiraOAuthExchangeClient
+} from "./oauth-clients";
 import { FileIntegrationStore } from "./integrations";
 import { FileOpenRoadStore } from "./store";
 import { createIntegrationTokenVault } from "./token-vault";
@@ -180,6 +185,188 @@ describe("Jira integration sync worker", () => {
     expect(integrations.state.mappings.find((mapping) => mapping.id === seeded.mappings[1].id)?.lastSyncedAt).toBeUndefined();
   });
 
+  it("refreshes expired OAuth credentials before fetching Jira issues", async () => {
+    const refreshes: string[] = [];
+    const { calls, integrationStore, jiraClient, store, tokenVault, worker } = await createWorkerFixture({
+      jiraOAuthExchangeClient: {
+        async exchangeCode() {
+          throw new Error("Unexpected Jira code exchange.");
+        },
+        async refreshToken(options) {
+          refreshes.push(options.refreshToken);
+          return {
+            accessToken: "jira-token-new",
+            expiresAt: "2026-07-04T13:00:00.000Z",
+            providerScopes: ["read:jira-work"],
+            refreshToken: "jira-refresh-new",
+            tokenType: "bearer"
+          };
+        }
+      }
+    });
+    const issue = jiraIssue({ id: "10041", key: "OPEN-1", title: "Old Jira one" });
+    await seedLinkedIssues(
+      { integrationStore, store },
+      [issue],
+      {
+        credentialOverrides: {
+          expiresAt: "2026-07-04T11:00:00.000Z",
+          providerScopes: ["read:jira-work"],
+          secretTypes: ["access-token", "refresh-token"]
+        },
+        secret: {
+          accessToken: "jira-token-old",
+          refreshToken: "jira-refresh-old"
+        }
+      }
+    );
+    jiraClient.getIssue = async (options) => {
+      calls.push(options);
+      return { ...issue, title: "Updated after Jira refresh" };
+    };
+
+    const result = await worker.process(syncJob());
+    const integrations = await integrationStore.load();
+    const persistedCredential = integrations.state.credentials[0];
+    const opened = tokenVault.open(persistedCredential.encryptedSecret as any, {
+      associatedData: createIntegrationCredentialSecretContext(persistedCredential)
+    });
+
+    expect(result).toMatchObject({ kind: "success" });
+    expect(refreshes).toEqual(["jira-refresh-old"]);
+    expect(calls.map((call) => call.credential.accessToken)).toEqual(["jira-token-new"]);
+    expect(persistedCredential.expiresAt).toBe("2026-07-04T13:00:00.000Z");
+    expect(opened).toEqual({
+      accessToken: "jira-token-new",
+      refreshToken: "jira-refresh-new"
+    });
+    expect(JSON.stringify(integrations.state)).not.toContain("jira-token-old");
+    expect(JSON.stringify(integrations.state)).not.toContain("jira-token-new");
+    expect(JSON.stringify(integrations.state)).not.toContain("jira-refresh-new");
+  });
+
+  it("refreshes near-expiry Jira OAuth credentials before provider calls", async () => {
+    const refreshes: string[] = [];
+    const { calls, integrationStore, jiraClient, store, worker } = await createWorkerFixture({
+      jiraOAuthExchangeClient: {
+        async exchangeCode() {
+          throw new Error("Unexpected Jira code exchange.");
+        },
+        async refreshToken(options) {
+          refreshes.push(options.refreshToken);
+          return {
+            accessToken: "jira-token-near-new",
+            expiresAt: "2026-07-04T13:00:00.000Z",
+            providerScopes: ["read:jira-work"],
+            refreshToken: "jira-refresh-near-new",
+            tokenType: "bearer"
+          };
+        }
+      }
+    });
+    const issue = jiraIssue({ id: "10041", key: "OPEN-1", title: "Old Jira one" });
+    await seedLinkedIssues(
+      { integrationStore, store },
+      [issue],
+      {
+        credentialOverrides: {
+          expiresAt: "2026-07-04T12:04:00.000Z",
+          secretTypes: ["access-token", "refresh-token"]
+        },
+        secret: {
+          accessToken: "jira-token-near-old",
+          refreshToken: "jira-refresh-near-old"
+        }
+      }
+    );
+    jiraClient.getIssue = async (options) => {
+      calls.push(options);
+      return { ...issue, title: "Updated after near-expiry refresh" };
+    };
+
+    const result = await worker.process(syncJob());
+
+    expect(result).toMatchObject({ kind: "success" });
+    expect(refreshes).toEqual(["jira-refresh-near-old"]);
+    expect(calls.map((call) => call.credential.accessToken)).toEqual(["jira-token-near-new"]);
+  });
+
+  it("does not fetch Jira issues when an expired credential cannot refresh", async () => {
+    const { calls, integrationStore, store, worker } = await createWorkerFixture();
+    const issue = jiraIssue({ id: "10041", key: "OPEN-1", title: "Old Jira one" });
+    await seedLinkedIssues(
+      { integrationStore, store },
+      [issue],
+      {
+        credentialOverrides: {
+          expiresAt: "2026-07-04T11:00:00.000Z"
+        },
+        secret: {
+          accessToken: "jira-token-old"
+        }
+      }
+    );
+
+    const result = await worker.process(syncJob());
+
+    expect(result).toMatchObject({
+      error: "Jira credential is expired or near expiry and does not include a refresh token.",
+      kind: "fatal-error"
+    });
+    expect(calls).toEqual([]);
+  });
+
+  it("does not mutate Jira credentials when refresh is retryable", async () => {
+    const { calls, integrationStore, store, tokenVault, worker } = await createWorkerFixture({
+      jiraOAuthExchangeClient: {
+        async exchangeCode() {
+          throw new Error("Unexpected Jira code exchange.");
+        },
+        async refreshToken() {
+          throw new OAuthExchangeClientError(
+            "oauth_exchange_failed",
+            "provider body mentioned jira-refresh-old",
+            429
+          );
+        }
+      }
+    });
+    const issue = jiraIssue({ id: "10041", key: "OPEN-1", title: "Old Jira one" });
+    await seedLinkedIssues(
+      { integrationStore, store },
+      [issue],
+      {
+        credentialOverrides: {
+          expiresAt: "2026-07-04T11:00:00.000Z",
+          secretTypes: ["access-token", "refresh-token"]
+        },
+        secret: {
+          accessToken: "jira-token-old",
+          refreshToken: "jira-refresh-old"
+        }
+      }
+    );
+
+    const result = await worker.process(syncJob());
+    const integrations = await integrationStore.load();
+    const persistedCredential = integrations.state.credentials[0];
+    const opened = tokenVault.open(persistedCredential.encryptedSecret as any, {
+      associatedData: createIntegrationCredentialSecretContext(persistedCredential)
+    });
+
+    expect(result).toMatchObject({
+      error: "Jira OAuth refresh failed with retryable status 429.",
+      kind: "retryable-error",
+      retryAfterSeconds: 300
+    });
+    expect(JSON.stringify(result)).not.toContain("jira-refresh-old");
+    expect(calls).toEqual([]);
+    expect(opened).toEqual({
+      accessToken: "jira-token-old",
+      refreshToken: "jira-refresh-old"
+    });
+  });
+
   it("reports missing live issues without deleting OpenRoad requests or mappings", async () => {
     const { integrationStore, jiraClient, store, worker } = await createWorkerFixture();
     const issue = jiraIssue({ id: "10041", key: "OPEN-1", title: "Old Jira one" });
@@ -282,7 +469,12 @@ describe("Jira integration sync worker", () => {
   });
 });
 
-async function createWorkerFixture() {
+async function createWorkerFixture(
+  options: {
+    jiraOAuthConfig?: JiraOAuthConfig;
+    jiraOAuthExchangeClient?: JiraOAuthExchangeClient;
+  } = {}
+) {
   const root = await mkdtemp(join(tmpdir(), "openroad-jira-sync-worker-"));
   const store = new FileOpenRoadStore(join(root, "openroad-state.json"));
   const integrationStore = new FileIntegrationStore(join(root, "openroad-integrations.json"));
@@ -297,9 +489,21 @@ async function createWorkerFixture() {
       throw new JiraApiClientError("not_found", "not found", 404);
     }
   };
+  const jiraOAuthExchangeClient =
+    options.jiraOAuthExchangeClient ??
+    ({
+      async exchangeCode() {
+        throw new Error("Unexpected Jira code exchange.");
+      },
+      async refreshToken() {
+        throw new Error("Unexpected Jira token refresh.");
+      }
+    } satisfies JiraOAuthExchangeClient);
   const worker = createJiraIntegrationSyncWorker({
     integrationStore,
     jiraApiClient: jiraClient,
+    jiraOAuthConfig: options.jiraOAuthConfig ?? testJiraOAuthConfig(),
+    jiraOAuthExchangeClient,
     now: () => new Date("2026-07-04T12:00:00.000Z"),
     runIntegrationMutationExclusive: (task) => task(),
     store,
@@ -311,7 +515,11 @@ async function createWorkerFixture() {
 
 async function seedLinkedIssues(
   stores: { integrationStore: FileIntegrationStore; store: FileOpenRoadStore },
-  issues: JiraIssue[]
+  issues: JiraIssue[],
+  options: {
+    credentialOverrides?: Partial<IntegrationCredential>;
+    secret?: { accessToken: string; refreshToken?: string };
+  } = {}
 ) {
   const tokenVault = createIntegrationTokenVault({
     encryptionKey: "jira-sync-worker-test-key-0000000",
@@ -324,7 +532,12 @@ async function seedLinkedIssues(
     id: "jira-install",
     workspaceId: "acme"
   });
-  const credential = createCredential(tokenVault, installation.id);
+  const credential = createCredential(
+    tokenVault,
+    installation.id,
+    options.credentialOverrides,
+    options.secret
+  );
   const requests = issues.map((issue, index) =>
     createOpenRoadRequestFromJiraIssue(issue, {
       now: "2026-07-04T00:00:00.000Z",
@@ -367,7 +580,9 @@ async function seedLinkedIssues(
 
 function createCredential(
   tokenVault: Extract<ReturnType<typeof createIntegrationTokenVault>, { status: "ready" }>,
-  installationId: string
+  installationId: string,
+  overrides: Partial<IntegrationCredential> = {},
+  secret: { accessToken: string; refreshToken?: string } = { accessToken: "jira-token" }
 ): IntegrationCredential {
   const credential: IntegrationCredential = {
     createdAt: "2026-07-04T00:00:00.000Z",
@@ -380,15 +595,26 @@ function createCredential(
     status: "active",
     tokenType: "bearer",
     updatedAt: "2026-07-04T00:00:00.000Z",
-    workspaceId: "acme"
+    workspaceId: "acme",
+    ...overrides
   };
 
   return {
     ...credential,
     encryptedSecret: tokenVault.seal(
-      { accessToken: "jira-token" },
+      secret,
       { associatedData: createIntegrationCredentialSecretContext(credential) }
     )
+  };
+}
+
+function testJiraOAuthConfig(): JiraOAuthConfig {
+  return {
+    authBaseUrl: "https://auth.atlassian.test",
+    clientId: "jira-client",
+    clientSecret: "jira-secret",
+    redirectUri: "https://openroad.test/api/openroad/integrations/jira/oauth/callback",
+    resourceBaseUrl: "https://api.atlassian.test"
   };
 }
 

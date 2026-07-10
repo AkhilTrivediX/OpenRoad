@@ -1,6 +1,6 @@
 # OpenRoad Linear Issue Sync
 
-OpenRoad now has a production-safe Linear integration path: safe OAuth setup metadata, payload-backed Linear issue import/link, encrypted server-only credential storage, live GraphQL sync workers, and signed webhooks for already-linked issue mappings.
+OpenRoad now has a production-safe Linear integration path: safe OAuth setup metadata, payload-backed Linear issue import/link, encrypted server-only credential storage with OAuth refresh-token rotation, live GraphQL sync workers, and signed webhooks for already-linked issue mappings.
 
 Official Linear references used for this slice:
 
@@ -18,6 +18,7 @@ Official Linear references used for this slice:
 - Re-import the same Linear issue and update the mapped request instead of creating duplicates.
 - Store Linear installation metadata and mappings in `OPENROAD_INTEGRATION_FILE`, outside OpenRoad core workspace state.
 - Store encrypted server-only credential records through the provider-neutral credential API when `OPENROAD_TOKEN_ENCRYPTION_KEY` is configured.
+- Refresh expired or near-expired OAuth credentials server-side before live issue sync, replacing encrypted access and refresh token material atomically.
 - Queue provider-neutral background sync jobs for active Linear installations.
 - Run private Linear live sync for already-linked Linear issue mappings when an active encrypted Linear credential is stored.
 - Update linked OpenRoad requests from live Linear GraphQL issue data without importing unmapped issues.
@@ -67,9 +68,9 @@ Set `tokenType` to `bearer` for OAuth access tokens. Set `tokenType` to `api-key
 
 The endpoint queues provider-neutral sync jobs for active Linear installations. The private runner is `POST /api/openroad/integrations/sync/run`.
 
-When `OPENROAD_TOKEN_ENCRYPTION_KEY` is configured and an active Linear credential exists for the installation, the built-in production server auto-wires a Linear GraphQL worker. The worker refreshes already-linked Linear issue mappings by issue id, updates the linked OpenRoad request through the existing Linear mapper, and records `lastSyncedAt` on synced mappings.
+When `OPENROAD_TOKEN_ENCRYPTION_KEY` is configured and an active Linear credential exists for the installation, the built-in production server auto-wires a Linear GraphQL worker. The worker refreshes expired or near-expired OAuth credentials before provider reads, refreshes already-linked Linear issue mappings by issue id, updates the linked OpenRoad request through the existing Linear mapper, and records `lastSyncedAt` on synced mappings.
 
-The worker does not list/import unmapped Linear issues, refresh OAuth tokens, or write changes back to Linear.
+The worker does not list/import unmapped Linear issues or write changes back to Linear.
 
 ## Webhook Endpoint
 
@@ -121,6 +122,5 @@ Linear issue assignees are preserved in the imported description and tags. OpenR
 
 ## Deferred Work
 
-- OAuth refresh-token rotation.
 - Full browser import UI and Linear sync logs.
 - Provider write-back and conflict handling.

@@ -381,7 +381,11 @@ export function createOpenRoadServer({
     githubAppConfig,
     integrationStore,
     jiraApiClient,
+    jiraOAuthConfig,
+    jiraOAuthExchangeClient,
     linearApiClient,
+    linearOAuthConfig,
+    linearOAuthExchangeClient,
     runIntegrationMutationExclusive,
     store,
     tokenVault
@@ -459,7 +463,11 @@ function createConfiguredIntegrationSyncWorkers({
   githubAppConfig,
   integrationStore,
   jiraApiClient,
+  jiraOAuthConfig,
+  jiraOAuthExchangeClient,
   linearApiClient,
+  linearOAuthConfig,
+  linearOAuthExchangeClient,
   runIntegrationMutationExclusive,
   store,
   tokenVault
@@ -468,7 +476,11 @@ function createConfiguredIntegrationSyncWorkers({
   githubAppConfig: GitHubAppConfig;
   integrationStore: IntegrationStore | undefined;
   jiraApiClient: JiraApiClient;
+  jiraOAuthConfig: JiraOAuthConfig;
+  jiraOAuthExchangeClient: JiraOAuthExchangeClient;
   linearApiClient: LinearApiClient;
+  linearOAuthConfig: LinearOAuthConfig;
+  linearOAuthExchangeClient: LinearOAuthExchangeClient;
   runIntegrationMutationExclusive: NotificationDeliveryRunner;
   store: OpenRoadStore;
   tokenVault: IntegrationTokenVault;
@@ -491,6 +503,8 @@ function createConfiguredIntegrationSyncWorkers({
           jira: createJiraIntegrationSyncWorker({
             integrationStore,
             jiraApiClient,
+            jiraOAuthConfig,
+            jiraOAuthExchangeClient,
             runIntegrationMutationExclusive,
             store,
             tokenVault
@@ -502,6 +516,8 @@ function createConfiguredIntegrationSyncWorkers({
           linear: createLinearIntegrationSyncWorker({
             integrationStore,
             linearApiClient,
+            linearOAuthConfig,
+            linearOAuthExchangeClient,
             runIntegrationMutationExclusive,
             store,
             tokenVault
@@ -4215,7 +4231,10 @@ function createIntegrationStatusProviderSummary({
       credential.status === "active" &&
       credential.permissions.includes("read:external") &&
       activeInstallations.some((installation) => installation.id === credential.installationId) &&
-      !isExpiredTimestamp(credential.expiresAt)
+      isCredentialUsableForSync(credential, provider, {
+        jiraOAuthConfig,
+        linearOAuthConfig
+      })
   );
   const jobs = integrationState.syncJobs
     .filter((job) => job.workspaceId === workspaceId && job.provider === provider)
@@ -4504,6 +4523,32 @@ function isExpiredTimestamp(value: string | undefined) {
   if (!value) return false;
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) && parsed <= Date.now();
+}
+
+function isCredentialUsableForSync(
+  credential: IntegrationCredential,
+  provider: IntegrationProvider,
+  {
+    jiraOAuthConfig,
+    linearOAuthConfig
+  }: {
+    jiraOAuthConfig: JiraOAuthConfig;
+    linearOAuthConfig: LinearOAuthConfig;
+  }
+) {
+  if (!isExpiredTimestamp(credential.expiresAt)) return true;
+
+  if (!credential.secretTypes.includes("refresh-token")) return false;
+
+  if (provider === "linear") {
+    return Boolean(linearOAuthConfig.clientId && linearOAuthConfig.clientSecret);
+  }
+
+  if (provider === "jira") {
+    return Boolean(jiraOAuthConfig.clientId && jiraOAuthConfig.clientSecret);
+  }
+
+  return false;
 }
 
 async function handleIntegrationSyncRunRequest(

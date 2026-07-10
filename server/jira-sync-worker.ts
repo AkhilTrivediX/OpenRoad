@@ -16,6 +16,8 @@ import {
 import { parseOpenRoadState, type OpenRoadStore } from "./store.js";
 import {
   type IntegrationTokenVault,
+  type IntegrationTokenVaultReady,
+  type IntegrationCredentialSecretPayload,
   IntegrationTokenVaultError
 } from "./token-vault.js";
 import type { IntegrationSyncWorker, IntegrationSyncWorkerResult } from "./sync-jobs.js";
@@ -24,12 +26,21 @@ import {
   type JiraApiClient,
   type JiraApiCredential
 } from "./jira-api.js";
+import type { JiraOAuthConfig } from "./jira.js";
+import {
+  OAuthExchangeClientError,
+  type JiraOAuthExchangeClient,
+  type OAuthTokenExchangeResult
+} from "./oauth-clients.js";
 
 type ExclusiveRunner = <T>(task: () => Promise<T>) => Promise<T>;
+const refreshLeadTimeMs = 5 * 60 * 1000;
 
 export type JiraIntegrationSyncWorkerOptions = {
   integrationStore: IntegrationStore;
   jiraApiClient: JiraApiClient;
+  jiraOAuthConfig: JiraOAuthConfig;
+  jiraOAuthExchangeClient: JiraOAuthExchangeClient;
   now?: () => Date;
   runIntegrationMutationExclusive: ExclusiveRunner;
   store: OpenRoadStore;
@@ -68,6 +79,8 @@ export function canConfigureJiraIntegrationSyncWorker(tokenVault: IntegrationTok
 export function createJiraIntegrationSyncWorker({
   integrationStore,
   jiraApiClient,
+  jiraOAuthConfig,
+  jiraOAuthExchangeClient,
   now = () => new Date(),
   runIntegrationMutationExclusive,
   store,
@@ -81,7 +94,14 @@ export function createJiraIntegrationSyncWorker({
 
       try {
         const plan = await runIntegrationMutationExclusive(async () =>
-          createJiraSyncPlan((await integrationStore.load()).state, job, tokenVault, now().toISOString())
+          createJiraSyncPlan({
+            integrationStore,
+            jiraOAuthConfig,
+            jiraOAuthExchangeClient,
+            job,
+            now: now().toISOString(),
+            tokenVault
+          })
         );
 
         if (plan.targets.length === 0) {
@@ -110,14 +130,36 @@ export function createJiraIntegrationSyncWorker({
   };
 }
 
-function createJiraSyncPlan(
-  state: IntegrationState,
-  job: IntegrationSyncJob,
-  tokenVault: IntegrationTokenVault,
-  now: string
-): JiraSyncPlan {
+async function createJiraSyncPlan({
+  integrationStore,
+  jiraOAuthConfig,
+  jiraOAuthExchangeClient,
+  job,
+  now,
+  tokenVault
+}: {
+  integrationStore: IntegrationStore;
+  jiraOAuthConfig: JiraOAuthConfig;
+  jiraOAuthExchangeClient: JiraOAuthExchangeClient;
+  job: IntegrationSyncJob;
+  now: string;
+  tokenVault: IntegrationTokenVault;
+}): Promise<JiraSyncPlan> {
+  const result = await integrationStore.load();
+  const state = result.state;
   const installation = findActiveJiraInstallation(state, job);
-  const credential = findActiveJiraCredential(state, installation, now);
+  const credential = findActiveJiraCredential(state, installation, now, undefined, {
+    allowExpired: true
+  });
+  const resolvedCredential = await openOrRefreshJiraCredential({
+    credential,
+    integrationStore,
+    jiraOAuthConfig,
+    jiraOAuthExchangeClient,
+    now,
+    state,
+    tokenVault
+  });
   const mappings = findJiraIssueMappings(state, job, installation);
 
   if (job.mappingId && mappings.length === 0) {
@@ -125,8 +167,8 @@ function createJiraSyncPlan(
   }
 
   return {
-    credential: openJiraCredential(tokenVault, credential),
-    credentialId: credential.id,
+    credential: resolvedCredential.apiCredential,
+    credentialId: resolvedCredential.credential.id,
     installation,
     targets: mappings.map((mapping) => getIssueSyncTarget(mapping, installation))
   };
@@ -274,7 +316,8 @@ function findActiveJiraCredential(
   state: IntegrationState,
   installation: IntegrationInstallation,
   now: string,
-  credentialId?: string
+  credentialId?: string,
+  options: { allowExpired?: boolean } = {}
 ) {
   const credential = state.credentials.find(
     (item) =>
@@ -293,7 +336,7 @@ function findActiveJiraCredential(
     throw new JiraSyncWorkerError("fatal-error", "Jira credential cannot read issues.");
   }
 
-  if (credential.expiresAt && Date.parse(credential.expiresAt) <= Date.parse(now)) {
+  if (!options.allowExpired && isCredentialExpired(credential, now)) {
     throw new JiraSyncWorkerError("fatal-error", "Jira credential is expired.");
   }
 
@@ -302,6 +345,64 @@ function findActiveJiraCredential(
   }
 
   return credential;
+}
+
+async function openOrRefreshJiraCredential({
+  credential,
+  integrationStore,
+  jiraOAuthConfig,
+  jiraOAuthExchangeClient,
+  now,
+  state,
+  tokenVault
+}: {
+  credential: IntegrationCredential;
+  integrationStore: IntegrationStore;
+  jiraOAuthConfig: JiraOAuthConfig;
+  jiraOAuthExchangeClient: JiraOAuthExchangeClient;
+  now: string;
+  state: IntegrationState;
+  tokenVault: IntegrationTokenVault;
+}) {
+  const readyVault = requireJiraTokenVault(tokenVault);
+  const secret = openJiraCredentialSecret(readyVault, credential);
+
+  if (!shouldRefreshCredential(credential, now)) {
+    return {
+      apiCredential: createJiraApiCredential(secret.accessToken),
+      credential
+    };
+  }
+
+  if (!credential.secretTypes.includes("refresh-token") || !secret.refreshToken) {
+    throw new JiraSyncWorkerError(
+      "fatal-error",
+      "Jira credential is expired or near expiry and does not include a refresh token."
+    );
+  }
+
+  const refreshed = await jiraOAuthExchangeClient.refreshToken({
+    config: requireJiraRefreshConfig(jiraOAuthConfig),
+    refreshToken: secret.refreshToken
+  });
+  const rotated = rotateJiraCredentialSecret({
+    credential,
+    now,
+    refreshed,
+    tokenVault: readyVault
+  });
+
+  await integrationStore.replaceState(
+    parseIntegrationState({
+      ...state,
+      credentials: state.credentials.map((item) => (item.id === rotated.id ? rotated : item))
+    })
+  );
+
+  return {
+    apiCredential: createJiraApiCredential(refreshed.accessToken),
+    credential: rotated
+  };
 }
 
 function findJiraIssueMappings(
@@ -324,22 +425,31 @@ function openJiraCredential(
   tokenVault: IntegrationTokenVault,
   credential: IntegrationCredential
 ): JiraApiCredential {
+  const readyVault = requireJiraTokenVault(tokenVault);
+  const secret = openJiraCredentialSecret(readyVault, credential);
+  return createJiraApiCredential(secret.accessToken);
+}
+
+function requireJiraTokenVault(tokenVault: IntegrationTokenVault): IntegrationTokenVaultReady {
   if (tokenVault.status !== "ready") {
     throw new JiraSyncWorkerError("fatal-error", "Jira credential vault is not configured.");
   }
 
+  return tokenVault;
+}
+
+function openJiraCredentialSecret(
+  tokenVault: IntegrationTokenVaultReady,
+  credential: IntegrationCredential
+): IntegrationCredentialSecretPayload {
   if (!credential.encryptedSecret) {
     throw new JiraSyncWorkerError("fatal-error", "Jira credential secret is not available.");
   }
 
   try {
-    const secret = tokenVault.open(credential.encryptedSecret, {
+    return tokenVault.open(credential.encryptedSecret, {
       associatedData: createIntegrationCredentialSecretContext(credential)
     });
-
-    return {
-      accessToken: secret.accessToken
-    };
   } catch (error) {
     if (error instanceof IntegrationTokenVaultError) {
       throw new JiraSyncWorkerError("fatal-error", "Jira credential could not be opened.");
@@ -347,6 +457,75 @@ function openJiraCredential(
 
     throw error;
   }
+}
+
+function createJiraApiCredential(accessToken: string): JiraApiCredential {
+  return { accessToken };
+}
+
+function shouldRefreshCredential(credential: IntegrationCredential, now: string) {
+  const expiresAtMs = credential.expiresAt ? Date.parse(credential.expiresAt) : Number.NaN;
+  const nowMs = Date.parse(now);
+
+  return Number.isFinite(expiresAtMs) && Number.isFinite(nowMs) && expiresAtMs <= nowMs + refreshLeadTimeMs;
+}
+
+function isCredentialExpired(credential: IntegrationCredential, now: string) {
+  const expiresAtMs = credential.expiresAt ? Date.parse(credential.expiresAt) : Number.NaN;
+  const nowMs = Date.parse(now);
+
+  return Number.isFinite(expiresAtMs) && Number.isFinite(nowMs) && expiresAtMs <= nowMs;
+}
+
+function requireJiraRefreshConfig(config: JiraOAuthConfig) {
+  if (!config.clientId || !config.clientSecret) {
+    throw new JiraSyncWorkerError("fatal-error", "Jira OAuth refresh is not configured.");
+  }
+
+  return {
+    clientId: config.clientId,
+    clientSecret: config.clientSecret
+  };
+}
+
+function rotateJiraCredentialSecret({
+  credential,
+  now,
+  refreshed,
+  tokenVault
+}: {
+  credential: IntegrationCredential;
+  now: string;
+  refreshed: OAuthTokenExchangeResult;
+  tokenVault: IntegrationTokenVaultReady;
+}): IntegrationCredential {
+  if (!refreshed.refreshToken) {
+    throw new JiraSyncWorkerError("fatal-error", "Jira OAuth refresh response did not include a refresh token.");
+  }
+
+  if (!refreshed.expiresAt) {
+    throw new JiraSyncWorkerError("fatal-error", "Jira OAuth refresh response did not include an expiry.");
+  }
+
+  const rotated: IntegrationCredential = {
+    ...credential,
+    expiresAt: refreshed.expiresAt,
+    providerScopes: refreshed.providerScopes.length > 0 ? refreshed.providerScopes : credential.providerScopes,
+    secretTypes: ["access-token", "refresh-token"],
+    tokenType: refreshed.tokenType ?? credential.tokenType ?? "bearer",
+    updatedAt: now
+  };
+
+  return {
+    ...rotated,
+    encryptedSecret: tokenVault.seal(
+      {
+        accessToken: refreshed.accessToken,
+        refreshToken: refreshed.refreshToken
+      },
+      { associatedData: createIntegrationCredentialSecretContext(rotated) }
+    )
+  };
 }
 
 function findWorkspace(state: OpenRoadState, mapping: ExternalObjectMapping): Workspace | undefined {
@@ -408,6 +587,24 @@ function mapJiraSyncError(error: unknown): IntegrationSyncWorkerResult {
     }
 
     return fatalResult(`Jira API request failed with status ${error.status ?? "unknown"}.`);
+  }
+
+  if (error instanceof OAuthExchangeClientError) {
+    if (error.code === "invalid_response") {
+      return fatalResult("Jira OAuth refresh response was invalid.");
+    }
+
+    if (isRetryableJiraStatus(error.status)) {
+      return {
+        error: error.status
+          ? `Jira OAuth refresh failed with retryable status ${error.status}.`
+          : "Jira OAuth refresh failed before response.",
+        kind: "retryable-error",
+        retryAfterSeconds: getRetryAfterSeconds(error.status)
+      };
+    }
+
+    return fatalResult(`Jira OAuth refresh failed with status ${error.status ?? "unknown"}.`);
   }
 
   return {

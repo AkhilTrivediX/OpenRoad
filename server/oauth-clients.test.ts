@@ -165,6 +165,109 @@ describe("OAuth exchange clients", () => {
     });
   });
 
+  it("refreshes Linear tokens with form encoding", async () => {
+    const calls: Array<{ body?: unknown; headers?: Headers; method?: string; url: string }> = [];
+    const client = new FetchLinearOAuthExchangeClient(
+      { tokenUrl: "https://api.linear.test/oauth/token" },
+      (async (input, init) => {
+        calls.push({
+          body: init?.body,
+          headers: new Headers(init?.headers),
+          method: init?.method,
+          url: String(input)
+        });
+
+        return jsonResponse({
+          access_token: "linear-access-new",
+          expires_in: 3600,
+          refresh_token: "linear-refresh-new",
+          scope: ["read", "admin"],
+          token_type: "Bearer"
+        });
+      }) as typeof fetch
+    );
+
+    const result = await client.refreshToken({
+      config: {
+        clientId: "lin-client",
+        clientSecret: "linear-secret"
+      },
+      refreshToken: "linear-refresh-old"
+    });
+    const body = new URLSearchParams(calls[0].body as string);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({
+      method: "POST",
+      url: "https://api.linear.test/oauth/token"
+    });
+    expect(calls[0].headers?.get("content-type")).toBe("application/x-www-form-urlencoded");
+    expect(body.get("grant_type")).toBe("refresh_token");
+    expect(body.get("client_id")).toBe("lin-client");
+    expect(body.get("client_secret")).toBe("linear-secret");
+    expect(body.get("refresh_token")).toBe("linear-refresh-old");
+    expect(result).toMatchObject({
+      accessToken: "linear-access-new",
+      providerScopes: ["read", "admin"],
+      refreshToken: "linear-refresh-new",
+      tokenType: "bearer"
+    });
+  });
+
+  it("refreshes Jira tokens with JSON and rotating refresh-token fields", async () => {
+    const calls: Array<{ body?: unknown; headers?: Headers; method?: string; url: string }> = [];
+    const client = new FetchJiraOAuthExchangeClient(
+      {
+        authBaseUrl: "https://auth.atlassian.test",
+        resourceBaseUrl: "https://api.atlassian.test"
+      },
+      (async (input, init) => {
+        calls.push({
+          body: init?.body,
+          headers: new Headers(init?.headers),
+          method: init?.method,
+          url: String(input)
+        });
+
+        return jsonResponse({
+          access_token: "jira-access-new",
+          expires_in: 1800,
+          refresh_token: "jira-refresh-new",
+          scope: "read:jira-work read:jira-user",
+          token_type: "Bearer"
+        });
+      }) as typeof fetch
+    );
+
+    const result = await client.refreshToken({
+      config: {
+        clientId: "jira-client",
+        clientSecret: "jira-secret"
+      },
+      refreshToken: "jira-refresh-old"
+    });
+    const body = JSON.parse(calls[0].body as string) as Record<string, string>;
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({
+      method: "POST",
+      url: "https://auth.atlassian.test/oauth/token"
+    });
+    expect(calls[0].headers?.get("content-type")).toBe("application/json");
+    expect(body).toMatchObject({
+      client_id: "jira-client",
+      client_secret: "jira-secret",
+      grant_type: "refresh_token",
+      refresh_token: "jira-refresh-old"
+    });
+    expect(result).toMatchObject({
+      accessToken: "jira-access-new",
+      providerScopes: ["read:jira-work", "read:jira-user"],
+      refreshToken: "jira-refresh-new",
+      tokenType: "bearer"
+    });
+  });
+
   it("returns typed upstream failures without provider body leakage", async () => {
     const client = new FetchLinearOAuthExchangeClient(
       { tokenUrl: "https://api.linear.test/oauth/token" },

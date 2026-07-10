@@ -98,11 +98,21 @@ As a workspace owner, I can review current members beside pending invitations, s
 ## Evidence
 
 - Branch: `feat/member-management-ui`
-- Implementation commit SHA: Pending.
-- Date: Pending.
-- Commands run: Pending.
-- Browser/viewports tested: Pending.
-- Accessibility checks: Pending.
-- Reviewer notes: Pending.
+- Implementation commit SHA: `95faedb21ffb98a2af431fc20bcf5c42a0d52f64`
+- Date: 2026-07-10.
+- Commands run:
+  - `pnpm vitest run server/team.test.ts server/session-store.test.ts server/access.test.ts server/http.test.ts` (122 tests passed before the `account:write` contract correction).
+  - `pnpm vitest run src/persistence/openroadMembers.test.ts src/App.test.tsx` (66 tests passed).
+  - `node C:\Users\PC\.agents\skills\impeccable\scripts\detect.mjs --json src\App.tsx src\styles.css` (no findings).
+  - `pnpm vitest run server/access.test.ts` (10 tests passed after adding `account:write`).
+  - `pnpm check` (373 tests passed, production client/server builds passed).
+  - Built-server member-management smoke against `server-dist/server/index.js` with isolated state/team/session files (passed; role update revoked 2 member sessions, deactivation revoked 1 active member session).
+  - `pnpm release:verify` (passed for implementation commit `95faedb21ffb98a2af431fc20bcf5c42a0d52f64`).
+- Browser/viewports tested:
+  - `1440x900`: Settings Access member rows visible, no body overflow, local owner role control disabled, QA member role control enabled.
+  - `390x844`: app shell remained fixed, `.operations-deck` handled internal scrolling, member rows collapsed to one column, no horizontal row/body overflow.
+  - `360x740`: same mobile checks passed; controls remained full-width inside member rows with no text/control overflow.
+- Accessibility checks: Member list has an accessible `Workspace members` label; role selects are named per member email; deactivation buttons have per-member accessible names; status text is visible and not color-only; protected local-owner controls are disabled.
+- Reviewer notes: Sidecar review highlighted stale member-session risk; implementation now revokes matching active workspace-member sessions by user/workspace after role update or deactivation and preserves owner/other-workspace sessions.
 - Known unresolved risks: Global organization directory, email verification, password recovery, SSO/MFA/passkeys, SCIM, account deletion, hosted org admin, and billing remain future production slices.
-- Rollback notes: Pending.
+- Rollback notes: No schema bump; feature uses team metadata schema `4` and session metadata schema `2`. Revert this branch to remove UI/API surface. Restore team/session backups if role changes, deactivations, or session revocations performed while live need to be undone operationally.

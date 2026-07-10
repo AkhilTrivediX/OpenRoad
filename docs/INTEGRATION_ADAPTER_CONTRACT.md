@@ -87,7 +87,7 @@ Conflicts must include:
 - Mapping id.
 - Resolution state.
 
-The first implementation should surface unresolved conflicts in a hidden Settings/ops area, not in default navigation.
+The first implementation surfaces unresolved conflicts in the existing Settings provider management area, not in default navigation.
 
 ## Disconnect Behavior
 
@@ -112,4 +112,4 @@ Disconnect must not:
 4. Add webhook signature verification.
 5. Add disconnect flow and export behavior.
 6. Add sync job runner and retry handling.
-7. Add conflict UI in Settings/ops surfaces.
+7. Add conflict UI in Settings/ops surfaces. Completed in `feat/conflict-resolution-ui`.

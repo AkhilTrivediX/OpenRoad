@@ -9,6 +9,7 @@ import {
   revokeProviderCredential,
   runGitHubManualSync,
   runProviderManualSync,
+  resolveProviderConflict,
   storeProviderCredential,
   verifyGitHubAppInstallation,
   writeBackProviderIssue
@@ -39,11 +40,33 @@ describe("OpenRoad integration status client", () => {
               import: true,
               liveSync: true,
               manualSync: true,
+              resolveConflicts: true,
               setup: true,
               webhooks: true,
               writeBack: true
             },
             connection: "connected",
+            conflictedMappings: 1,
+            conflicts: [
+              {
+                connectedAt: "2026-07-04T00:00:00Z",
+                external: {
+                  id: "I_kwDOGH123",
+                  key: "AkhilTrivediX/OpenRoad#42",
+                  type: "issue",
+                  url: "https://github.com/AkhilTrivediX/OpenRoad/issues/42?token=raw-secret"
+                },
+                installationId: "github-install",
+                mappingId: "mapping-github",
+                openRoad: {
+                  id: "request-1",
+                  status: "Needs decision",
+                  title: "Conflict request",
+                  type: "request"
+                },
+                providerAccountName: "AkhilTrivediX"
+              }
+            ],
             disconnectedAccounts: [
               {
                 createdAt: "2026-07-03T00:00:00Z",
@@ -95,8 +118,14 @@ describe("OpenRoad integration status client", () => {
       linkedIssueMappings: 2,
       provider: "github",
       capabilities: {
+        resolveConflicts: true,
         writeBack: true
-      }
+      },
+      conflictedMappings: 1
+    });
+    expect(status.providers[0]?.conflicts[0]).toMatchObject({
+      mappingId: "mapping-github",
+      openRoad: { title: "Conflict request" }
     });
     expect(status.providers[0]?.disconnectedAccounts[0]?.providerAccountName).toBe("Old [redacted]");
     expect(fetchImpl).toHaveBeenCalledWith(
@@ -354,6 +383,89 @@ describe("OpenRoad integration status client", () => {
       message: "Linear [redacted]=[redacted] failed.",
       provider: "linear",
       requestId: "request-123",
+      status: "unavailable"
+    });
+    expect(JSON.stringify(result)).not.toContain("raw-secret");
+  });
+
+  it("resolves provider conflicts with a compact same-origin request", async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({
+        external: {
+          id: "I_kwDOGH123",
+          key: "AkhilTrivediX/OpenRoad#42",
+          type: "issue"
+        },
+        installationId: "github-install",
+        mappingId: "mapping-github",
+        message: "Resolved GitHub conflict by keeping the OpenRoad request.",
+        provider: "github",
+        requestId: "request-123",
+        resolution: "keep-openroad",
+        resolvedAt: "2026-07-04T01:00:00.000Z",
+        status: "resolved"
+      })
+    );
+
+    const result = await resolveProviderConflict(
+      "github",
+      "acme",
+      "mapping-github",
+      "keep-openroad",
+      fetchImpl as typeof fetch
+    );
+
+    expect(result).toEqual({
+      external: {
+        id: "I_kwDOGH123",
+        key: "AkhilTrivediX/OpenRoad#42",
+        type: "issue",
+        url: undefined
+      },
+      installationId: "github-install",
+      mappingId: "mapping-github",
+      message: "Resolved GitHub conflict by keeping the OpenRoad request.",
+      provider: "github",
+      requestId: "request-123",
+      resolution: "keep-openroad",
+      resolvedAt: "2026-07-04T01:00:00.000Z",
+      status: "resolved"
+    });
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "/api/openroad/workspaces/acme/integrations/github/conflicts/mapping-github/resolve",
+      expect.objectContaining({
+        body: JSON.stringify({ resolution: "keep-openroad" }),
+        credentials: "same-origin",
+        method: "POST"
+      })
+    );
+  });
+
+  it("redacts provider conflict resolution failures", async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse(
+        {
+          error: {
+            code: "upstream_error",
+            message: "GitHub authorization=raw-secret failed."
+          }
+        },
+        502
+      )
+    );
+
+    const result = await resolveProviderConflict(
+      "github",
+      "acme",
+      "mapping-github",
+      "accept-provider",
+      fetchImpl as typeof fetch
+    );
+
+    expect(result).toEqual({
+      message: "GitHub [redacted]=[redacted] failed.",
+      provider: "github",
+      resolution: "accept-provider",
       status: "unavailable"
     });
     expect(JSON.stringify(result)).not.toContain("raw-secret");

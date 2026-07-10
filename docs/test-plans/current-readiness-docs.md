@@ -16,7 +16,7 @@ As the project owner, I need the roadmap and readiness docs to tell the truth ab
 - Update the older architecture plan status marker for the roadmap domain.
 - Update the current maturity-stage summary after GitHub/Linear/Jira sync, provider connect/disconnect, OAuth refresh, webhooks, and provider write-back.
 - Update current readiness debt so completed features are no longer listed as pending.
-- Preserve explicit future limits for hosted SaaS, managed persistence, direct provider notification delivery, conflict UI, hosted webhook registration, real model-backed AI, observability, signing, and registry publishing.
+- Preserve explicit future limits for hosted SaaS, managed persistence, direct provider notification delivery, hosted webhook registration, real model-backed AI, observability, signing, and registry publishing. Conflict UI was completed later in `feat/conflict-resolution-ui`.
 - Record branch evidence after checks and merge readiness.
 
 ## Not In Scope
@@ -54,5 +54,5 @@ As the project owner, I need the roadmap and readiness docs to tell the truth ab
 - Acceptance criteria status: Passed before merge.
 - Browser/viewports tested: Not expected; docs-only change.
 - Accessibility checks: Not expected; docs-only change.
-- Reviewer notes: Docs-only cleanup. No runtime, API, schema, or rendered UI behavior changed. The current docs now point next hardening toward conflict resolution instead of already-shipped provider connection UI, and keep hosted/public SaaS limits explicit.
+- Reviewer notes: Docs-only cleanup. No runtime, API, schema, or rendered UI behavior changed. At the time, the current docs pointed next hardening toward conflict resolution instead of already-shipped provider connection UI, and kept hosted/public SaaS limits explicit. Conflict UI was completed later in `feat/conflict-resolution-ui`.
 - Rollback notes: Revert this docs branch; no data or runtime migration.

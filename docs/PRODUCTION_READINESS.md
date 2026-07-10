@@ -168,7 +168,7 @@ OpenRoad releases must eventually include:
 
 ## Current Readiness Debt
 
-These are known production gaps after provider write-back and release operations.
+These are known production gaps after provider conflict resolution and release operations.
 
 - Some UI orchestration still lives inside `App.tsx`; the first helper/module extraction is complete, but component-level splitting remains future work.
 - Product, integration, and team persistence are file-backed with schema migration and backup/restore tooling, not managed SQL with online migrations.
@@ -177,19 +177,19 @@ These are known production gaps after provider write-back and release operations
 - Backup/restore, local self-host smoke commands, and release candidate manifests exist, but published Docker images, artifact signing infrastructure, and hosted release promotion are not implemented.
 - Observability is limited to process logs; structured operational events and dashboards are pending.
 - Public portal write controls, persisted anonymous visitor vote identity, idempotent vote dedupe, notification preferences, and process-local rate limits exist, but CAPTCHA/external bot checks, public identity verification, and distributed abuse controls are pending.
-- Payload-backed GitHub issue import/link, GitHub App installation verification, live issue fetch, signed GitHub/Linear/Jira webhook handling, safe disconnect APIs, encrypted server-only provider credential storage, provider-neutral background sync job metadata, GitHub/Linear/Jira workers for already-linked issue mappings, Linear/Jira OAuth callback exchange and refresh-token rotation, progressive browser Settings integration visibility with GitHub/Linear/Jira connect, credential, disconnect, and manual sync controls, explicit provider write-back for linked GitHub/Linear/Jira issues, payload-backed Linear issue import/link, payload-backed Jira issue import/link, requester notification outbox/preferences, and JSONL notification delivery handoff exist, but direct email/provider notification delivery, hosted webhook registration automation, and conflict UI are not implemented yet.
+- Payload-backed GitHub issue import/link, GitHub App installation verification, live issue fetch, signed GitHub/Linear/Jira webhook handling, safe disconnect APIs, encrypted server-only provider credential storage, provider-neutral background sync job metadata, GitHub/Linear/Jira workers for already-linked issue mappings, Linear/Jira OAuth callback exchange and refresh-token rotation, progressive browser Settings integration visibility with GitHub/Linear/Jira connect, credential, disconnect, manual sync, and conflict resolution controls, explicit provider write-back for linked GitHub/Linear/Jira issues, payload-backed Linear issue import/link, payload-backed Jira issue import/link, requester notification outbox/preferences, and JSONL notification delivery handoff exist, but direct email/provider notification delivery and hosted webhook registration automation are not implemented yet.
 - Deterministic local assistant triage exists, but real model-backed adapters, prompt redaction, user consent controls, AI audit logs, and external-provider policy review are not implemented yet.
 - Browser QA is manual rather than automated end-to-end CI.
 
 ## Next Production Move
 
-Next branch: `feat/conflict-resolution-ui`
+Next branch: `feat/hosted-webhook-registration`
 
 Purpose:
 
-- Surface provider mappings that enter a conflicted state without overwhelming normal standalone workflows.
-- Let an owner choose an explicit resolution path, such as keep OpenRoad, accept provider text, or disconnect the mapping.
-- Preserve OpenRoad source-of-truth data unless the owner explicitly accepts a provider-side value.
+- Add provider-neutral webhook registration planning, storage, and execution boundaries for hosted deployments.
+- Keep self-host/manual webhook setup working while giving hosted operators an auditable registration path.
+- Reuse server-only provider credentials and sanitized integration status without exposing webhook secrets or provider tokens.
 - Preserve the existing production gate: feature branch, test plan first, focused tests, `pnpm check`, browser QA when UI changes, smoke test, audit, merge, then push.
 
 Direct provider notification delivery, hosted webhook registration automation, real model-backed AI, SSO/MFA, bulk member operations, and hosted account management remain hardening work that should stay behind server-only secret management, background job controls, explicit delivery infrastructure, and/or user consent controls.

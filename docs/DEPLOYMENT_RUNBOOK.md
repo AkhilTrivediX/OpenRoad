@@ -247,6 +247,7 @@ Changing the encryption key without re-encrypting credentials will make existing
 
 OpenRoad stores provider-neutral sync jobs in `openroad-integrations.json` and exposes private sync job routes:
 
+- `POST /api/openroad/workspaces/:workspaceId/integrations/:provider/conflicts/:mappingId/resolve`
 - `POST /api/openroad/workspaces/:workspaceId/integrations/:provider/sync/jobs`
 - `POST /api/openroad/integrations/sync/run`
 
@@ -507,7 +508,7 @@ For local single-user mode without `OPENROAD_ADMIN_TOKEN`, omit `--admin-token`;
 - Owner browser sessions for admin-token self-hosting, backend invitation APIs, invitation UI, member invite sessions, JSONL invitation delivery handoff, HTTP invitation provider delivery, account password login and JSONL account recovery for existing team users, and owner member role/deactivation controls are implemented; built-in SMTP delivery, provider-specific invitation/recovery templates, OAuth login, email verification, bulk member operations, MFA/passkeys, SSO, and hosted account management are not implemented.
 - Team metadata is file-backed, not managed SQL.
 - Trusted proxy headers are disabled by default.
-- Payload-backed GitHub issue import, GitHub App installation verification, live issue fetch, signed GitHub/Linear/Jira webhooks, safe disconnect APIs, encrypted server-only provider credential storage, provider-neutral background sync job metadata, GitHub/Linear/Jira workers for already-linked issue mappings, Linear/Jira OAuth callback exchange and refresh-token rotation, explicit provider write-back for linked GitHub/Linear/Jira issues, payload-backed Linear issue import, payload-backed Jira issue import, requester notification outbox/preferences, and a server-side JSONL notification delivery handoff exist; direct email/provider notification delivery, conflict UI, hosted webhook registration automation, and billing are not implemented.
+- Payload-backed GitHub issue import, GitHub App installation verification, live issue fetch, signed GitHub/Linear/Jira webhooks, safe disconnect APIs, encrypted server-only provider credential storage, provider-neutral background sync job metadata, GitHub/Linear/Jira workers for already-linked issue mappings, Linear/Jira OAuth callback exchange and refresh-token rotation, explicit provider write-back for linked GitHub/Linear/Jira issues, provider conflict resolution controls, payload-backed Linear issue import, payload-backed Jira issue import, requester notification outbox/preferences, and a server-side JSONL notification delivery handoff exist; direct email/provider notification delivery, hosted webhook registration automation, and billing are not implemented.
 - Docker images are build-local by default; release manifests can record publishing metadata, but registry publishing infrastructure is not bundled yet.
 - Signed artifact infrastructure is not bundled yet; release manifests record signing as not configured unless an operator supplies signing metadata.
 - Named Docker volume backup requires an operator copy step or a future packaged volume helper.

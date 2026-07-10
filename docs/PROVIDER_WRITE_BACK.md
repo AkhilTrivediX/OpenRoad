@@ -46,7 +46,6 @@ GitHub write-back uses a short-lived GitHub App installation token. Linear and J
 
 ## Deferred Work
 
-- Conflict resolution UI.
 - Provider status, label, assignee, priority, project, comment, and custom-field mapping.
 - Bulk write-back.
 - Creating new provider issues from OpenRoad requests.

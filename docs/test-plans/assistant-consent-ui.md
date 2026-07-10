@@ -164,8 +164,17 @@ As a workspace maintainer using a server-backed OpenRoad deployment, I can revie
 ## Evidence
 
 - Planning status: written before product-code implementation.
-- Implementation commits: pending.
-- Commands run: pending.
-- Browser/viewports tested: pending.
-- Reviewer notes: pending.
+- Implementation commits: `77ff109` implementation.
+- Commands run:
+  - `pnpm vitest run src\App.test.tsx` passed 72 tests.
+  - `pnpm vitest run src\App.test.tsx server\model-adapter.test.ts server\http.test.ts server\access.test.ts scripts\openroad-ops.test.mjs` passed 216 tests.
+  - `node C:\Users\PC\.agents\skills\impeccable\scripts\detect.mjs --json src\App.tsx src\styles.css` returned `[]`.
+  - `pnpm build` passed production client and server builds.
+  - `pnpm check` passed 35 test files / 467 tests plus production client and server builds.
+  - `pnpm release:verify` passed for implementation commit `77ff109`.
+  - Built-server smoke passed on port `4269`: `health`, `contract`, `portal`, `private-denied`, `private-token`, `assistant-triage`.
+- Browser/viewports tested:
+  - Desktop `1440x900`: `bodyScroll=0`, `documentScroll=0`, `horizontalOverflow=0`, footer visible, model panel visible. Screenshot: `design/qa/assistant-consent-ui-desktop.png`.
+  - Mobile `390x900`: `bodyScroll=0`, `documentScroll=0`, `horizontalOverflow=0`, footer visible, model panel visible. Screenshot: `design/qa/assistant-consent-ui-mobile.png`.
+- Reviewer notes: Server-backed assistant controls remain inside the existing request inspector, deterministic suggestions are still the default, model refresh is disabled until workspace-context consent is checked, requester identity consent stays optional/subordinate, endpoint failures use generic copy, and model/fallback responses do not expose provider config, raw prompts, raw responses, or provider errors.
 - Known unresolved risks: per-workspace AI policy settings, hosted account-level AI controls, provider-specific policy review, model evals, AI usage dashboards, streaming, background jobs, and automated browser E2E CI remain future slices.

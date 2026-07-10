@@ -1003,7 +1003,7 @@ Acceptance:
 
 Branch: `feat/assistant-consent-ui`
 
-Status: implemented; production verification in progress.
+Status: implemented and production-checked.
 
 Build:
 

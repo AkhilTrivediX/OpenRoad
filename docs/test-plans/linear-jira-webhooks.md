@@ -100,10 +100,16 @@ As a workspace owner with Linear or Jira connected, I want OpenRoad to refresh a
 ## Evidence
 
 - Branch: `feat/linear-jira-webhooks`
-- Implementation commit SHA: Pending.
-- Date: Pending.
-- Commands run: Pending.
-- Browser/viewports tested: Pending.
-- Reviewer notes: Pending.
+- Implementation commit SHA: `18df80748d058b6730da8d386e3cd8fa047ce6c1`
+- Date: 2026-07-10
+- Commands run:
+  - `pnpm vitest run server/access.test.ts`
+  - `pnpm exec tsc --noEmit`
+  - `pnpm vitest run server/http.test.ts`
+  - `pnpm vitest run server/http.test.ts server/access.test.ts`
+  - `pnpm check` (401 tests passed, client build passed, server build passed)
+  - `pnpm release:verify` (dry-run manifest passed)
+- Browser/viewports tested: Not required for this server/API slice; no UI layout or browser interaction code changed.
+- Reviewer notes: Linear and Jira webhook routes now require server-only secrets, verify raw-body HMAC signatures before JSON mutation, dedupe delivery ids, update only already-linked issue mappings for active installations with `webhook:receive`, and persist sanitized sync events without raw provider payloads. Jira issue ids remain scoped through the existing installation/site mapping before request updates. Manual Jira installation/import permissions now preserve `webhook:receive` while still rejecting unsupported write-back capability.
 - Known unresolved risks: Provider write-back, hosted OAuth callback exchange, conflict UI, registration automation, distributed locks, and external queue infrastructure remain later production slices.
-- Rollback notes: Pending.
+- Rollback notes: Unset `OPENROAD_LINEAR_WEBHOOK_SECRET` and `OPENROAD_JIRA_WEBHOOK_SECRET` or remove provider webhook callback URLs to stop new deliveries. Revert this branch if handler behavior must be removed. No schema migration was added; restore `OPENROAD_DATA_FILE`, `OPENROAD_INTEGRATION_FILE`, and `OPENROAD_TEAM_FILE` from the latest pre-webhook backup if processed webhooks caused bad linked-request state.

@@ -12,6 +12,7 @@ Official Linear references used for this slice:
 ## Current Capability
 
 - Generate a safe Linear OAuth authorize URL for workspace owners.
+- Exchange Linear OAuth callbacks server-side and store encrypted Linear credentials.
 - Import a Linear issue payload into an OpenRoad request.
 - Link a Linear issue payload to an existing OpenRoad request.
 - Re-import the same Linear issue and update the mapped request instead of creating duplicates.
@@ -30,10 +31,11 @@ $env:OPENROAD_LINEAR_CLIENT_ID="lin_..."
 $env:OPENROAD_LINEAR_CLIENT_SECRET="replace-with-linear-client-secret"
 $env:OPENROAD_LINEAR_REDIRECT_URI="https://openroad.example.com/api/openroad/integrations/linear/oauth/callback"
 $env:OPENROAD_LINEAR_API_URL="https://api.linear.app/graphql"
+$env:OPENROAD_LINEAR_TOKEN_URL="https://api.linear.app/oauth/token"
 $env:OPENROAD_LINEAR_WEBHOOK_SECRET="replace-with-linear-webhook-secret"
 ```
 
-`OPENROAD_LINEAR_APP_BASE_URL` can override `https://linear.app` for OAuth setup tests. `OPENROAD_LINEAR_API_URL` can override the GraphQL endpoint for smoke tests and private deployments.
+`OPENROAD_LINEAR_APP_BASE_URL` can override `https://linear.app` for OAuth setup tests. `OPENROAD_LINEAR_API_URL` can override the GraphQL endpoint for smoke tests and private deployments. `OPENROAD_LINEAR_TOKEN_URL` can override the token exchange endpoint for local OAuth callback smoke tests.
 
 Do not expose Linear client secrets, access tokens, refresh tokens, webhook secrets, or raw OAuth codes to browser JavaScript, public logs, audit events, API responses, or support bundles.
 
@@ -41,9 +43,15 @@ Do not expose Linear client secrets, access tokens, refresh tokens, webhook secr
 
 `GET /api/openroad/workspaces/:workspaceId/integrations/linear/oauth/setup`
 
-The endpoint requires `integration:manage`, which is limited to local owners/admins and workspace owners. It returns setup status, required scopes, a CSRF state value, and an authorization URL when the Linear OAuth environment is configured.
+The endpoint requires `integration:manage`, which is limited to local owners/admins and workspace owners. It returns setup status, required scopes, a signed CSRF state value, and an authorization URL when the Linear OAuth environment is configured. Add `?installationId=...` to bind callback storage to a known Linear installation id.
 
-This endpoint does not exchange OAuth codes. Encrypted credential storage now exists through the provider-neutral credential API, but the OAuth callback and code exchange flow remains deferred.
+## OAuth Callback Endpoint
+
+`GET /api/openroad/integrations/linear/oauth/callback`
+
+The callback verifies signed, time-limited state, checks `integration:manage` for the decoded workspace, exchanges the code with the Linear token endpoint using form encoding, looks up the Linear viewer organization through GraphQL, and stores an encrypted `read:external` credential through the token vault. JSON callers can pass `format=json`; browser callers are redirected back to app settings with a same-origin status query.
+
+The callback requires `OPENROAD_TOKEN_ENCRYPTION_KEY`. It never returns or persists raw OAuth codes, access tokens, refresh tokens, client secrets, provider authorization headers, or encrypted credential internals in API responses or audit events.
 
 ## Credential Storage
 
@@ -113,7 +121,6 @@ Linear issue assignees are preserved in the imported description and tags. OpenR
 
 ## Deferred Work
 
-- OAuth callback and token exchange.
 - OAuth refresh-token rotation.
 - Full browser import UI and Linear sync logs.
 - Provider write-back and conflict handling.

@@ -1,6 +1,6 @@
 # Provider Token Storage
 
-OpenRoad now has server-only encrypted credential storage primitives for GitHub, Linear, and Jira integrations. This enables OAuth callback, live fetch, background sync, and provider write-back work without putting provider tokens in browser state or core OpenRoad workspace data. Linear and Jira live sync now use these encrypted credentials for already-linked issue mappings.
+OpenRoad now has server-only encrypted credential storage primitives for GitHub, Linear, and Jira integrations. Linear and Jira OAuth callbacks can exchange provider authorization codes server-side and store encrypted credentials without putting provider tokens in browser state or core OpenRoad workspace data. Linear and Jira live sync use these encrypted credentials for already-linked issue mappings.
 
 ## Environment
 
@@ -55,6 +55,12 @@ API responses never return raw access tokens, refresh tokens, ciphertext, IVs, t
 
 Revoking a credential marks it `revoked`, records `revokedAt`, and removes encrypted secret material from the integration metadata record. Manual GitHub disconnects and signed GitHub installation deletion webhooks revoke matching active credentials while preserving other workspaces and providers.
 
+## OAuth Callback Storage
+
+Linear and Jira callbacks use the same credential records as the manual credential API. Callback-created credentials are limited to `read:external`, labeled `OAuth`, and scoped to the decoded workspace plus active provider installation. Provider authorization codes, access tokens, refresh tokens, client secrets, authorization headers, and encrypted credential internals are not returned in callback responses or audit events.
+
+OAuth callback exchange is disabled with `503 not_configured` unless the provider OAuth client settings, integration metadata store, and `OPENROAD_TOKEN_ENCRYPTION_KEY` token vault are all configured.
+
 ## Backup And Rotation
 
 Backups include `openroad-integrations.json`. When credentials exist, that file contains encrypted provider token material and must be protected like production secrets.
@@ -70,9 +76,7 @@ Changing `OPENROAD_TOKEN_ENCRYPTION_KEY` without re-encrypting existing credenti
 
 ## Deferred Work
 
-- OAuth callback token exchange.
 - Provider write-back.
-- Linear/Jira webhook ingestion.
-- Browser Settings UI for credential management.
+- OAuth refresh-token rotation.
 - External KMS or multi-key rotation.
 - Multi-process mutation locking.

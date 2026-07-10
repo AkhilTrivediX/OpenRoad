@@ -158,6 +158,7 @@ import {
 } from "./provider-sync-worker.js";
 import {
   createSafeLinearOAuthSetup,
+  decodeLinearOAuthState,
   linearOAuthConfigFromEnv,
   linearWebhookConfigFromEnv,
   type LinearOAuthConfig,
@@ -165,6 +166,7 @@ import {
 } from "./linear.js";
 import {
   createSafeJiraOAuthSetup,
+  decodeJiraOAuthState,
   jiraOAuthConfigFromEnv,
   jiraWebhookConfigFromEnv,
   type JiraOAuthConfig,
@@ -178,6 +180,15 @@ import {
   canConfigureJiraIntegrationSyncWorker,
   createJiraIntegrationSyncWorker
 } from "./jira-sync-worker.js";
+import {
+  FetchJiraOAuthExchangeClient,
+  FetchLinearOAuthExchangeClient,
+  OAuthExchangeClientError,
+  type JiraAccessibleResource,
+  type JiraOAuthExchangeClient,
+  type LinearOAuthExchangeClient,
+  type OAuthTokenExchangeResult
+} from "./oauth-clients.js";
 import {
   TeamStoreError,
   type AuditEvent,
@@ -205,9 +216,11 @@ type CreateOpenRoadServerOptions = {
   invitationDeliveryAdapter?: InvitationDeliveryAdapter;
   invitationDeliveryPublicBaseUrl?: string;
   jiraApiClient?: JiraApiClient;
+  jiraOAuthExchangeClient?: JiraOAuthExchangeClient;
   jiraOAuthConfig?: JiraOAuthConfig;
   jiraWebhookConfig?: JiraWebhookConfig;
   linearApiClient?: LinearApiClient;
+  linearOAuthExchangeClient?: LinearOAuthExchangeClient;
   linearOAuthConfig?: LinearOAuthConfig;
   linearWebhookConfig?: LinearWebhookConfig;
   logger?: Pick<Console, "error" | "log">;
@@ -342,9 +355,11 @@ export function createOpenRoadServer({
   invitationDeliveryPublicBaseUrl = resolveInvitationDeliveryPublicBaseUrl(),
   jiraApiClient = new FetchJiraApiClient(),
   jiraOAuthConfig = jiraOAuthConfigFromEnv(),
+  jiraOAuthExchangeClient = new FetchJiraOAuthExchangeClient(jiraOAuthConfig),
   jiraWebhookConfig = jiraWebhookConfigFromEnv(),
   linearApiClient = new FetchLinearApiClient(),
   linearOAuthConfig = linearOAuthConfigFromEnv(),
+  linearOAuthExchangeClient = new FetchLinearOAuthExchangeClient(linearOAuthConfig),
   linearWebhookConfig = linearWebhookConfigFromEnv(),
   logger = console,
   notificationDeliveryAdapter = createNotificationDeliveryAdapterFromEnv(),
@@ -402,8 +417,10 @@ export function createOpenRoadServer({
           resolvedIntegrationSyncWorker,
           configuredIntegrationSyncProviders,
           jiraOAuthConfig,
+          jiraOAuthExchangeClient,
           jiraWebhookConfig,
           linearOAuthConfig,
+          linearOAuthExchangeClient,
           linearWebhookConfig,
           accountRecoveryDeliveryAdapter,
           accountRecoveryPublicBaseUrl,
@@ -526,8 +543,10 @@ async function handleApiRequest(
   integrationSyncWorker: IntegrationSyncWorker | undefined,
   configuredIntegrationSyncProviders: Set<IntegrationProvider>,
   jiraOAuthConfig: JiraOAuthConfig,
+  jiraOAuthExchangeClient: JiraOAuthExchangeClient,
   jiraWebhookConfig: JiraWebhookConfig,
   linearOAuthConfig: LinearOAuthConfig,
+  linearOAuthExchangeClient: LinearOAuthExchangeClient,
   linearWebhookConfig: LinearWebhookConfig,
   accountRecoveryDeliveryAdapter: AccountRecoveryDeliveryAdapter | undefined,
   accountRecoveryPublicBaseUrl: string | undefined,
@@ -806,10 +825,28 @@ async function handleApiRequest(
     await handleLinearOAuthSetupRequest(
       request,
       response,
+      requestUrl,
       store,
       access,
       linearOAuthConfig,
       linearOAuthSetupMatch[1]
+    );
+    return;
+  }
+
+  if (requestUrl.pathname === "/api/openroad/integrations/linear/oauth/callback") {
+    await handleLinearOAuthCallbackRequest(
+      request,
+      response,
+      requestUrl,
+      store,
+      access,
+      teamStore,
+      integrationStore,
+      runIntegrationMutationExclusive,
+      tokenVault,
+      linearOAuthConfig,
+      linearOAuthExchangeClient
     );
     return;
   }
@@ -822,10 +859,28 @@ async function handleApiRequest(
     await handleJiraOAuthSetupRequest(
       request,
       response,
+      requestUrl,
       store,
       access,
       jiraOAuthConfig,
       jiraOAuthSetupMatch[1]
+    );
+    return;
+  }
+
+  if (requestUrl.pathname === "/api/openroad/integrations/jira/oauth/callback") {
+    await handleJiraOAuthCallbackRequest(
+      request,
+      response,
+      requestUrl,
+      store,
+      access,
+      teamStore,
+      integrationStore,
+      runIntegrationMutationExclusive,
+      tokenVault,
+      jiraOAuthConfig,
+      jiraOAuthExchangeClient
     );
     return;
   }
@@ -3112,6 +3167,7 @@ function createJiraIssueImportState(
 async function handleLinearOAuthSetupRequest(
   request: IncomingMessage,
   response: ServerResponse,
+  requestUrl: URL,
   store: OpenRoadStore,
   access: AccessContext,
   linearOAuthConfig: LinearOAuthConfig,
@@ -3137,7 +3193,12 @@ async function handleLinearOAuthSetupRequest(
       response,
       200,
       {
-        linearOAuth: createSafeLinearOAuthSetup(linearOAuthConfig, workspaceId),
+        linearOAuth: createSafeLinearOAuthSetup(
+          linearOAuthConfig,
+          workspaceId,
+          new Date(),
+          parseOAuthSetupOptions(requestUrl)
+        ),
         workspace: {
           id: workspace.id,
           name: workspace.name
@@ -3153,6 +3214,7 @@ async function handleLinearOAuthSetupRequest(
 async function handleJiraOAuthSetupRequest(
   request: IncomingMessage,
   response: ServerResponse,
+  requestUrl: URL,
   store: OpenRoadStore,
   access: AccessContext,
   jiraOAuthConfig: JiraOAuthConfig,
@@ -3178,7 +3240,12 @@ async function handleJiraOAuthSetupRequest(
       response,
       200,
       {
-        jiraOAuth: createSafeJiraOAuthSetup(jiraOAuthConfig, workspaceId),
+        jiraOAuth: createSafeJiraOAuthSetup(
+          jiraOAuthConfig,
+          workspaceId,
+          new Date(),
+          parseOAuthSetupOptions(requestUrl)
+        ),
         workspace: {
           id: workspace.id,
           name: workspace.name
@@ -3188,6 +3255,228 @@ async function handleJiraOAuthSetupRequest(
     );
   } catch (error) {
     writeKnownApiError(response, error, access);
+  }
+}
+
+async function handleLinearOAuthCallbackRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  requestUrl: URL,
+  store: OpenRoadStore,
+  access: AccessContext,
+  teamStore: TeamStore | undefined,
+  integrationStore: IntegrationStore | undefined,
+  runIntegrationMutationExclusive: NotificationDeliveryRunner,
+  tokenVault: IntegrationTokenVault,
+  linearOAuthConfig: LinearOAuthConfig,
+  linearOAuthExchangeClient: LinearOAuthExchangeClient
+) {
+  if (request.method !== "GET") {
+    writeApiError(response, 405, "invalid_method", "This endpoint only supports GET.", access);
+    return;
+  }
+
+  try {
+    const config = requireLinearOAuthCallbackConfig(linearOAuthConfig);
+    const callback = parseOAuthCallbackQuery(requestUrl, "Linear");
+    const oauthState = decodeOAuthCallbackState(
+      () => decodeLinearOAuthState(callback.state, linearOAuthConfig),
+      "Linear"
+    );
+    assertOAuthStateIsCurrent(oauthState.createdAt, "Linear");
+    requirePermission(access, "integration:manage", oauthState.workspaceId);
+
+    if (!integrationStore) {
+      throw new ApiRequestError(
+        "not_configured",
+        503,
+        "OpenRoad integration metadata store is not configured."
+      );
+    }
+
+    if (tokenVault.status !== "ready") {
+      throw new ApiRequestError("not_configured", 503, tokenVault.reason);
+    }
+
+    const current = await store.load();
+    const workspace = current.state.workspaces.find((item) => item.id === oauthState.workspaceId);
+
+    if (!workspace) {
+      throw new ApiRequestError("not_found", 404, "Workspace was not found.");
+    }
+
+    const token = await linearOAuthExchangeClient.exchangeCode({
+      code: callback.code,
+      config
+    });
+    const { auditEvent, credential, installation, integrationState } =
+      await runIntegrationMutationExclusive(async () => {
+        const integrationResult = await integrationStore.load();
+        const now = new Date().toISOString();
+        const installation = resolveLinearOAuthInstallation({
+          integrationState: integrationResult.state,
+          oauthState,
+          token,
+          workspaceId: workspace.id
+        });
+        const credentialResult = createOAuthCredentialState({
+          installation,
+          integrationState: integrationResult.state,
+          now,
+          provider: "linear",
+          token,
+          tokenVault,
+          workspaceId: workspace.id
+        });
+        const integrationState = await integrationStore.replaceState(credentialResult.integrationState);
+        const auditEvent = await recordAuditEvent(teamStore, current.state, access, {
+          summary: `Stored Linear OAuth credential for ${installation.providerAccountName}.`,
+          type: "integration.linear.oauth.callback",
+          workspaceId: workspace.id
+        });
+
+        return {
+          auditEvent,
+          credential: credentialResult.credential,
+          installation,
+          integrationState
+        };
+      });
+
+    writeOAuthCallbackResponse(
+      request,
+      response,
+      requestUrl,
+      access,
+      {
+        credential: sanitizeIntegrationCredentialMetadata(credential),
+        installation: sanitizeInstallation(installation),
+        provider: "linear",
+        revision: auditEvent?.id ?? `linear-oauth-${Date.now()}`,
+        status: "connected",
+        totals: {
+          credentials: integrationState.credentials.length,
+          installations: integrationState.installations.length,
+          mappings: integrationState.mappings.length
+        },
+        workspace: { id: workspace.id, name: workspace.name }
+      }
+    );
+  } catch (error) {
+    writeOAuthCallbackError(request, response, requestUrl, access, "linear", error);
+  }
+}
+
+async function handleJiraOAuthCallbackRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  requestUrl: URL,
+  store: OpenRoadStore,
+  access: AccessContext,
+  teamStore: TeamStore | undefined,
+  integrationStore: IntegrationStore | undefined,
+  runIntegrationMutationExclusive: NotificationDeliveryRunner,
+  tokenVault: IntegrationTokenVault,
+  jiraOAuthConfig: JiraOAuthConfig,
+  jiraOAuthExchangeClient: JiraOAuthExchangeClient
+) {
+  if (request.method !== "GET") {
+    writeApiError(response, 405, "invalid_method", "This endpoint only supports GET.", access);
+    return;
+  }
+
+  try {
+    const config = requireJiraOAuthCallbackConfig(jiraOAuthConfig);
+    const callback = parseOAuthCallbackQuery(requestUrl, "Jira");
+    const oauthState = decodeOAuthCallbackState(
+      () => decodeJiraOAuthState(callback.state, jiraOAuthConfig),
+      "Jira"
+    );
+    assertOAuthStateIsCurrent(oauthState.createdAt, "Jira");
+    requirePermission(access, "integration:manage", oauthState.workspaceId);
+
+    if (!integrationStore) {
+      throw new ApiRequestError(
+        "not_configured",
+        503,
+        "OpenRoad integration metadata store is not configured."
+      );
+    }
+
+    if (tokenVault.status !== "ready") {
+      throw new ApiRequestError("not_configured", 503, tokenVault.reason);
+    }
+
+    const current = await store.load();
+    const workspace = current.state.workspaces.find((item) => item.id === oauthState.workspaceId);
+
+    if (!workspace) {
+      throw new ApiRequestError("not_found", 404, "Workspace was not found.");
+    }
+
+    const token = await jiraOAuthExchangeClient.exchangeCode({
+      code: callback.code,
+      config
+    });
+    const { auditEvent, credential, installation, integrationState } =
+      await runIntegrationMutationExclusive(async () => {
+        const integrationResult = await integrationStore.load();
+        const now = new Date().toISOString();
+        const installation = resolveJiraOAuthInstallation({
+          integrationState: integrationResult.state,
+          oauthState,
+          resources: token.resources,
+          workspaceId: workspace.id
+        });
+        const selectedResource = token.resources.find(
+          (resource) => resource.id === installation.providerAccountId
+        );
+        const credentialResult = createOAuthCredentialState({
+          installation,
+          integrationState: integrationResult.state,
+          now,
+          provider: "jira",
+          resourceScopes: selectedResource?.scopes,
+          token,
+          tokenVault,
+          workspaceId: workspace.id
+        });
+        const integrationState = await integrationStore.replaceState(credentialResult.integrationState);
+        const auditEvent = await recordAuditEvent(teamStore, current.state, access, {
+          summary: `Stored Jira OAuth credential for ${installation.providerAccountName}.`,
+          type: "integration.jira.oauth.callback",
+          workspaceId: workspace.id
+        });
+
+        return {
+          auditEvent,
+          credential: credentialResult.credential,
+          installation,
+          integrationState
+        };
+      });
+
+    writeOAuthCallbackResponse(
+      request,
+      response,
+      requestUrl,
+      access,
+      {
+        credential: sanitizeIntegrationCredentialMetadata(credential),
+        installation: sanitizeInstallation(installation),
+        provider: "jira",
+        revision: auditEvent?.id ?? `jira-oauth-${Date.now()}`,
+        status: "connected",
+        totals: {
+          credentials: integrationState.credentials.length,
+          installations: integrationState.installations.length,
+          mappings: integrationState.mappings.length
+        },
+        workspace: { id: workspace.id, name: workspace.name }
+      }
+    );
+  } catch (error) {
+    writeOAuthCallbackError(request, response, requestUrl, access, "jira", error);
   }
 }
 
@@ -4510,6 +4799,194 @@ function createIntegrationCredentialFromPayload({
   return { credential, installation };
 }
 
+function createOAuthCredentialState({
+  installation,
+  integrationState,
+  now,
+  provider,
+  resourceScopes = [],
+  token,
+  tokenVault,
+  workspaceId
+}: {
+  installation: IntegrationInstallation;
+  integrationState: IntegrationState;
+  now: string;
+  provider: "jira" | "linear";
+  resourceScopes?: string[];
+  token: OAuthTokenExchangeResult;
+  tokenVault: Extract<IntegrationTokenVault, { status: "ready" }>;
+  workspaceId: string;
+}) {
+  const integrationStateWithInstallation = parseIntegrationState({
+    ...integrationState,
+    installations: upsertInstallationByScope(integrationState.installations, installation)
+  });
+  const { credential } = createIntegrationCredentialFromPayload({
+    integrationState: integrationStateWithInstallation,
+    now,
+    payload: {
+      accessToken: token.accessToken,
+      ...(token.expiresAt ? { expiresAt: token.expiresAt } : {}),
+      installationId: installation.id,
+      label: "OAuth",
+      permissions: ["read:external"],
+      providerScopes: [...new Set([...token.providerScopes, ...resourceScopes])],
+      ...(token.refreshToken ? { refreshToken: token.refreshToken } : {}),
+      tokenType: token.tokenType ?? "bearer"
+    },
+    provider,
+    tokenVault,
+    workspaceId
+  });
+
+  return {
+    credential,
+    integrationState: parseIntegrationState({
+      ...integrationStateWithInstallation,
+      credentials: upsertById(integrationStateWithInstallation.credentials, credential)
+    })
+  };
+}
+
+function resolveLinearOAuthInstallation({
+  integrationState,
+  oauthState,
+  token,
+  workspaceId
+}: {
+  integrationState: IntegrationState;
+  oauthState: { installationId?: string };
+  token: OAuthTokenExchangeResult;
+  workspaceId: string;
+}) {
+  const account = token.account;
+  const existing =
+    (oauthState.installationId
+      ? findProviderInstallation(integrationState, "linear", workspaceId, oauthState.installationId)
+      : undefined) ??
+    (account
+      ? integrationState.installations.find(
+          (installation) =>
+            installation.provider === "linear" &&
+            installation.workspaceId === workspaceId &&
+            idsMatch(installation.providerAccountId, account.id)
+        )
+      : undefined);
+
+  if (existing) {
+    assertOAuthInstallationIsActive(existing);
+    return existing;
+  }
+
+  if (!account) {
+    throw new ApiRequestError(
+      "invalid_state",
+      422,
+      "Linear OAuth callback did not resolve a Linear account."
+    );
+  }
+
+  return createLinearInstallation({
+    accountId: account.id,
+    accountName: account.name,
+    id: oauthState.installationId ?? `linear-oauth-${account.id}`,
+    permissions: linearRequiredInstallationPermissions,
+    workspaceId
+  });
+}
+
+function resolveJiraOAuthInstallation({
+  integrationState,
+  oauthState,
+  resources,
+  workspaceId
+}: {
+  integrationState: IntegrationState;
+  oauthState: { installationId?: string };
+  resources: JiraAccessibleResource[];
+  workspaceId: string;
+}) {
+  const existing = oauthState.installationId
+    ? findProviderInstallation(integrationState, "jira", workspaceId, oauthState.installationId)
+    : undefined;
+
+  if (existing) {
+    assertOAuthInstallationIsActive(existing);
+
+    if (!resources.some((resource) => resource.id === existing.providerAccountId)) {
+      throw new ApiRequestError(
+        "invalid_state",
+        422,
+        "Jira OAuth callback did not grant access to the selected Jira site."
+      );
+    }
+
+    return existing;
+  }
+
+  if (resources.length === 0) {
+    throw new ApiRequestError(
+      "invalid_state",
+      422,
+      "Jira OAuth callback did not include an accessible Jira site."
+    );
+  }
+
+  if (resources.length > 1) {
+    throw new ApiRequestError(
+      "invalid_state",
+      422,
+      "Jira OAuth callback returned multiple sites. Connect a specific Jira installation before authorizing."
+    );
+  }
+
+  const resource = resources[0];
+  const existingByAccount = integrationState.installations.find(
+    (installation) =>
+      installation.provider === "jira" &&
+      installation.workspaceId === workspaceId &&
+      installation.providerAccountId === resource.id
+  );
+
+  if (existingByAccount) {
+    assertOAuthInstallationIsActive(existingByAccount);
+    return existingByAccount;
+  }
+
+  return createJiraInstallation({
+    accountId: resource.id,
+    accountName: resource.name,
+    id: oauthState.installationId ?? "jira-oauth",
+    permissions: jiraRequiredInstallationPermissions,
+    workspaceId
+  });
+}
+
+function findProviderInstallation(
+  integrationState: IntegrationState,
+  provider: IntegrationProvider,
+  workspaceId: string,
+  installationId: string
+) {
+  return integrationState.installations.find(
+    (installation) =>
+      installation.provider === provider &&
+      installation.workspaceId === workspaceId &&
+      doesProviderInstallationIdMatch(provider, installation.id, installationId)
+  );
+}
+
+function assertOAuthInstallationIsActive(installation: IntegrationInstallation) {
+  if (installation.status !== "active") {
+    throw new ApiRequestError(
+      "invalid_state",
+      422,
+      "Integration installation is disconnected or suspended."
+    );
+  }
+}
+
 function createManualIntegrationInstallationFromPayload({
   payload,
   provider,
@@ -4670,6 +5147,12 @@ function parseIntegrationSyncRunPayload(payload: unknown) {
   };
 }
 
+function parseOAuthSetupOptions(requestUrl: URL) {
+  return {
+    installationId: getBoundedIdentifier(requestUrl.searchParams.get("installationId"), 160)
+  };
+}
+
 function parseIntegrationSyncReason(value: unknown): IntegrationSyncJobReason {
   const reason = getBoundedText(value, 40) ?? "manual";
 
@@ -4687,6 +5170,95 @@ function parseIntegrationProviderValue(value: unknown): IntegrationProvider {
   }
 
   throw new ApiRequestError("invalid_request", 400, "Integration provider is not supported.");
+}
+
+function requireLinearOAuthCallbackConfig(config: LinearOAuthConfig) {
+  if (!config.clientId || !config.clientSecret || !config.redirectUri) {
+    throw new ApiRequestError(
+      "not_configured",
+      503,
+      "OPENROAD_LINEAR_CLIENT_ID, OPENROAD_LINEAR_CLIENT_SECRET, and OPENROAD_LINEAR_REDIRECT_URI are required before OAuth callbacks."
+    );
+  }
+
+  return {
+    clientId: config.clientId,
+    clientSecret: config.clientSecret,
+    redirectUri: config.redirectUri
+  };
+}
+
+function requireJiraOAuthCallbackConfig(config: JiraOAuthConfig) {
+  if (!config.clientId || !config.clientSecret || !config.redirectUri) {
+    throw new ApiRequestError(
+      "not_configured",
+      503,
+      "OPENROAD_JIRA_CLIENT_ID, OPENROAD_JIRA_CLIENT_SECRET, and OPENROAD_JIRA_REDIRECT_URI are required before OAuth callbacks."
+    );
+  }
+
+  return {
+    clientId: config.clientId,
+    clientSecret: config.clientSecret,
+    redirectUri: config.redirectUri
+  };
+}
+
+function parseOAuthCallbackQuery(requestUrl: URL, providerLabel: string) {
+  if (getOAuthQueryText(requestUrl, "error", 200)) {
+    throw new ApiRequestError(
+      "invalid_request",
+      400,
+      `${providerLabel} OAuth authorization was not completed.`
+    );
+  }
+
+  const code = getOAuthQueryText(requestUrl, "code", 6000);
+  const state = getOAuthQueryText(requestUrl, "state", 6000);
+
+  if (!code) {
+    throw new ApiRequestError("invalid_request", 400, `${providerLabel} OAuth code is required.`);
+  }
+
+  if (!state) {
+    throw new ApiRequestError("invalid_request", 400, `${providerLabel} OAuth state is required.`);
+  }
+
+  return { code, state };
+}
+
+function decodeOAuthCallbackState<T>(decoder: () => T, providerLabel: string) {
+  try {
+    return decoder();
+  } catch {
+    throw new AccessDeniedError(`${providerLabel} OAuth state is invalid.`);
+  }
+}
+
+function getOAuthQueryText(requestUrl: URL, name: string, maxLength: number) {
+  const rawValue = requestUrl.searchParams.get(name);
+  if (rawValue === null) return undefined;
+  const value = rawValue.trim();
+  if (!value) return undefined;
+
+  if (value.length > maxLength) {
+    throw new ApiRequestError("invalid_request", 400, `OAuth ${name} is too long.`);
+  }
+
+  return value;
+}
+
+function assertOAuthStateIsCurrent(createdAt: string, providerLabel: string) {
+  const timestamp = Date.parse(createdAt);
+
+  if (!Number.isFinite(timestamp)) {
+    throw new ApiRequestError("invalid_request", 400, `${providerLabel} OAuth state timestamp is invalid.`);
+  }
+
+  const now = Date.now();
+  if (now - timestamp > 10 * 60 * 1000 || timestamp - now > 2 * 60 * 1000) {
+    throw new AccessDeniedError(`${providerLabel} OAuth state is outside the callback window.`);
+  }
 }
 
 function sanitizeSyncJobForApi(job: IntegrationSyncJob) {
@@ -7581,6 +8153,11 @@ function writeKnownApiError(
     return;
   }
 
+  if (error instanceof OAuthExchangeClientError) {
+    writeApiError(response, error.status ?? 502, "upstream_error", error.message, access);
+    return;
+  }
+
   if (error instanceof PortalActionError) {
     writeApiError(response, error.status, error.code, error.message, access);
     return;
@@ -7603,6 +8180,57 @@ function writeJson(
       requestId: access.requestId,
       ...(isRecord(payload) ? payload : { data: payload })
     })
+  );
+}
+
+function writeOAuthCallbackResponse(
+  request: IncomingMessage,
+  response: ServerResponse,
+  requestUrl: URL,
+  access: AccessContext,
+  payload: Record<string, unknown>
+) {
+  if (prefersJsonCallback(request, requestUrl)) {
+    writeJson(response, 200, payload, access);
+    return;
+  }
+
+  writeOAuthCallbackRedirect(response, String(payload.provider ?? "provider"), "connected");
+}
+
+function writeOAuthCallbackError(
+  request: IncomingMessage,
+  response: ServerResponse,
+  requestUrl: URL,
+  access: AccessContext,
+  provider: IntegrationProvider,
+  error: unknown
+) {
+  if (prefersJsonCallback(request, requestUrl)) {
+    writeKnownApiError(response, error, access);
+    return;
+  }
+
+  writeOAuthCallbackRedirect(response, provider, "error");
+}
+
+function writeOAuthCallbackRedirect(
+  response: ServerResponse,
+  provider: string,
+  status: "connected" | "error"
+) {
+  const query = new URLSearchParams({
+    integration: provider,
+    integrationStatus: status
+  });
+  response.writeHead(302, { Location: `/?${query.toString()}#settings` });
+  response.end();
+}
+
+function prefersJsonCallback(request: IncomingMessage, requestUrl: URL) {
+  return (
+    requestUrl.searchParams.get("format") === "json" ||
+    getSingleHeader(request.headers, "accept")?.includes("application/json") === true
   );
 }
 

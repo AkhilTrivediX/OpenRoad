@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { createSafeLinearOAuthSetup, linearOAuthConfigFromEnv } from "./linear";
+import { createSafeLinearOAuthSetup, decodeLinearOAuthState, linearOAuthConfigFromEnv } from "./linear";
 
 describe("Linear OAuth setup helpers", () => {
   it("creates safe OAuth setup output without leaking secrets", () => {
@@ -14,8 +14,10 @@ describe("Linear OAuth setup helpers", () => {
     const setup = createSafeLinearOAuthSetup(
       config,
       "acme",
-      new Date("2026-07-04T00:00:00.000Z")
+      new Date("2026-07-04T00:00:00.000Z"),
+      { installationId: "linear-install" }
     );
+    const state = new URL(setup.authorizeUrl ?? "").searchParams.get("state");
     const text = JSON.stringify(setup);
 
     expect(config.clientSecret).toBe("linear-secret");
@@ -28,6 +30,13 @@ describe("Linear OAuth setup helpers", () => {
     expect(setup.authorizeUrl).toContain("client_id=lin_client");
     expect(setup.authorizeUrl).toContain("response_type=code");
     expect(setup.authorizeUrl).toContain("scope=read");
+    expect(decodeLinearOAuthState(state ?? "", config)).toMatchObject({
+      createdAt: "2026-07-04T00:00:00.000Z",
+      installationId: "linear-install",
+      provider: "linear",
+      workspaceId: "acme"
+    });
+    expect(() => decodeLinearOAuthState(`${state ?? ""}x`, config)).toThrow("signature");
     expect(text).not.toContain("linear-secret");
   });
 

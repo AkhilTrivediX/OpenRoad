@@ -257,6 +257,12 @@ export const routeProtections: RouteProtection[] = [
     scope: "workspace"
   },
   {
+    methods: ["GET"],
+    path: "/api/openroad/integrations/linear/oauth/callback",
+    permission: "integration:manage",
+    scope: "public"
+  },
+  {
     methods: ["POST"],
     path: "/api/openroad/workspaces/:workspaceId/integrations/jira/issues/import",
     permission: "workspace:write",
@@ -267,6 +273,12 @@ export const routeProtections: RouteProtection[] = [
     path: "/api/openroad/workspaces/:workspaceId/integrations/jira/oauth/setup",
     permission: "integration:manage",
     scope: "workspace"
+  },
+  {
+    methods: ["GET"],
+    path: "/api/openroad/integrations/jira/oauth/callback",
+    permission: "integration:manage",
+    scope: "public"
   },
   {
     methods: ["GET", "POST"],

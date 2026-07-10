@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { createSafeJiraOAuthSetup, jiraOAuthConfigFromEnv } from "./jira";
+import { createSafeJiraOAuthSetup, decodeJiraOAuthState, jiraOAuthConfigFromEnv } from "./jira";
 
 describe("Jira OAuth setup helpers", () => {
   it("creates safe OAuth setup output without leaking secrets", () => {
@@ -15,8 +15,10 @@ describe("Jira OAuth setup helpers", () => {
     const setup = createSafeJiraOAuthSetup(
       config,
       "acme",
-      new Date("2026-07-04T00:00:00.000Z")
+      new Date("2026-07-04T00:00:00.000Z"),
+      { installationId: "jira-install-jira-cloud" }
     );
+    const state = new URL(setup.authorizeUrl ?? "").searchParams.get("state");
     const text = JSON.stringify(setup);
 
     expect(config.clientSecret).toBe("jira-secret");
@@ -33,6 +35,13 @@ describe("Jira OAuth setup helpers", () => {
     expect(new URL(setup.authorizeUrl ?? "").searchParams.get("scope")).toBe(
       "read:jira-work read:jira-user"
     );
+    expect(decodeJiraOAuthState(state ?? "", config)).toMatchObject({
+      createdAt: "2026-07-04T00:00:00.000Z",
+      installationId: "jira-install-jira-cloud",
+      provider: "jira",
+      workspaceId: "acme"
+    });
+    expect(() => decodeJiraOAuthState(`${state ?? ""}x`, config)).toThrow("signature");
     expect(text).not.toContain("jira-secret");
   });
 

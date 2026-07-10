@@ -74,11 +74,19 @@ As a workspace owner, I need to see when a linked GitHub, Linear, or Jira issue 
 ## Evidence
 
 - Branch: `feat/conflict-resolution-ui`
-- Implementation commit SHA: Pending.
+- Implementation commit SHA: `cf203a7b71308ecf912ce4c92e840339d59d6c92`.
 - Date: 2026-07-10.
-- Commands run: Pending.
-- Acceptance criteria status: Pending.
-- Browser/viewports tested: Pending.
-- Accessibility checks: Pending.
-- Reviewer notes: Pending.
+- Commands run:
+  - `pnpm build:server` -> passed.
+  - `pnpm build:client` -> passed after parser literal alignment.
+  - `pnpm vitest run src/persistence/openroadIntegrations.test.ts src/App.test.tsx` -> 2 files, 81 tests passed.
+  - `pnpm vitest run server/http.test.ts` -> 109 tests passed.
+  - `git diff --check` -> passed.
+  - `pnpm check` -> 34 files, 437 tests passed, then client and server production builds passed.
+  - `pnpm release:verify` -> release manifest dry-run passed for current build artifacts.
+  - Built-server smoke against `server-dist/server/index.js` on `http://127.0.0.1:4222` with temporary file-backed state and admin token -> `OpenRoad smoke passed: health, contract, portal, private-denied, private-token`.
+- Acceptance criteria status: Passed before merge.
+- Browser/viewports tested: In-app browser against the built server on `http://127.0.0.1:4222`; desktop viewport `1280x720` showed the Settings conflict callout at `558x116`, no horizontal overflow, and three actions fitting on one row. Mobile viewport `390x844` showed no horizontal overflow, the conflict callout stacked at `299x289`, and the resolution buttons at touch-friendly `44px` height. The browser Keep OpenRoad action resolved the temporary GitHub conflict, removed the conflict panel, and showed the sanitized success status message.
+- Accessibility checks: Conflict actions use named buttons with provider/action/request context; conflict status uses an icon plus text and does not rely on color alone; status updates render through the existing `role="status"` integration action message.
+- Reviewer notes: Passed. Conflict resolution is limited to existing conflicted issue mappings for OpenRoad requests. The browser submits only the resolution choice; provider target details and credentials are derived server-side from stored mappings/installations. GitHub accept-provider reads through the GitHub App client; Linear and Jira accept-provider reads open encrypted server credentials and refresh near-expired OAuth material through the existing rotation path. Status responses expose bounded conflict summaries and redact token-shaped text. Healthy and standalone provider rows remain uncluttered.
 - Rollback notes: Revert this branch. No schema migration is expected because conflict state already exists on mappings.

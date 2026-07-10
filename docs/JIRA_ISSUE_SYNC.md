@@ -5,6 +5,7 @@ OpenRoad supports Jira import, linking, encrypted credential storage, live sync,
 ## Implemented
 
 - Safe Atlassian OAuth setup metadata at `GET /api/openroad/workspaces/:workspaceId/integrations/jira/oauth/setup`.
+- Server-side Atlassian OAuth callback exchange with encrypted credential storage.
 - Payload-backed Jira issue import/link at `POST /api/openroad/workspaces/:workspaceId/integrations/jira/issues/import`.
 - Explicit Jira field mapping for issue id, key, summary, Atlassian Document Format description, status category, project, issue type, priority, assignee, reporter, labels, URL, and updated timestamp.
 - Provider-neutral external mappings in `OPENROAD_INTEGRATION_FILE`.
@@ -33,6 +34,7 @@ $env:OPENROAD_JIRA_AUTH_BASE_URL="https://auth.atlassian.com"
 $env:OPENROAD_JIRA_CLIENT_ID="jira-client-id"
 $env:OPENROAD_JIRA_CLIENT_SECRET="replace-with-jira-client-secret"
 $env:OPENROAD_JIRA_REDIRECT_URI="https://openroad.example.com/api/openroad/integrations/jira/oauth/callback"
+$env:OPENROAD_JIRA_RESOURCE_BASE_URL="https://api.atlassian.com"
 $env:OPENROAD_JIRA_API_BASE_URL="https://api.atlassian.com/ex/jira"
 $env:OPENROAD_JIRA_WEBHOOK_SECRET="replace-with-jira-webhook-secret"
 ```
@@ -47,7 +49,17 @@ The setup endpoint returns:
 
 It never returns `OPENROAD_JIRA_CLIENT_SECRET`, OAuth codes, access tokens, refresh tokens, or webhook secrets.
 
-The setup endpoint still does not exchange OAuth codes. Encrypted credential storage now exists through the provider-neutral credential API, but OAuth callback exchange remains deferred.
+Add `?installationId=...` to bind callback storage to an existing Jira installation id. This is recommended when a user can authorize more than one Atlassian site.
+
+## OAuth Callback
+
+`GET /api/openroad/integrations/jira/oauth/callback`
+
+The callback verifies signed, time-limited state, checks `integration:manage` for the decoded workspace, exchanges the code with Atlassian using JSON authorization-code parameters, loads accessible resources from `OPENROAD_JIRA_RESOURCE_BASE_URL`, and stores an encrypted `read:external` credential through the token vault.
+
+If Atlassian returns multiple accessible Jira sites and the state is not bound to an existing installation, OpenRoad rejects the callback instead of guessing a site. JSON callers can pass `format=json`; browser callers are redirected back to app settings with a same-origin status query.
+
+The callback requires `OPENROAD_TOKEN_ENCRYPTION_KEY`. It never returns or persists raw OAuth codes, access tokens, refresh tokens, client secrets, provider authorization headers, or encrypted credential internals in API responses or audit events.
 
 Required current scopes:
 
@@ -134,6 +146,5 @@ Only Jira issue webhooks for active installations with `webhook:receive` can upd
 
 ## Deferred
 
-- OAuth callback and token exchange.
 - Conflict UI.
 - Full browser import UI and Jira sync logs.

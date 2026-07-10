@@ -1,8 +1,16 @@
+import {
+  decodeProviderOAuthState,
+  encodeProviderOAuthState,
+  type ProviderOAuthState
+} from "./oauth-state.js";
+
 export type LinearOAuthConfig = {
+  apiUrl?: string;
   appBaseUrl: string;
   clientId?: string;
   clientSecret?: string;
   redirectUri?: string;
+  tokenUrl?: string;
 };
 
 export type LinearWebhookConfig = {
@@ -18,14 +26,18 @@ export type SafeLinearOAuthSetup = {
   state?: string;
 };
 
+export type LinearOAuthState = ProviderOAuthState;
+
 export const linearRequiredOAuthScopes = ["read"] as const;
 
 export function linearOAuthConfigFromEnv(env = process.env): LinearOAuthConfig {
   return {
+    apiUrl: normalizeEnvValue(env.OPENROAD_LINEAR_API_URL) ?? "https://api.linear.app/graphql",
     appBaseUrl: normalizeUrl(env.OPENROAD_LINEAR_APP_BASE_URL ?? "https://linear.app"),
     clientId: normalizeEnvValue(env.OPENROAD_LINEAR_CLIENT_ID),
     clientSecret: normalizeEnvValue(env.OPENROAD_LINEAR_CLIENT_SECRET),
-    redirectUri: normalizeEnvValue(env.OPENROAD_LINEAR_REDIRECT_URI)
+    redirectUri: normalizeEnvValue(env.OPENROAD_LINEAR_REDIRECT_URI),
+    tokenUrl: normalizeEnvValue(env.OPENROAD_LINEAR_TOKEN_URL) ?? "https://api.linear.app/oauth/token"
   };
 }
 
@@ -41,17 +53,27 @@ export function linearWebhookConfigFromEnv(env = process.env): LinearWebhookConf
 export function createSafeLinearOAuthSetup(
   config: LinearOAuthConfig,
   workspaceId: string,
-  now = new Date()
+  now = new Date(),
+  options: { installationId?: string } = {}
 ): SafeLinearOAuthSetup {
   const missing = getMissingLinearOAuthSetupKeys(config);
-  const state = encodeLinearOAuthState({
-    createdAt: now.toISOString(),
-    workspaceId
-  });
+  const configured = missing.length === 0;
+  const state =
+    configured && config.clientSecret
+      ? encodeProviderOAuthState(
+          {
+            createdAt: now.toISOString(),
+            ...(options.installationId ? { installationId: options.installationId } : {}),
+            provider: "linear",
+            workspaceId
+          },
+          config.clientSecret
+        )
+      : undefined;
 
   return {
-    authorizeUrl: missing.length === 0 ? createLinearAuthorizeUrl(config, state) : undefined,
-    configured: missing.length === 0,
+    authorizeUrl: configured && state ? createLinearAuthorizeUrl(config, state) : undefined,
+    configured,
     missing,
     requiredScopes: [...linearRequiredOAuthScopes],
     state
@@ -79,8 +101,9 @@ function createLinearAuthorizeUrl(config: LinearOAuthConfig, state: string) {
   return url.toString();
 }
 
-function encodeLinearOAuthState(value: { createdAt: string; workspaceId: string }) {
-  return Buffer.from(JSON.stringify(value), "utf8").toString("base64url");
+export function decodeLinearOAuthState(value: string, config: LinearOAuthConfig): LinearOAuthState {
+  if (!config.clientSecret) throw new Error("OPENROAD_LINEAR_CLIENT_SECRET is required.");
+  return decodeProviderOAuthState(value, config.clientSecret, "linear");
 }
 
 function normalizeUrl(value: string) {

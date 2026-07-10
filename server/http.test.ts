@@ -40,6 +40,7 @@ import {
   type InvitationDeliveryAdapter
 } from "./invitation-delivery";
 import type { NotificationDeliveryAdapter } from "./notifications";
+import type { JiraOAuthExchangeClient, LinearOAuthExchangeClient } from "./oauth-clients";
 import { createIntegrationTokenVault, type IntegrationTokenVault } from "./token-vault";
 import type { IntegrationSyncWorker } from "./sync-jobs";
 
@@ -3914,6 +3915,161 @@ describe("OpenRoad production server", () => {
     });
   });
 
+  it("exchanges Linear OAuth callbacks into encrypted credentials without exposing tokens", async () => {
+    const exchanges: string[] = [];
+    const tokenVault = testTokenVault();
+    const { integrationStore, teamFile, url } = await startTestServer({
+      auth: { adminToken: "secret", singleUserMode: false, trustProxyHeaders: true },
+      linearOAuthConfig: testLinearOAuthConfig(),
+      linearOAuthExchangeClient: {
+        async exchangeCode(options) {
+          exchanges.push(options.code);
+          return {
+            accessToken: "linear-oauth-access",
+            account: { id: "linear-team", name: "OpenRoad Linear" },
+            providerScopes: ["read"],
+            refreshToken: "linear-oauth-refresh",
+            tokenType: "bearer"
+          };
+        }
+      },
+      tokenVault
+    });
+
+    const setup = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/linear/oauth/setup?installationId=linear-install`,
+      { headers: workspaceActorHeaders("acme", "Owner") }
+    );
+    const callback = await fetchJson(
+      `${url}/api/openroad/integrations/linear/oauth/callback?code=linear-code&state=${encodeURIComponent(
+        setup.body.linearOAuth.state
+      )}&format=json`,
+      {
+        headers: {
+          ...workspaceActorHeaders("acme", "Owner"),
+          Accept: "application/json"
+        }
+      }
+    );
+    const integrationState = await integrationStore.load();
+    const persistedCredential = integrationState.state.credentials.find(
+      (credential) => credential.provider === "linear"
+    );
+    const openedSecret = tokenVault.open(persistedCredential?.encryptedSecret as any, {
+      associatedData: createIntegrationCredentialSecretContext(persistedCredential as any)
+    });
+    const teamStateText = await readFile(teamFile, "utf8");
+    const responseText = JSON.stringify(callback.body);
+
+    expect(setup.status).toBe(200);
+    expect(callback.status).toBe(200);
+    expect(callback.body).toMatchObject({
+      credential: {
+        installationId: "linear-install",
+        permissions: ["read:external"],
+        provider: "linear",
+        providerScopes: ["read"],
+        secretTypes: ["access-token", "refresh-token"],
+        status: "active",
+        workspaceId: "acme"
+      },
+      installation: {
+        id: "linear-install",
+        provider: "linear",
+        providerAccountId: "linear-team"
+      },
+      provider: "linear",
+      status: "connected"
+    });
+    expect(exchanges).toEqual(["linear-code"]);
+    expect(openedSecret).toEqual({
+      accessToken: "linear-oauth-access",
+      refreshToken: "linear-oauth-refresh"
+    });
+    expect(responseText).not.toContain("linear-oauth-access");
+    expect(responseText).not.toContain("linear-oauth-refresh");
+    expect(responseText).not.toContain("linear-code");
+    expect(responseText).not.toContain("ciphertext");
+    expect(teamStateText).not.toContain("linear-oauth-access");
+  });
+
+  it("does not call Linear during denied, unconfigured, or tampered OAuth callbacks", async () => {
+    const tokenVault = testTokenVault();
+    const exchanges: string[] = [];
+    const denied = await startTestServer({
+      auth: { adminToken: "secret", singleUserMode: false, trustProxyHeaders: true },
+      linearOAuthConfig: testLinearOAuthConfig(),
+      linearOAuthExchangeClient: {
+        async exchangeCode(options) {
+          exchanges.push(options.code);
+          return {
+            accessToken: "should-not-happen",
+            account: { id: "linear-team", name: "OpenRoad Linear" },
+            providerScopes: ["read"]
+          };
+        }
+      },
+      tokenVault
+    });
+    const setup = await fetchJson(
+      `${denied.url}/api/openroad/workspaces/acme/integrations/linear/oauth/setup`,
+      { headers: workspaceActorHeaders("acme", "Owner") }
+    );
+    const publicCallback = await fetchJson(
+      `${denied.url}/api/openroad/integrations/linear/oauth/callback?code=public-code&state=${encodeURIComponent(
+        setup.body.linearOAuth.state
+      )}&format=json`,
+      { headers: { Accept: "application/json" } }
+    );
+    const tamperedCallback = await fetchJson(
+      `${denied.url}/api/openroad/integrations/linear/oauth/callback?code=tampered-code&state=${encodeURIComponent(
+        `${setup.body.linearOAuth.state}x`
+      )}&format=json`,
+      {
+        headers: {
+          ...workspaceActorHeaders("acme", "Owner"),
+          Accept: "application/json"
+        }
+      }
+    );
+    const disabled = await startTestServer({
+      auth: { adminToken: "secret", singleUserMode: false, trustProxyHeaders: true },
+      linearOAuthConfig: testLinearOAuthConfig(),
+      linearOAuthExchangeClient: {
+        async exchangeCode(options) {
+          exchanges.push(options.code);
+          return {
+            accessToken: "should-not-happen",
+            account: { id: "linear-team", name: "OpenRoad Linear" },
+            providerScopes: ["read"]
+          };
+        }
+      },
+      tokenVault: { reason: "Token vault disabled for test.", status: "not_configured" }
+    });
+    const disabledSetup = await fetchJson(
+      `${disabled.url}/api/openroad/workspaces/acme/integrations/linear/oauth/setup`,
+      { headers: workspaceActorHeaders("acme", "Owner") }
+    );
+    const disabledCallback = await fetchJson(
+      `${disabled.url}/api/openroad/integrations/linear/oauth/callback?code=disabled-code&state=${encodeURIComponent(
+        disabledSetup.body.linearOAuth.state
+      )}&format=json`,
+      {
+        headers: {
+          ...workspaceActorHeaders("acme", "Owner"),
+          Accept: "application/json"
+        }
+      }
+    );
+
+    expect(publicCallback.status).toBe(403);
+    expect(tamperedCallback.status).toBe(403);
+    expect(disabledCallback.status).toBe(503);
+    expect(disabledCallback.body.error.code).toBe("not_configured");
+    expect(exchanges).toEqual([]);
+  });
+
   it("rejects invalid or disconnected Linear imports without mutating core state", async () => {
     const { dataFile, integrationFile, integrationStore, url } = await startTestServer();
     await integrationStore.load();
@@ -4226,6 +4382,131 @@ describe("OpenRoad production server", () => {
         "OPENROAD_JIRA_REDIRECT_URI"
       ]
     });
+  });
+
+  it("exchanges Jira OAuth callbacks into encrypted credentials for one accessible site", async () => {
+    const exchanges: string[] = [];
+    const tokenVault = testTokenVault();
+    const { integrationStore, url } = await startTestServer({
+      auth: { adminToken: "secret", singleUserMode: false, trustProxyHeaders: true },
+      jiraOAuthConfig: testJiraOAuthConfig(),
+      jiraOAuthExchangeClient: {
+        async exchangeCode(options) {
+          exchanges.push(options.code);
+          return {
+            accessToken: "jira-oauth-access",
+            providerScopes: ["read:jira-work"],
+            refreshToken: "jira-oauth-refresh",
+            resources: [
+              {
+                id: "jira-cloud",
+                name: "OpenRoad Jira",
+                scopes: ["read:jira-user"],
+                url: "https://openroad.atlassian.net"
+              }
+            ],
+            tokenType: "bearer"
+          };
+        }
+      },
+      tokenVault
+    });
+
+    const setup = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/jira/oauth/setup`,
+      { headers: workspaceActorHeaders("acme", "Owner") }
+    );
+    const callback = await fetchJson(
+      `${url}/api/openroad/integrations/jira/oauth/callback?code=jira-code&state=${encodeURIComponent(
+        setup.body.jiraOAuth.state
+      )}&format=json`,
+      {
+        headers: {
+          ...workspaceActorHeaders("acme", "Owner"),
+          Accept: "application/json"
+        }
+      }
+    );
+    const integrationState = await integrationStore.load();
+    const persistedCredential = integrationState.state.credentials.find(
+      (credential) => credential.provider === "jira"
+    );
+    const openedSecret = tokenVault.open(persistedCredential?.encryptedSecret as any, {
+      associatedData: createIntegrationCredentialSecretContext(persistedCredential as any)
+    });
+    const responseText = JSON.stringify(callback.body);
+
+    expect(setup.status).toBe(200);
+    expect(callback.status).toBe(200);
+    expect(callback.body).toMatchObject({
+      credential: {
+        installationId: "jira-oauth-jira-cloud",
+        permissions: ["read:external"],
+        provider: "jira",
+        providerScopes: ["read:jira-work", "read:jira-user"],
+        secretTypes: ["access-token", "refresh-token"],
+        status: "active",
+        workspaceId: "acme"
+      },
+      installation: {
+        id: "jira-oauth-jira-cloud",
+        provider: "jira",
+        providerAccountId: "jira-cloud"
+      },
+      provider: "jira",
+      status: "connected"
+    });
+    expect(exchanges).toEqual(["jira-code"]);
+    expect(openedSecret).toEqual({
+      accessToken: "jira-oauth-access",
+      refreshToken: "jira-oauth-refresh"
+    });
+    expect(responseText).not.toContain("jira-oauth-access");
+    expect(responseText).not.toContain("jira-oauth-refresh");
+    expect(responseText).not.toContain("jira-code");
+    expect(responseText).not.toContain("ciphertext");
+  });
+
+  it("rejects ambiguous Jira OAuth resources unless a specific installation is selected", async () => {
+    const tokenVault = testTokenVault();
+    const { url } = await startTestServer({
+      auth: { adminToken: "secret", singleUserMode: false, trustProxyHeaders: true },
+      jiraOAuthConfig: testJiraOAuthConfig(),
+      jiraOAuthExchangeClient: {
+        async exchangeCode() {
+          return {
+            accessToken: "jira-oauth-access",
+            providerScopes: ["read:jira-work"],
+            resources: [
+              { id: "jira-cloud-a", name: "Jira A", scopes: ["read:jira-work"] },
+              { id: "jira-cloud-b", name: "Jira B", scopes: ["read:jira-work"] }
+            ],
+            tokenType: "bearer"
+          };
+        }
+      },
+      tokenVault
+    });
+
+    const setup = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/jira/oauth/setup`,
+      { headers: workspaceActorHeaders("acme", "Owner") }
+    );
+    const callback = await fetchJson(
+      `${url}/api/openroad/integrations/jira/oauth/callback?code=jira-code&state=${encodeURIComponent(
+        setup.body.jiraOAuth.state
+      )}&format=json`,
+      {
+        headers: {
+          ...workspaceActorHeaders("acme", "Owner"),
+          Accept: "application/json"
+        }
+      }
+    );
+
+    expect(callback.status).toBe(422);
+    expect(callback.body.error.code).toBe("invalid_state");
+    expect(callback.body.error.message).toContain("multiple sites");
   });
 
   it("keeps Jira issue identity scoped to the Atlassian cloud site", async () => {
@@ -5615,9 +5896,11 @@ async function startTestServer(
     invitationDeliveryAdapter?: InvitationDeliveryAdapter;
     invitationDeliveryPublicBaseUrl?: string;
     jiraApiClient?: JiraApiClient;
+    jiraOAuthExchangeClient?: JiraOAuthExchangeClient;
     jiraOAuthConfig?: JiraOAuthConfig;
     jiraWebhookConfig?: JiraWebhookConfig;
     linearApiClient?: LinearApiClient;
+    linearOAuthExchangeClient?: LinearOAuthExchangeClient;
     linearOAuthConfig?: LinearOAuthConfig;
     linearWebhookConfig?: LinearWebhookConfig;
     notificationDeliveryAdapter?: NotificationDeliveryAdapter;
@@ -5654,9 +5937,11 @@ async function startTestServer(
     invitationDeliveryAdapter: options.invitationDeliveryAdapter,
     invitationDeliveryPublicBaseUrl: options.invitationDeliveryPublicBaseUrl,
     jiraApiClient: options.jiraApiClient,
+    jiraOAuthExchangeClient: options.jiraOAuthExchangeClient,
     jiraOAuthConfig: options.jiraOAuthConfig,
     jiraWebhookConfig: options.jiraWebhookConfig,
     linearApiClient: options.linearApiClient,
+    linearOAuthExchangeClient: options.linearOAuthExchangeClient,
     linearOAuthConfig: options.linearOAuthConfig,
     linearWebhookConfig: options.linearWebhookConfig,
     logger: { error: vi.fn(), log: vi.fn() },
@@ -5940,10 +6225,12 @@ function jiraFieldsPayload(overrides: Record<string, unknown> = {}) {
 
 function testLinearOAuthConfig(): LinearOAuthConfig {
   return {
+    apiUrl: "https://api.linear.test/graphql",
     appBaseUrl: "https://linear.test",
     clientId: "lin_client",
     clientSecret: "linear-secret",
-    redirectUri: "https://openroad.test/api/openroad/integrations/linear/oauth/callback"
+    redirectUri: "https://openroad.test/api/openroad/integrations/linear/oauth/callback",
+    tokenUrl: "https://api.linear.test/oauth/token"
   };
 }
 
@@ -5952,7 +6239,8 @@ function testJiraOAuthConfig(): JiraOAuthConfig {
     authBaseUrl: "https://auth.atlassian.test",
     clientId: "jira-client",
     clientSecret: "jira-secret",
-    redirectUri: "https://openroad.test/api/openroad/integrations/jira/oauth/callback"
+    redirectUri: "https://openroad.test/api/openroad/integrations/jira/oauth/callback",
+    resourceBaseUrl: "https://api.atlassian.test"
   };
 }
 

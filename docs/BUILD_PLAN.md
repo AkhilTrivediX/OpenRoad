@@ -10,7 +10,7 @@ Each feature must also satisfy `docs/PRODUCTION_READINESS.md` before merging to 
 
 Current stage: Stage 2 Team Beta foundation in progress.
 
-The standalone loop now covers workspaces, requests, triage, internal work, roadmap planning, changelog drafts, public portal preview, local durability, production APIs, basic tenancy boundaries, file-backed team metadata, audit events, self-host operations, owner browser sessions and owner sign-in for admin-token deployments, team invitation/account-access APIs, scoped member browser sessions from invitation tokens, server-side JSONL invitation delivery handoff, server-side HTTP invitation provider delivery, durable account password login for existing team users, JSONL account recovery handoff with reset-token confirmation, owner member-management UI/APIs with stale-session revocation, app-level crash recovery, a first app-module boundary, hardened public portal write APIs with persisted visitor vote identity, the provider-neutral integration adapter contract, a payload-backed GitHub issue import/link API, server-only GitHub App installation verification, live GitHub issue fetch through verified installations, signed GitHub/Linear/Jira webhooks for already-linked issue mappings, safe disconnect handling, encrypted server-only provider credential storage, provider-neutral background sync job foundations, GitHub/Linear/Jira workers for already-linked issue mappings, progressive Settings visibility with GitHub/Linear/Jira connect, credential, disconnect, and manual sync controls, Linear issue import/link, Jira issue import/link with explicit field mapping, requester notification preferences/outbox events plus JSONL delivery handoff, deterministic local assistant triage, and release candidate manifest tooling. The next production work should target provider write-back, conflict UI, hosted OAuth callback exchange, hosted webhook registration automation, and real model-backed AI adapters as separate hardening slices.
+The standalone loop now covers workspaces, requests, triage, internal work, roadmap planning, changelog drafts, public portal preview, local durability, production APIs, basic tenancy boundaries, file-backed team metadata, audit events, self-host operations, owner browser sessions and owner sign-in for admin-token deployments, team invitation/account-access APIs, scoped member browser sessions from invitation tokens, server-side JSONL invitation delivery handoff, server-side HTTP invitation provider delivery, durable account password login for existing team users, JSONL account recovery handoff with reset-token confirmation, owner member-management UI/APIs with stale-session revocation, app-level crash recovery, a first app-module boundary, hardened public portal write APIs with persisted visitor vote identity, the provider-neutral integration adapter contract, a payload-backed GitHub issue import/link API, server-only GitHub App installation verification, live GitHub issue fetch through verified installations, signed GitHub/Linear/Jira webhooks for already-linked issue mappings, safe disconnect handling, encrypted server-only provider credential storage, provider-neutral background sync job foundations, GitHub/Linear/Jira workers for already-linked issue mappings, Linear/Jira OAuth callback exchange, progressive Settings visibility with GitHub/Linear/Jira connect, credential, disconnect, and manual sync controls, Linear issue import/link, Jira issue import/link with explicit field mapping, requester notification preferences/outbox events plus JSONL delivery handoff, deterministic local assistant triage, and release candidate manifest tooling. The next production work should target OAuth refresh-token rotation, provider write-back, conflict UI, hosted webhook registration automation, and real model-backed AI adapters as separate hardening slices.
 
 ## Feature 1: Workspace Shell
 
@@ -660,7 +660,7 @@ Status: implemented and production-checked.
 
 Build:
 
-- Safe Linear OAuth setup URL and state.
+- Safe Linear OAuth setup URL, signed state, and callback credential exchange.
 - Payload-backed Linear issue import/link.
 - Linear installation and issue mappings in integration metadata.
 - Sync owner and status.
@@ -679,7 +679,7 @@ Status: implemented and production-checked.
 
 Build:
 
-- Safe Atlassian OAuth setup URL and state.
+- Safe Atlassian OAuth setup URL, signed state, and callback credential exchange.
 - Payload-backed Jira issue import/link.
 - Explicit Jira field mapping for status category, ADF description text, project, type, priority, assignee, reporter, and labels.
 - Jira installation and issue mappings in integration metadata.

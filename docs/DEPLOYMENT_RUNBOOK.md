@@ -59,8 +59,10 @@ $env:OPENROAD_LINEAR_CLIENT_ID=""
 $env:OPENROAD_LINEAR_CLIENT_SECRET=""
 $env:OPENROAD_LINEAR_REDIRECT_URI=""
 $env:OPENROAD_LINEAR_API_URL="https://api.linear.app/graphql"
+$env:OPENROAD_LINEAR_TOKEN_URL="https://api.linear.app/oauth/token"
 $env:OPENROAD_LINEAR_WEBHOOK_SECRET=""
 $env:OPENROAD_JIRA_AUTH_BASE_URL="https://auth.atlassian.com"
+$env:OPENROAD_JIRA_RESOURCE_BASE_URL="https://api.atlassian.com"
 $env:OPENROAD_JIRA_CLIENT_ID=""
 $env:OPENROAD_JIRA_CLIENT_SECRET=""
 $env:OPENROAD_JIRA_REDIRECT_URI=""
@@ -106,8 +108,10 @@ $env:OPENROAD_LINEAR_CLIENT_ID=""
 $env:OPENROAD_LINEAR_CLIENT_SECRET=""
 $env:OPENROAD_LINEAR_REDIRECT_URI=""
 $env:OPENROAD_LINEAR_API_URL="https://api.linear.app/graphql"
+$env:OPENROAD_LINEAR_TOKEN_URL="https://api.linear.app/oauth/token"
 $env:OPENROAD_LINEAR_WEBHOOK_SECRET=""
 $env:OPENROAD_JIRA_AUTH_BASE_URL="https://auth.atlassian.com"
+$env:OPENROAD_JIRA_RESOURCE_BASE_URL="https://api.atlassian.com"
 $env:OPENROAD_JIRA_CLIENT_ID=""
 $env:OPENROAD_JIRA_CLIENT_SECRET=""
 $env:OPENROAD_JIRA_REDIRECT_URI=""
@@ -503,7 +507,7 @@ For local single-user mode without `OPENROAD_ADMIN_TOKEN`, omit `--admin-token`;
 - Owner browser sessions for admin-token self-hosting, backend invitation APIs, invitation UI, member invite sessions, JSONL invitation delivery handoff, HTTP invitation provider delivery, account password login and JSONL account recovery for existing team users, and owner member role/deactivation controls are implemented; built-in SMTP delivery, provider-specific invitation/recovery templates, OAuth login, email verification, bulk member operations, MFA/passkeys, SSO, and hosted account management are not implemented.
 - Team metadata is file-backed, not managed SQL.
 - Trusted proxy headers are disabled by default.
-- Payload-backed GitHub issue import, GitHub App installation verification, live issue fetch, signed GitHub/Linear/Jira webhooks, safe disconnect APIs, encrypted server-only provider credential storage, provider-neutral background sync job metadata, GitHub/Linear/Jira workers for already-linked issue mappings, payload-backed Linear issue import, payload-backed Jira issue import, requester notification outbox/preferences, and a server-side JSONL notification delivery handoff exist; OAuth callback exchange, provider write-back, direct email/provider notification delivery, conflict UI, hosted webhook registration automation, and billing are not implemented.
+- Payload-backed GitHub issue import, GitHub App installation verification, live issue fetch, signed GitHub/Linear/Jira webhooks, safe disconnect APIs, encrypted server-only provider credential storage, provider-neutral background sync job metadata, GitHub/Linear/Jira workers for already-linked issue mappings, Linear/Jira OAuth callback exchange, payload-backed Linear issue import, payload-backed Jira issue import, requester notification outbox/preferences, and a server-side JSONL notification delivery handoff exist; OAuth refresh-token rotation, provider write-back, direct email/provider notification delivery, conflict UI, hosted webhook registration automation, and billing are not implemented.
 - Docker images are build-local by default; release manifests can record publishing metadata, but registry publishing infrastructure is not bundled yet.
 - Signed artifact infrastructure is not bundled yet; release manifests record signing as not configured unless an operator supplies signing metadata.
 - Named Docker volume backup requires an operator copy step or a future packaged volume helper.

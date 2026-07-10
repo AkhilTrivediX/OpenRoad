@@ -165,11 +165,11 @@ Provider-neutral installation list/create/disconnect routes require `integration
 
 Linear issue import is workspace-scoped and requires workspace write permission. It accepts fixture/API payloads only in the current slice; it must not accept Linear OAuth tokens, refresh tokens, client secrets, webhook secrets, or raw OAuth codes.
 
-Linear OAuth setup requires `integration:manage`, which is reserved for local owners/admins and workspace owners. It returns a safe authorization URL and setup state, but does not exchange OAuth codes or persist tokens.
+Linear OAuth setup requires `integration:manage`, which is reserved for local owners/admins and workspace owners. It returns a safe authorization URL and signed setup state. The public Linear callback route decodes the signed state, checks the decoded workspace permission before token exchange, exchanges the provider code server-side, and stores only encrypted credential metadata scoped to the installation. It must not return OAuth codes, access tokens, refresh tokens, client secrets, provider authorization headers, or encrypted credential internals.
 
 Jira issue import is workspace-scoped and requires workspace write permission. It accepts fixture/API payloads only in the current slice; it must not accept Atlassian OAuth tokens, refresh tokens, client secrets, webhook secrets, or raw OAuth codes.
 
-Jira OAuth setup requires `integration:manage`, which is reserved for local owners/admins and workspace owners. It returns a safe Atlassian authorization URL and setup state, but does not exchange OAuth codes or persist tokens.
+Jira OAuth setup requires `integration:manage`, which is reserved for local owners/admins and workspace owners. It returns a safe Atlassian authorization URL and signed setup state. The public Jira callback route decodes the signed state, checks the decoded workspace permission before token exchange, exchanges the provider code server-side, verifies accessible Jira resources, and stores only encrypted credential metadata scoped to the selected site/installation. It must reject ambiguous multi-site callbacks unless state is bound to an existing installation, and it must not return OAuth codes, access tokens, refresh tokens, client secrets, provider authorization headers, or encrypted credential internals.
 
 Jira live sync requires a queued sync job, an active Jira installation, an active encrypted Jira credential with `read:external`, and the private sync runner. It fetches already-linked issues server-side through Jira Cloud REST and must never return access tokens, authorization headers, encrypted credential internals, or raw Jira REST payloads.
 
@@ -232,8 +232,10 @@ $env:OPENROAD_LINEAR_CLIENT_ID="lin_..."
 $env:OPENROAD_LINEAR_CLIENT_SECRET="replace-with-linear-client-secret"
 $env:OPENROAD_LINEAR_REDIRECT_URI="https://openroad.example.com/api/openroad/integrations/linear/oauth/callback"
 $env:OPENROAD_LINEAR_API_URL="https://api.linear.app/graphql"
+$env:OPENROAD_LINEAR_TOKEN_URL="https://api.linear.app/oauth/token"
 $env:OPENROAD_LINEAR_WEBHOOK_SECRET="replace-with-linear-webhook-secret"
 $env:OPENROAD_JIRA_AUTH_BASE_URL="https://auth.atlassian.com"
+$env:OPENROAD_JIRA_RESOURCE_BASE_URL="https://api.atlassian.com"
 $env:OPENROAD_JIRA_CLIENT_ID="jira-client-id"
 $env:OPENROAD_JIRA_CLIENT_SECRET="replace-with-jira-client-secret"
 $env:OPENROAD_JIRA_REDIRECT_URI="https://openroad.example.com/api/openroad/integrations/jira/oauth/callback"

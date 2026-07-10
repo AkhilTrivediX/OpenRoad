@@ -1,8 +1,15 @@
+import {
+  decodeProviderOAuthState,
+  encodeProviderOAuthState,
+  type ProviderOAuthState
+} from "./oauth-state.js";
+
 export type JiraOAuthConfig = {
   authBaseUrl: string;
   clientId?: string;
   clientSecret?: string;
   redirectUri?: string;
+  resourceBaseUrl: string;
 };
 
 export type JiraWebhookConfig = {
@@ -18,6 +25,8 @@ export type SafeJiraOAuthSetup = {
   state?: string;
 };
 
+export type JiraOAuthState = ProviderOAuthState;
+
 export const jiraRequiredOAuthScopes = ["read:jira-work", "read:jira-user"] as const;
 
 export function jiraOAuthConfigFromEnv(env = process.env): JiraOAuthConfig {
@@ -25,7 +34,8 @@ export function jiraOAuthConfigFromEnv(env = process.env): JiraOAuthConfig {
     authBaseUrl: normalizeUrl(env.OPENROAD_JIRA_AUTH_BASE_URL ?? "https://auth.atlassian.com"),
     clientId: normalizeEnvValue(env.OPENROAD_JIRA_CLIENT_ID),
     clientSecret: normalizeEnvValue(env.OPENROAD_JIRA_CLIENT_SECRET),
-    redirectUri: normalizeEnvValue(env.OPENROAD_JIRA_REDIRECT_URI)
+    redirectUri: normalizeEnvValue(env.OPENROAD_JIRA_REDIRECT_URI),
+    resourceBaseUrl: normalizeUrl(env.OPENROAD_JIRA_RESOURCE_BASE_URL ?? "https://api.atlassian.com")
   };
 }
 
@@ -41,17 +51,27 @@ export function jiraWebhookConfigFromEnv(env = process.env): JiraWebhookConfig {
 export function createSafeJiraOAuthSetup(
   config: JiraOAuthConfig,
   workspaceId: string,
-  now = new Date()
+  now = new Date(),
+  options: { installationId?: string } = {}
 ): SafeJiraOAuthSetup {
   const missing = getMissingJiraOAuthSetupKeys(config);
-  const state = encodeJiraOAuthState({
-    createdAt: now.toISOString(),
-    workspaceId
-  });
+  const configured = missing.length === 0;
+  const state =
+    configured && config.clientSecret
+      ? encodeProviderOAuthState(
+          {
+            createdAt: now.toISOString(),
+            ...(options.installationId ? { installationId: options.installationId } : {}),
+            provider: "jira",
+            workspaceId
+          },
+          config.clientSecret
+        )
+      : undefined;
 
   return {
-    authorizeUrl: missing.length === 0 ? createJiraAuthorizeUrl(config, state) : undefined,
-    configured: missing.length === 0,
+    authorizeUrl: configured && state ? createJiraAuthorizeUrl(config, state) : undefined,
+    configured,
     missing,
     requiredScopes: [...jiraRequiredOAuthScopes],
     state
@@ -81,8 +101,9 @@ function createJiraAuthorizeUrl(config: JiraOAuthConfig, state: string) {
   return url.toString();
 }
 
-function encodeJiraOAuthState(value: { createdAt: string; workspaceId: string }) {
-  return Buffer.from(JSON.stringify(value), "utf8").toString("base64url");
+export function decodeJiraOAuthState(value: string, config: JiraOAuthConfig): JiraOAuthState {
+  if (!config.clientSecret) throw new Error("OPENROAD_JIRA_CLIENT_SECRET is required.");
+  return decodeProviderOAuthState(value, config.clientSecret, "jira");
 }
 
 function normalizeUrl(value: string) {

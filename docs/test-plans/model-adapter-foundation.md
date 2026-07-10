@@ -192,14 +192,14 @@ As a workspace maintainer, I can request assistant triage for a selected request
 ## Evidence
 
 - Branch: `feat/model-adapter-foundation`
-- Commit SHAs: `f9f169e` test plan; implementation commit pending.
+- Commit SHAs: `f9f169e` test plan; `35890bb` implementation.
 - Acceptance criteria status: passed for the scoped model adapter foundation.
 - Commands run:
   - `pnpm build:server` passed before focused test expansion.
   - `pnpm vitest run src\app\openroadAssistant.test.ts server\model-adapter.test.ts server\access.test.ts server\http.test.ts` passed 139 tests.
   - `pnpm vitest run src\app\openroadAssistant.test.ts server\model-adapter.test.ts server\access.test.ts server\http.test.ts scripts\openroad-ops.test.mjs` passed 149 tests.
   - `pnpm check` passed 35 test files / 464 tests plus production client and server builds.
-  - `pnpm release:verify` passed before implementation commit; rerun after commit required for final manifest commit.
+  - `pnpm release:verify` passed before implementation commit; final rerun after evidence commit required for manifest commit.
   - Built-server deterministic smoke passed on port `4265`: `health`, `contract`, `portal`, `private-denied`, `private-token`, `assistant-triage`.
   - Built-server fake OpenAI-compatible provider probe passed on port `4266`: one `/v1/responses` call, `store:false`, model summary merged, and sanitized `category=ai` operational event verified.
 - Browser/viewports tested: not expected unless UI changes.

@@ -475,6 +475,55 @@ describe("OpenRoad workspace shell", () => {
     );
   });
 
+  it("manages workspace member roles and deactivation from Settings without rendering secrets", async () => {
+    vi.stubEnv("VITE_OPENROAD_SERVER_SYNC", "on");
+    const fetchMock = createSettingsInvitationFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    const access = await screen.findByLabelText("Team access");
+    expect(await within(access).findByText("Ready")).toBeInTheDocument();
+    expect(within(access).getByLabelText("Workspace members")).toHaveTextContent(
+      "member@example.com"
+    );
+    expect(within(access).getByText("Password ready")).toBeInTheDocument();
+    expect(within(access).getByLabelText("Role for akhil@example.com")).toBeDisabled();
+
+    await user.selectOptions(
+      within(access).getByLabelText("Role for member@example.com"),
+      "Viewer"
+    );
+
+    expect(await within(access).findByText("Updated member@example.com to Viewer.")).toBeInTheDocument();
+    expect(within(access).getByLabelText("Role for member@example.com")).toHaveValue("Viewer");
+
+    await user.click(within(access).getByRole("button", { name: "Deactivate member@example.com" }));
+
+    expect(await within(access).findByText("Deactivated member@example.com.")).toBeInTheDocument();
+    expect(within(access).queryByText("member@example.com")).not.toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/openroad/workspaces/acme/members/membership-user-member-acme",
+      expect.objectContaining({
+        body: JSON.stringify({ role: "Viewer" }),
+        credentials: "same-origin",
+        method: "PATCH"
+      })
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/openroad/workspaces/acme/members/membership-user-member-acme/deactivate",
+      expect.objectContaining({
+        credentials: "same-origin",
+        method: "POST"
+      })
+    );
+    expect(document.body.textContent).not.toContain("passwordHash");
+    expect(document.body.textContent).not.toContain("salt");
+    expect(document.body.textContent).not.toContain("sessionTokenHash");
+    expect(document.body.textContent).not.toContain("oinv_ui-one-time-token");
+  });
+
   it("accepts an invitation token from Settings without echoing failed tokens", async () => {
     vi.stubEnv("VITE_OPENROAD_SERVER_SYNC", "on");
     const fetchMock = createSettingsInvitationFetchMock({ acceptFails: true });
@@ -1621,6 +1670,34 @@ function createOwnerLoginFetchMock(
       return jsonResponse({ invitations: [] });
     }
 
+    if (url === "/api/openroad/workspaces/acme/members") {
+      if (!isAuthenticated) {
+        return jsonResponse(
+          {
+            error: {
+              code: "forbidden",
+              message: "Actor does not have permission to access this OpenRoad resource."
+            }
+          },
+          403
+        );
+      }
+
+      return jsonResponse({
+        members: [
+          memberResponse({
+            accountPasswordSet: false,
+            email: "akhil@example.com",
+            id: "membership-local-owner-acme",
+            isLocalOwner: true,
+            name: "Akhil",
+            role: "Owner",
+            userId: "local-owner"
+          })
+        ]
+      });
+    }
+
     if (url.includes("/integrations/status")) {
       if (isAuthenticated) {
         return jsonResponse({
@@ -1726,6 +1803,18 @@ function createMemberInvitationLoginFetchMock() {
           error: {
             code: "forbidden",
             message: "Team invitations require workspace owner access in this deployment."
+          }
+        },
+        403
+      );
+    }
+
+    if (url === "/api/openroad/workspaces/acme/members") {
+      return jsonResponse(
+        {
+          error: {
+            code: "forbidden",
+            message: "Team member management requires workspace owner access in this deployment."
           }
         },
         403
@@ -1910,6 +1999,26 @@ function createSettingsIntegrationFetchMock(options: { jiraReady?: boolean; line
 function createSettingsInvitationFetchMock(options: { acceptFails?: boolean } = {}) {
   const state = createInitialOpenRoadState();
   let invitation: ReturnType<typeof invitationResponse> | undefined;
+  let members = [
+    memberResponse({
+      accountPasswordSet: false,
+      email: "akhil@example.com",
+      id: "membership-local-owner-acme",
+      isLocalOwner: true,
+      name: "Akhil",
+      role: "Owner",
+      userId: "local-owner"
+    }),
+    memberResponse({
+      accountPasswordSet: true,
+      email: "member@example.com",
+      id: "membership-user-member-acme",
+      isLocalOwner: false,
+      name: "Member User",
+      role: "Contributor",
+      userId: "user-member"
+    })
+  ];
 
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input.toString();
@@ -1927,6 +2036,39 @@ function createSettingsInvitationFetchMock(options: { acceptFails?: boolean } = 
         providers: [],
         status: "ready",
         workspaceId: "acme"
+      });
+    }
+
+    if (url === "/api/openroad/workspaces/acme/members" && method === "GET") {
+      return jsonResponse({
+        members
+      });
+    }
+
+    if (url === "/api/openroad/workspaces/acme/members/membership-user-member-acme" && method === "PATCH") {
+      const body = JSON.parse(String(init?.body ?? "{}")) as { role: string };
+      members = members.map((member) =>
+        member.id === "membership-user-member-acme"
+          ? memberResponse({ ...member, role: body.role })
+          : member
+      );
+      return jsonResponse({
+        member: members.find((member) => member.id === "membership-user-member-acme"),
+        revokedSessions: 2,
+        status: "updated"
+      });
+    }
+
+    if (
+      url === "/api/openroad/workspaces/acme/members/membership-user-member-acme/deactivate" &&
+      method === "POST"
+    ) {
+      const member = members.find((item) => item.id === "membership-user-member-acme");
+      members = members.filter((item) => item.id !== "membership-user-member-acme");
+      return jsonResponse({
+        member,
+        revokedSessions: 1,
+        status: "deactivated"
       });
     }
 
@@ -1999,6 +2141,24 @@ function invitationResponse(overrides: Record<string, unknown> = {}) {
     id: "invitation-ui-1",
     role: "Viewer",
     status: "pending",
+    workspaceId: "acme",
+    ...overrides
+  };
+}
+
+function memberResponse(overrides: Record<string, unknown> = {}) {
+  return {
+    accountPasswordSet: true,
+    createdAt: "2026-07-05T00:00:00.000Z",
+    email: "member@example.com",
+    id: "membership-user-member-acme",
+    isLocalOwner: false,
+    name: "Member User",
+    passwordHash: "should-not-render",
+    role: "Contributor",
+    salt: "should-not-render",
+    sessionTokenHash: "should-not-render",
+    userId: "user-member",
     workspaceId: "acme",
     ...overrides
   };

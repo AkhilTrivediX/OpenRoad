@@ -403,6 +403,177 @@ describe("FileTeamStore", () => {
     ).toThrow(TeamStoreError);
   });
 
+  it("lists workspace members with credential readiness and no credential secrets", async () => {
+    const teamFile = await createTempTeamFile();
+    const openRoadState = createInitialOpenRoadState();
+    const store = new FileTeamStore(teamFile);
+    const invite = await store.createInvitation(openRoadState, {
+      createdByActorId: "local-owner",
+      email: "member@example.com",
+      invitedName: "Member User",
+      role: "Contributor",
+      workspaceId: "acme"
+    });
+    const accepted = await store.acceptInvitation(openRoadState, {
+      acceptedName: "Member User",
+      token: invite.acceptToken
+    });
+    await store.setAccountPassword(openRoadState, {
+      password: "member password value",
+      userId: accepted.user.id
+    });
+
+    const members = await store.listWorkspaceMembers(openRoadState, "acme");
+    const serialized = JSON.stringify(members);
+
+    expect(members).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          accountPasswordSet: true,
+          email: "member@example.com",
+          isLocalOwner: false,
+          name: "Member User",
+          role: "Contributor",
+          userId: accepted.user.id,
+          workspaceId: "acme"
+        }),
+        expect.objectContaining({
+          accountPasswordSet: false,
+          email: "owner@openroad.local",
+          isLocalOwner: true,
+          role: "Owner",
+          userId: "local-owner"
+        })
+      ])
+    );
+    expect(serialized).not.toContain("passwordHash");
+    expect(serialized).not.toContain("salt");
+    expect(serialized).not.toContain("member password value");
+  });
+
+  it("updates and deactivates workspace members without deleting users or credentials", async () => {
+    const teamFile = await createTempTeamFile();
+    const openRoadState = createInitialOpenRoadState();
+    const store = new FileTeamStore(teamFile);
+    const invite = await store.createInvitation(openRoadState, {
+      createdByActorId: "local-owner",
+      email: "member@example.com",
+      role: "Contributor",
+      workspaceId: "acme"
+    });
+    const accepted = await store.acceptInvitation(openRoadState, { token: invite.acceptToken });
+    await store.setAccountPassword(openRoadState, {
+      password: "member password value",
+      userId: accepted.user.id
+    });
+
+    const updated = await store.updateWorkspaceMemberRole(openRoadState, {
+      membershipId: accepted.membership.id,
+      role: "Viewer",
+      workspaceId: "acme"
+    });
+    const deactivated = await store.deactivateWorkspaceMember(openRoadState, {
+      membershipId: accepted.membership.id,
+      workspaceId: "acme"
+    });
+    const state = (await store.load(openRoadState)).state;
+
+    expect(updated.member).toMatchObject({
+      email: "member@example.com",
+      role: "Viewer"
+    });
+    expect(deactivated.member).toMatchObject({
+      accountPasswordSet: true,
+      email: "member@example.com",
+      role: "Viewer"
+    });
+    expect(state.memberships.some((membership) => membership.id === accepted.membership.id)).toBe(
+      false
+    );
+    expect(state.users.some((user) => user.id === accepted.user.id)).toBe(true);
+    expect(state.credentials.some((credential) => credential.userId === accepted.user.id)).toBe(
+      true
+    );
+  });
+
+  it("protects local owner and last owner memberships from unsafe mutations", async () => {
+    const teamFile = await createTempTeamFile();
+    const openRoadState = createInitialOpenRoadState();
+    const store = new FileTeamStore(teamFile);
+    await store.load(openRoadState);
+
+    await expect(
+      store.updateWorkspaceMemberRole(openRoadState, {
+        membershipId: "membership-local-owner-acme",
+        role: "Viewer",
+        workspaceId: "acme"
+      })
+    ).rejects.toMatchObject({
+      code: "invalid_request",
+      message: "The local owner membership role cannot be changed."
+    });
+    await expect(
+      store.deactivateWorkspaceMember(openRoadState, {
+        membershipId: "membership-local-owner-acme",
+        workspaceId: "acme"
+      })
+    ).rejects.toMatchObject({
+      code: "invalid_request",
+      message: "The local owner membership cannot be deactivated."
+    });
+
+    await writeFile(
+      teamFile,
+      JSON.stringify(
+        {
+          auditEvents: [],
+          credentials: [],
+          invitations: [],
+          memberships: [
+            {
+              createdAt: "2026-07-05T00:00:00.000Z",
+              id: "membership-local-owner-acme",
+              role: "Viewer",
+              userId: "local-owner",
+              workspaceId: "acme"
+            },
+            {
+              createdAt: "2026-07-05T00:00:00.000Z",
+              id: "membership-user-owner-acme",
+              role: "Owner",
+              userId: "user-owner",
+              workspaceId: "acme"
+            }
+          ],
+          schemaVersion: openRoadTeamSchemaVersion,
+          users: [
+            { createdAt: "seed", email: "owner@openroad.local", id: "local-owner", name: "Owner" },
+            {
+              createdAt: "2026-07-05T00:00:00.000Z",
+              email: "workspace.owner@example.com",
+              id: "user-owner",
+              name: "Workspace Owner"
+            }
+          ]
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+
+    await expect(
+      new FileTeamStore(teamFile).updateWorkspaceMemberRole(openRoadState, {
+        membershipId: "membership-user-owner-acme",
+        role: "Maintainer",
+        workspaceId: "acme"
+      })
+    ).rejects.toMatchObject({
+      code: "invalid_request",
+      message: "At least one owner membership must remain in this workspace."
+    });
+  });
+
   it("accepts invitations once and creates durable users and memberships", async () => {
     const teamFile = await createTempTeamFile();
     const openRoadState = createInitialOpenRoadState();

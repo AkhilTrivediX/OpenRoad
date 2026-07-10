@@ -713,6 +713,7 @@ h3 {
 .portal-comment-form label span,
 .portal-search span,
 .account-password-form label span,
+.member-role-field span,
 .invitation-form label span,
 .invitation-token label span,
 .invitation-accept-form label span {
@@ -744,6 +745,7 @@ h3 {
 .work-comment-form textarea,
 .data-tools textarea,
 .account-password-form input,
+.member-role-field select,
 .invitation-form input,
 .invitation-form select,
 .invitation-token input,
@@ -1686,12 +1688,14 @@ dd {
 }
 
 .invitation-token strong,
-.invitation-row strong {
+.invitation-row strong,
+.member-row strong {
   font-family: var(--label-font);
 }
 
 .invitation-token span,
-.invitation-row span {
+.invitation-row span,
+.member-row span {
   color: var(--muted);
   font-size: 12px;
 }
@@ -1701,32 +1705,54 @@ dd {
   font-size: 12px;
 }
 
+.member-list,
 .invitation-list {
   border: 1px solid var(--line);
   display: grid;
   overflow: hidden;
 }
 
+.member-row,
 .invitation-row {
   align-items: center;
   background: var(--plate);
   display: grid;
   gap: 10px;
-  grid-template-columns: minmax(0, 1fr) auto auto;
   padding: 10px;
 }
 
+.member-row {
+  grid-template-columns: minmax(0, 1fr) auto minmax(130px, 0.34fr) auto;
+}
+
+.invitation-row {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
+.member-row + .member-row,
 .invitation-row + .invitation-row {
   border-top: 1px solid var(--line);
 }
 
+.member-main,
+.member-role-field,
 .invitation-row > div {
   display: grid;
-  gap: 3px;
   min-width: 0;
 }
 
+.member-main,
+.invitation-row > div {
+  gap: 3px;
+}
+
+.member-role-field {
+  gap: 5px;
+}
+
 .invitation-row strong,
+.member-row strong,
+.member-row span,
 .invitation-row span {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2890,6 +2916,7 @@ dd {
 
   .settings-section-header,
   .provider-row,
+  .member-row,
   .invitation-row,
   .provider-controls {
     align-items: flex-start;
@@ -2936,8 +2963,13 @@ dd {
     grid-column: auto;
   }
 
+  .member-row .secondary-action,
   .invitation-row .secondary-action {
     min-height: 44px;
+    width: 100%;
+  }
+
+  .member-role-field {
     width: 100%;
   }
 

@@ -10,7 +10,7 @@ Each feature must also satisfy `docs/PRODUCTION_READINESS.md` before merging to 
 
 Current stage: Stage 2 Team Beta foundation in progress.
 
-The standalone loop now covers workspaces, requests, triage, internal work, roadmap planning, changelog drafts, public portal preview, local durability, production APIs, basic tenancy boundaries, file-backed team metadata, audit events, self-host operations, owner browser sessions and owner sign-in for admin-token deployments, team invitation/account-access APIs, scoped member browser sessions from invitation tokens, server-side JSONL invitation delivery handoff, durable account password login for existing team users, app-level crash recovery, a first app-module boundary, hardened public portal write APIs with persisted visitor vote identity, the provider-neutral integration adapter contract, a payload-backed GitHub issue import/link API, server-only GitHub App installation verification, live GitHub issue fetch through verified installations, signed GitHub webhooks, safe disconnect handling, encrypted server-only provider credential storage, provider-neutral background sync job foundations, GitHub/Linear/Jira workers for already-linked issue mappings, progressive Settings visibility with GitHub/Linear/Jira manual sync controls, Linear issue import/link, Jira issue import/link with explicit field mapping, requester notification preferences/outbox events plus JSONL delivery handoff, deterministic local assistant triage, and release candidate manifest tooling. The next production work should deepen member management and account lifecycle controls, while provider connect/disconnect, Linear/Jira webhooks, direct invitation/provider notification delivery, and real model-backed AI adapters remain separate hardening slices.
+The standalone loop now covers workspaces, requests, triage, internal work, roadmap planning, changelog drafts, public portal preview, local durability, production APIs, basic tenancy boundaries, file-backed team metadata, audit events, self-host operations, owner browser sessions and owner sign-in for admin-token deployments, team invitation/account-access APIs, scoped member browser sessions from invitation tokens, server-side JSONL invitation delivery handoff, durable account password login for existing team users, owner member-management UI/APIs with stale-session revocation, app-level crash recovery, a first app-module boundary, hardened public portal write APIs with persisted visitor vote identity, the provider-neutral integration adapter contract, a payload-backed GitHub issue import/link API, server-only GitHub App installation verification, live GitHub issue fetch through verified installations, signed GitHub webhooks, safe disconnect handling, encrypted server-only provider credential storage, provider-neutral background sync job foundations, GitHub/Linear/Jira workers for already-linked issue mappings, progressive Settings visibility with GitHub/Linear/Jira manual sync controls, Linear issue import/link, Jira issue import/link with explicit field mapping, requester notification preferences/outbox events plus JSONL delivery handoff, deterministic local assistant triage, and release candidate manifest tooling. The next production work should deepen account lifecycle controls, direct invitation/provider delivery, and provider connect/disconnect, while Linear/Jira webhooks, provider write-back, conflict UI, and real model-backed AI adapters remain separate hardening slices.
 
 ## Feature 1: Workspace Shell
 
@@ -317,6 +317,31 @@ Acceptance:
 - Account login produces the same workspace-member permission boundary as invitation sessions.
 - Multi-workspace users cannot accidentally sign into an ambiguous workspace.
 - Owner sessions, bearer-token scripts, invitation sessions, invitation delivery, public portal, integrations, ops, and release verification continue to pass.
+
+### Member Management UI
+
+Branch: `feat/member-management-ui`
+
+Status: implemented and production-checked.
+
+Build:
+
+- Owner-only workspace member list API with sanitized user, membership, and account-password readiness fields.
+- Owner-only membership role update API.
+- Owner-only membership deactivation API that removes a workspace membership without deleting the user or credential record.
+- Session-store revocation for active workspace-member sessions affected by role changes or deactivation.
+- Last-owner and local-owner safeguards to prevent accidental lockout.
+- Settings Access member ledger with credential readiness, role controls, and deactivation actions beside invitation management.
+- Client persistence helper boundary and docs for API, deployment, readiness, rollback, and evidence.
+
+Acceptance:
+
+- Owners can list members, update roles, and deactivate non-protected memberships from Settings.
+- Non-owners cannot list, update, or deactivate workspace members.
+- Role changes and deactivation revoke stale member cookies for the affected user/workspace.
+- Member responses never expose credential hashes, salts, session records, invitation token hashes, raw tokens, provider secrets, or private workspace state.
+- The local owner bootstrap membership cannot be changed, and the last owner membership cannot be demoted or deactivated.
+- Account password login, invitation sessions, owner sessions, bearer-token scripts, public portal, integrations, ops, and release verification continue to pass.
 
 ### Production Server Foundation
 

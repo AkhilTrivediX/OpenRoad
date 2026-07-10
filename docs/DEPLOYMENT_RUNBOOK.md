@@ -10,6 +10,7 @@ This runbook covers the current production path: one Node process serving the bu
 - `OPENROAD_ADMIN_TOKEN` protects private APIs when configured and can be exchanged for an httpOnly owner browser session.
 - Valid invitation tokens can be exchanged for httpOnly member browser sessions scoped to the invited workspace and role.
 - Existing team users can set an account password and return through an httpOnly member browser session scoped to one workspace membership.
+- Workspace owners can list members, change roles, and deactivate memberships; affected member sessions are revoked on role change or deactivation.
 - Invitation delivery is disabled by default; file mode appends raw-token invite handoff records to an operator-controlled JSONL file.
 - The public portal API remains unauthenticated and returns only public data.
 - Backups contain product, requester, integration, team, membership, and audit data; store them like production data.
@@ -140,7 +141,7 @@ The first local owner is seeded from:
 - `OPENROAD_OWNER_EMAIL`
 - `OPENROAD_OWNER_NAME`
 
-Changing these values later does not rewrite existing team metadata. To change the owner after metadata exists, use the invitation APIs to add durable workspace members, update the team metadata through a future admin UI, or intentionally restore edited metadata from backup. Account password login applies to existing team users; it does not rewrite the seeded owner identity.
+Changing these values later does not rewrite existing team metadata. To change access after metadata exists, use the invitation APIs and owner member-management Settings surface to add, role-change, or deactivate durable workspace members, or intentionally restore edited metadata from backup. Account password login applies to existing team users; it does not rewrite the seeded owner identity.
 
 ## Operational Commands
 
@@ -195,7 +196,7 @@ Integration metadata schema `3` stores server-only encrypted provider credential
 
 Session metadata schema `2` stores actor-aware owner and workspace-member browser session records in `openroad-sessions.json`. Owner records remain bound to the active admin-token hash; member records store the workspace-member actor and do not store admin-token material. Records contain hashes, ids, timestamps, and bounded client metadata only. Schema `1` owner-session files migrate automatically on load. Deleting this file signs out browsers without changing OpenRoad product data.
 
-Team metadata schema `4` stores users, memberships, audit events, invitations, bounded invitation delivery status metadata, and account password credential records in `openroad-team.json`. Invitation records store hashed accept tokens only. Account credential records store algorithm, salt, hash, user id, and timestamps only; raw passwords are not stored. Restoring a pre-schema-2 team file automatically migrates invitations to an empty list; restoring schema `2` or `3` team files automatically adds missing delivery/credential collections. Rolling back across this schema should preserve a backup first; reverting to a build that only understands schema `1`, `2`, or `3` requires restoring the previous team metadata backup or intentionally discarding newer invitation delivery metadata and account credentials.
+Team metadata schema `4` stores users, memberships, audit events, invitations, bounded invitation delivery status metadata, and account password credential records in `openroad-team.json`. Invitation records store hashed accept tokens only. Account credential records store algorithm, salt, hash, user id, and timestamps only; raw passwords are not stored. Member role changes and deactivation use existing schema `4` memberships and existing session schema `2` revocation records; no schema bump is required. Restoring a pre-schema-2 team file automatically migrates invitations to an empty list; restoring schema `2` or `3` team files automatically adds missing delivery/credential collections. Rolling back across this schema should preserve a backup first; reverting to a build that only understands schema `1`, `2`, or `3` requires restoring the previous team metadata backup or intentionally discarding newer invitation delivery metadata and account credentials.
 
 ## Provider Token Storage
 
@@ -273,6 +274,35 @@ Invoke-RestMethod `
 ```
 
 `workspaceId` is optional for users with exactly one active membership and required when the same account belongs to multiple workspaces. Account passwords do not create users, verify email ownership, reset forgotten passwords, or grant access beyond the user's persisted workspace memberships.
+
+## Member Management
+
+Workspace owners can review and manage access from Settings or the owner-only member APIs:
+
+```powershell
+Invoke-RestMethod `
+  -Method Get `
+  -Uri "http://127.0.0.1:4173/api/openroad/workspaces/acme/members" `
+  -Headers @{ Authorization = "Bearer $env:OPENROAD_ADMIN_TOKEN" }
+```
+
+Role changes and deactivation are membership-scoped:
+
+```powershell
+Invoke-RestMethod `
+  -Method Patch `
+  -Uri "http://127.0.0.1:4173/api/openroad/workspaces/acme/members/membership-id" `
+  -Headers @{ Authorization = "Bearer $env:OPENROAD_ADMIN_TOKEN" } `
+  -ContentType "application/json" `
+  -Body '{"role":"Viewer"}'
+
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://127.0.0.1:4173/api/openroad/workspaces/acme/members/membership-id/deactivate" `
+  -Headers @{ Authorization = "Bearer $env:OPENROAD_ADMIN_TOKEN" }
+```
+
+Both mutations record audit events and revoke active workspace-member sessions for the affected user/workspace. Deactivation removes the workspace membership only; the user and password credential remain in team metadata for other memberships or future reactivation. The local owner membership and the last owner membership are protected from role change or deactivation.
 
 ## Requester Notification Delivery
 
@@ -366,6 +396,9 @@ For local single-user mode without `OPENROAD_ADMIN_TOKEN`, omit `--admin-token`;
 - `POST /api/openroad/invitations/accept` should accept a valid pending invitation token without returning private workspace state.
 - `POST /api/openroad/account/password` should require an authenticated owner/member session and store only hashed credential metadata.
 - `POST /api/openroad/auth/password/login` should create a scoped member session for a valid existing team user and reject wrong passwords without echoing submitted values.
+- `GET /api/openroad/workspaces/acme/members` should require owner/admin permission and return only sanitized member summaries.
+- `PATCH /api/openroad/workspaces/acme/members/:membershipId` should require owner/admin permission, update the role, and revoke affected member sessions.
+- `POST /api/openroad/workspaces/acme/members/:membershipId/deactivate` should require owner/admin permission, remove only that workspace membership, and revoke affected member sessions.
 
 ## Security Notes
 
@@ -380,7 +413,7 @@ For local single-user mode without `OPENROAD_ADMIN_TOKEN`, omit `--admin-token`;
 
 ## Current Limits
 
-- Owner browser sessions for admin-token self-hosting, backend invitation APIs, invitation UI, member invite sessions, JSONL invitation delivery handoff, and account password login for existing team users are implemented; direct SMTP/provider invitation sending, OAuth login, email verification, account recovery, MFA/passkeys, SSO, and hosted account management are not implemented.
+- Owner browser sessions for admin-token self-hosting, backend invitation APIs, invitation UI, member invite sessions, JSONL invitation delivery handoff, account password login for existing team users, and owner member role/deactivation controls are implemented; direct SMTP/provider invitation sending, OAuth login, email verification, account recovery, bulk member operations, MFA/passkeys, SSO, and hosted account management are not implemented.
 - Team metadata is file-backed, not managed SQL.
 - Trusted proxy headers are disabled by default.
 - Payload-backed GitHub issue import, GitHub App installation verification, live issue fetch, signed webhooks, safe disconnect APIs, encrypted server-only provider credential storage, provider-neutral background sync job metadata, GitHub/Linear/Jira workers for already-linked issue mappings, payload-backed Linear issue import, payload-backed Jira issue import, requester notification outbox/preferences, and a server-side JSONL notification delivery handoff exist; OAuth callback exchange, Linear/Jira webhooks, provider write-back, direct email/provider notification delivery, conflict UI, and billing are not implemented.

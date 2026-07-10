@@ -15,6 +15,7 @@ export const actorTypes = [
 export const workspaceRoles = ["Owner", "Maintainer", "Contributor", "Viewer"] as const;
 
 export const permissions = [
+  "account:write",
   "contract:read",
   "integration:manage",
   "integration:sync",
@@ -125,6 +126,12 @@ export const routeProtections: RouteProtection[] = [
   },
   {
     methods: ["POST"],
+    path: "/api/openroad/auth/password/login",
+    permission: "contract:read",
+    scope: "public"
+  },
+  {
+    methods: ["POST"],
     path: "/api/openroad/invitations/accept",
     permission: "contract:read",
     scope: "public"
@@ -139,6 +146,12 @@ export const routeProtections: RouteProtection[] = [
     methods: ["PUT"],
     path: "/api/openroad/state",
     permission: "state:write",
+    scope: "global"
+  },
+  {
+    methods: ["POST"],
+    path: "/api/openroad/account/password",
+    permission: "account:write",
     scope: "global"
   },
   {
@@ -274,6 +287,24 @@ export const routeProtections: RouteProtection[] = [
     scope: "workspace"
   },
   {
+    methods: ["GET"],
+    path: "/api/openroad/workspaces/:workspaceId/members",
+    permission: "integration:manage",
+    scope: "workspace"
+  },
+  {
+    methods: ["PATCH"],
+    path: "/api/openroad/workspaces/:workspaceId/members/:membershipId",
+    permission: "integration:manage",
+    scope: "workspace"
+  },
+  {
+    methods: ["POST"],
+    path: "/api/openroad/workspaces/:workspaceId/members/:membershipId/deactivate",
+    permission: "integration:manage",
+    scope: "workspace"
+  },
+  {
     methods: ["POST"],
     path: "/api/openroad/integrations/github/webhook",
     permission: "integration:sync",
@@ -385,6 +416,10 @@ export function hasPermission(
       permission === "workspace:write" ||
       permission === "integration:sync"
     );
+  }
+
+  if (permission === "account:write") {
+    return actor.type === "workspace-member";
   }
 
   if (actor.type === "service-account") {

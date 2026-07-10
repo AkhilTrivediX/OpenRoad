@@ -33,6 +33,7 @@ OpenRoad now has a working standalone product loop, production server foundation
 - Team metadata, workspace membership, hashed invitation tokens, owner/member browser sessions, audit events, and private ops status APIs.
 - Server-side JSONL invitation delivery handoff with invite links that prefill the member join flow.
 - Account password login for existing team users with server-side salted hashes and scoped member sessions.
+- Owner-only member management for listing workspace members, changing roles, and deactivating memberships with affected member sessions revoked.
 - App-level crash recovery boundary with retry and local browser-data reset actions.
 - Provider-neutral integration mappings plus a payload-backed GitHub issue import/link API.
 - Server-only GitHub App setup and installation verification foundation.
@@ -47,7 +48,7 @@ OpenRoad now has a working standalone product loop, production server foundation
 - Release candidate manifest tooling for version, checksum, support-window, and dry-run publishing verification.
 - Docker Compose, backup/restore, and smoke-check commands for self-host operators.
 
-Current production limits are explicit: direct SMTP/provider invitation sending, OAuth login, email verification, account recovery, managed database migrations, hosted release promotion, deeper observability, full integration connect/disconnect Settings flows, OAuth callback exchange, Linear/Jira webhooks, provider write-back, direct email/provider notification delivery, real model-backed AI adapters with consent/prompt redaction/audit logs, and conflict UI are planned next-stage work. Admin-token self-hosting has an httpOnly owner browser session path, invitation tokens can create scoped member browser sessions, and invited users can set a server-side account password without exposing the server admin token.
+Current production limits are explicit: direct SMTP/provider invitation sending, OAuth login, email verification, account recovery, managed database migrations, hosted release promotion, deeper observability, hosted organization administration, bulk member operations, full integration connect/disconnect Settings flows, OAuth callback exchange, Linear/Jira webhooks, provider write-back, direct email/provider notification delivery, real model-backed AI adapters with consent/prompt redaction/audit logs, and conflict UI are planned next-stage work. Admin-token self-hosting has an httpOnly owner browser session path, invitation tokens can create scoped member browser sessions, and invited users can set a server-side account password without exposing the server admin token.
 
 Current docs:
 
@@ -160,6 +161,9 @@ The server exposes:
 - `GET /api/openroad/workspaces/:workspaceId/invitations`
 - `POST /api/openroad/workspaces/:workspaceId/invitations`
 - `POST /api/openroad/workspaces/:workspaceId/invitations/:invitationId/revoke`
+- `GET /api/openroad/workspaces/:workspaceId/members`
+- `PATCH /api/openroad/workspaces/:workspaceId/members/:membershipId`
+- `POST /api/openroad/workspaces/:workspaceId/members/:membershipId/deactivate`
 - `POST /api/openroad/integrations/sync/run`
 - `GET /api/openroad/audit-events`
 - `GET /api/openroad/ops/status`
@@ -167,6 +171,6 @@ The server exposes:
 - `POST /api/openroad/workspaces/:workspaceId/portal/requests/:requestId/vote`
 - `POST /api/openroad/workspaces/:workspaceId/portal/requests/:requestId/comments`
 
-When `OPENROAD_ADMIN_TOKEN` is configured, private state APIs require either `Authorization: Bearer <token>` or an owner session cookie created by the browser sign-in flow or `POST /api/openroad/auth/login`. Invitation tokens can create scoped member session cookies through `POST /api/openroad/invitations/session`; existing team users can set a password through `POST /api/openroad/account/password` and return through `POST /api/openroad/auth/password/login`. Member sessions use workspace-scoped APIs and cannot read or write full multi-workspace state. The portal API remains public and returns only the public projection. See [API auth and tenancy contract](docs/API_AUTH_TENANCY_CONTRACT.md).
+When `OPENROAD_ADMIN_TOKEN` is configured, private state APIs require either `Authorization: Bearer <token>` or an owner session cookie created by the browser sign-in flow or `POST /api/openroad/auth/login`. Invitation tokens can create scoped member session cookies through `POST /api/openroad/invitations/session`; existing team users can set a password through `POST /api/openroad/account/password` and return through `POST /api/openroad/auth/password/login`. Workspace owners can manage members from Settings or the member APIs; role changes and deactivation revoke affected member sessions so stale cookies cannot retain old access. Member sessions use workspace-scoped APIs and cannot read or write full multi-workspace state. The portal API remains public and returns only the public projection. See [API auth and tenancy contract](docs/API_AUTH_TENANCY_CONTRACT.md).
 
 Deployment, backup, restore, smoke, upgrade, and rollback details live in [Deployment runbook](docs/DEPLOYMENT_RUNBOOK.md).

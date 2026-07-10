@@ -140,6 +140,14 @@ import {
   type WorkspaceInvitationAccess,
   type WorkspaceRole as InvitationWorkspaceRole
 } from "./persistence/openroadInvitations";
+import {
+  createStandaloneMemberAccess,
+  deactivateWorkspaceMember,
+  loadWorkspaceMembers,
+  updateWorkspaceMemberRole,
+  type WorkspaceMemberAccess,
+  type WorkspaceMemberSummary
+} from "./persistence/openroadMembers";
 
 type NavItem = {
   label: "Inbox" | "Work" | "Roadmap" | "Changelog" | "Portal" | "Settings";
@@ -216,6 +224,9 @@ export function App() {
   const [invitationAccess, setInvitationAccess] = useState<WorkspaceInvitationAccess>(() =>
     createStandaloneInvitationAccess(resolveInitialWorkspaceId(loadResult.state, loadSelectedWorkspaceId()))
   );
+  const [memberAccess, setMemberAccess] = useState<WorkspaceMemberAccess>(() =>
+    createStandaloneMemberAccess(resolveInitialWorkspaceId(loadResult.state, loadSelectedWorkspaceId()))
+  );
   const [invitationDraft, setInvitationDraft] = useState<{
     email: string;
     name: string;
@@ -223,12 +234,16 @@ export function App() {
   }>({ email: "", name: "", role: "Viewer" });
   const [invitationActionMessage, setInvitationActionMessage] = useState("");
   const [invitationErrorMessage, setInvitationErrorMessage] = useState("");
+  const [memberActionMessage, setMemberActionMessage] = useState("");
+  const [memberErrorMessage, setMemberErrorMessage] = useState("");
   const [createdInvitationToken, setCreatedInvitationToken] = useState<{
     email: string;
     token: string;
   } | null>(null);
   const [isCreatingInvitation, setIsCreatingInvitation] = useState(false);
   const [revokingInvitationId, setRevokingInvitationId] = useState<string | undefined>();
+  const [updatingMemberId, setUpdatingMemberId] = useState<string | undefined>();
+  const [deactivatingMemberId, setDeactivatingMemberId] = useState<string | undefined>();
   const [acceptTokenDraft, setAcceptTokenDraft] = useState({ name: "", token: "" });
   const [isAcceptingInvitation, setIsAcceptingInvitation] = useState(false);
   const [exportPreview, setExportPreview] = useState("");
@@ -275,6 +290,10 @@ export function App() {
   );
   const isServerMemberSession =
     serverPersistenceEnabled && serverAccessScope === "workspace-member";
+  const workspaceOwnerMemberCount = useMemo(
+    () => memberAccess.members.filter((member) => member.role === "Owner").length,
+    [memberAccess.members]
+  );
 
   useEffect(() => {
     const invitationToken = consumeInvitationTokenFromUrl();
@@ -533,6 +552,36 @@ export function App() {
     loadWorkspaceInvitations(workspaceId).then((access) => {
       if (isCancelled) return;
       setInvitationAccess(access);
+    });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [ownerLoginState, serverPersistenceEnabled, workspaceId]);
+  useEffect(() => {
+    let isCancelled = false;
+
+    setMemberActionMessage("");
+    setMemberErrorMessage("");
+
+    if (!serverPersistenceEnabled) {
+      setMemberAccess(createStandaloneMemberAccess(workspaceId));
+      return;
+    }
+
+    if (ownerLoginState !== "idle") {
+      setMemberAccess(
+        createStandaloneMemberAccess(
+          workspaceId,
+          "Team members require an owner session before they can be managed."
+        )
+      );
+      return;
+    }
+
+    loadWorkspaceMembers(workspaceId).then((access) => {
+      if (isCancelled) return;
+      setMemberAccess(access);
     });
 
     return () => {
@@ -850,6 +899,60 @@ export function App() {
 
     const access = await loadWorkspaceInvitations(workspace.id);
     setInvitationAccess(access);
+  }
+
+  async function refreshWorkspaceMembers() {
+    if (!serverPersistenceEnabled) {
+      setMemberAccess(createStandaloneMemberAccess(workspace.id));
+      return;
+    }
+
+    const access = await loadWorkspaceMembers(workspace.id);
+    setMemberAccess(access);
+  }
+
+  async function changeWorkspaceMemberRole(memberId: string, role: InvitationWorkspaceRole) {
+    if (updatingMemberId || deactivatingMemberId) return;
+
+    setUpdatingMemberId(memberId);
+    setMemberActionMessage("");
+    setMemberErrorMessage("");
+
+    try {
+      const result = await updateWorkspaceMemberRole(workspace.id, memberId, role);
+
+      if (result.status !== "updated") {
+        setMemberErrorMessage(result.message);
+        return;
+      }
+
+      setMemberActionMessage(result.message);
+      await refreshWorkspaceMembers();
+    } finally {
+      setUpdatingMemberId(undefined);
+    }
+  }
+
+  async function deactivateWorkspaceMemberAccess(memberId: string) {
+    if (updatingMemberId || deactivatingMemberId) return;
+
+    setDeactivatingMemberId(memberId);
+    setMemberActionMessage("");
+    setMemberErrorMessage("");
+
+    try {
+      const result = await deactivateWorkspaceMember(workspace.id, memberId);
+
+      if (result.status !== "deactivated") {
+        setMemberErrorMessage(result.message);
+        return;
+      }
+
+      setMemberActionMessage(result.message);
+      await refreshWorkspaceMembers();
+    } finally {
+      setDeactivatingMemberId(undefined);
+    }
   }
 
   async function createInvitation(event: FormEvent<HTMLFormElement>) {
@@ -4255,8 +4358,13 @@ export function App() {
                       Invite workspace members without changing the standalone product loop.
                     </p>
                   </div>
-                  <span className={`status-badge ${getInvitationAccessTone(invitationAccess)}`}>
-                    {getInvitationAccessLabel(invitationAccess)}
+                  <span
+                    className={`status-badge ${getAccessControlTone(
+                      invitationAccess,
+                      memberAccess
+                    )}`}
+                  >
+                    {getAccessControlLabel(invitationAccess, memberAccess)}
                   </span>
                 </div>
 
@@ -4324,8 +4432,86 @@ export function App() {
                   </form>
                 ) : null}
 
+                {memberActionMessage ? (
+                  <p className="invitation-message" role="status">
+                    {memberActionMessage}
+                  </p>
+                ) : null}
+                {memberErrorMessage ? (
+                  <p className="invitation-message error" role="alert">
+                    {memberErrorMessage}
+                  </p>
+                ) : null}
+
                 {invitationAccess.status === "ready" ? (
                   <>
+                    {memberAccess.status === "ready" ? (
+                      <div className="member-list" aria-label="Workspace members">
+                        {memberAccess.members.length ? (
+                          memberAccess.members.map((member) => {
+                            const protectedMutation = isMemberMutationProtected(
+                              member,
+                              workspaceOwnerMemberCount
+                            );
+                            const isUpdating = updatingMemberId === member.id;
+                            const isDeactivating = deactivatingMemberId === member.id;
+
+                            return (
+                              <article className="member-row" key={member.id}>
+                                <div className="member-main">
+                                  <strong>{member.name}</strong>
+                                  <span>{member.email}</span>
+                                </div>
+                                <span className={`status-badge ${getMemberCredentialTone(member)}`}>
+                                  {getMemberCredentialLabel(member)}
+                                </span>
+                                <label className="member-role-field">
+                                  <span>Role</span>
+                                  <select
+                                    aria-label={`Role for ${member.email}`}
+                                    disabled={protectedMutation || isUpdating || isDeactivating}
+                                    onChange={(event) =>
+                                      void changeWorkspaceMemberRole(
+                                        member.id,
+                                        event.target.value as InvitationWorkspaceRole
+                                      )
+                                    }
+                                    value={member.role}
+                                  >
+                                    {invitationRoles.map((role) => (
+                                      <option key={role} value={role}>
+                                        {role}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </label>
+                                <button
+                                  aria-label={`Deactivate ${member.email}`}
+                                  className="secondary-action compact"
+                                  disabled={protectedMutation || isUpdating || isDeactivating}
+                                  onClick={() => void deactivateWorkspaceMemberAccess(member.id)}
+                                  title={protectedMutation ? getMemberProtectionLabel(member) : undefined}
+                                  type="button"
+                                >
+                                  {isDeactivating ? "Deactivating..." : "Deactivate"}
+                                </button>
+                              </article>
+                            );
+                          })
+                        ) : (
+                          <div className="empty-state compact-empty">
+                            <strong>No members yet</strong>
+                            <p>Accepted invitations appear here.</p>
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="empty-state compact-empty">
+                        <strong>Members unavailable</strong>
+                        <p>{memberAccess.message ?? "Team member APIs are not available."}</p>
+                      </div>
+                    )}
+
                     <form
                       className="invitation-form"
                       aria-label="Create team invitation"
@@ -4699,16 +4885,40 @@ function getProviderMetric(provider: IntegrationProviderStatus) {
   return `${account} / ${linked} / ${queue}`;
 }
 
-function getInvitationAccessTone(access: WorkspaceInvitationAccess) {
-  if (access.status === "ready") return "success";
-  if (access.status === "forbidden") return "warning";
+function getAccessControlTone(
+  invitationAccess: WorkspaceInvitationAccess,
+  memberAccess: WorkspaceMemberAccess
+) {
+  if (invitationAccess.status === "ready" && memberAccess.status === "ready") return "success";
+  if (invitationAccess.status === "forbidden" || memberAccess.status === "forbidden") return "warning";
   return "neutral";
 }
 
-function getInvitationAccessLabel(access: WorkspaceInvitationAccess) {
-  if (access.status === "ready") return "Ready";
-  if (access.status === "forbidden") return "Owner only";
+function getAccessControlLabel(
+  invitationAccess: WorkspaceInvitationAccess,
+  memberAccess: WorkspaceMemberAccess
+) {
+  if (invitationAccess.status === "ready" && memberAccess.status === "ready") return "Ready";
+  if (invitationAccess.status === "forbidden" || memberAccess.status === "forbidden") return "Owner only";
   return "Server off";
+}
+
+function getMemberCredentialTone(member: WorkspaceMemberSummary) {
+  return member.accountPasswordSet ? "success" : "neutral";
+}
+
+function getMemberCredentialLabel(member: WorkspaceMemberSummary) {
+  return member.accountPasswordSet ? "Password ready" : "Invite only";
+}
+
+function isMemberMutationProtected(member: WorkspaceMemberSummary, ownerCount: number) {
+  return member.isLocalOwner || (member.role === "Owner" && ownerCount <= 1);
+}
+
+function getMemberProtectionLabel(member: WorkspaceMemberSummary) {
+  if (member.isLocalOwner) return "The local owner membership is protected.";
+  if (member.role === "Owner") return "At least one owner must remain.";
+  return undefined;
 }
 
 function getInvitationStatusTone(status: string) {

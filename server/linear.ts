@@ -5,6 +5,11 @@ export type LinearOAuthConfig = {
   redirectUri?: string;
 };
 
+export type LinearWebhookConfig = {
+  webhookSecret?: string;
+  webhookSecretConfigured: boolean;
+};
+
 export type SafeLinearOAuthSetup = {
   authorizeUrl?: string;
   configured: boolean;
@@ -21,6 +26,15 @@ export function linearOAuthConfigFromEnv(env = process.env): LinearOAuthConfig {
     clientId: normalizeEnvValue(env.OPENROAD_LINEAR_CLIENT_ID),
     clientSecret: normalizeEnvValue(env.OPENROAD_LINEAR_CLIENT_SECRET),
     redirectUri: normalizeEnvValue(env.OPENROAD_LINEAR_REDIRECT_URI)
+  };
+}
+
+export function linearWebhookConfigFromEnv(env = process.env): LinearWebhookConfig {
+  const webhookSecret = normalizeEnvValue(env.OPENROAD_LINEAR_WEBHOOK_SECRET);
+
+  return {
+    webhookSecret,
+    webhookSecretConfigured: Boolean(webhookSecret)
   };
 }
 

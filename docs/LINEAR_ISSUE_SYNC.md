@@ -1,6 +1,6 @@
 # OpenRoad Linear Issue Sync
 
-OpenRoad now has a production-safe Linear integration path: safe OAuth setup metadata, payload-backed Linear issue import/link, encrypted server-only credential storage, and a live GraphQL worker for already-linked issue mappings.
+OpenRoad now has a production-safe Linear integration path: safe OAuth setup metadata, payload-backed Linear issue import/link, encrypted server-only credential storage, live GraphQL sync workers, and signed webhooks for already-linked issue mappings.
 
 Official Linear references used for this slice:
 
@@ -20,6 +20,7 @@ Official Linear references used for this slice:
 - Queue provider-neutral background sync jobs for active Linear installations.
 - Run private Linear live sync for already-linked Linear issue mappings when an active encrypted Linear credential is stored.
 - Update linked OpenRoad requests from live Linear GraphQL issue data without importing unmapped issues.
+- Receive signed Linear issue webhooks and update already-linked OpenRoad requests idempotently.
 - Record audit events for Linear imports and syncs.
 
 ## Environment
@@ -29,6 +30,7 @@ $env:OPENROAD_LINEAR_CLIENT_ID="lin_..."
 $env:OPENROAD_LINEAR_CLIENT_SECRET="replace-with-linear-client-secret"
 $env:OPENROAD_LINEAR_REDIRECT_URI="https://openroad.example.com/api/openroad/integrations/linear/oauth/callback"
 $env:OPENROAD_LINEAR_API_URL="https://api.linear.app/graphql"
+$env:OPENROAD_LINEAR_WEBHOOK_SECRET="replace-with-linear-webhook-secret"
 ```
 
 `OPENROAD_LINEAR_APP_BASE_URL` can override `https://linear.app` for OAuth setup tests. `OPENROAD_LINEAR_API_URL` can override the GraphQL endpoint for smoke tests and private deployments.
@@ -60,6 +62,14 @@ The endpoint queues provider-neutral sync jobs for active Linear installations. 
 When `OPENROAD_TOKEN_ENCRYPTION_KEY` is configured and an active Linear credential exists for the installation, the built-in production server auto-wires a Linear GraphQL worker. The worker refreshes already-linked Linear issue mappings by issue id, updates the linked OpenRoad request through the existing Linear mapper, and records `lastSyncedAt` on synced mappings.
 
 The worker does not list/import unmapped Linear issues, refresh OAuth tokens, or write changes back to Linear.
+
+## Webhook Endpoint
+
+`POST /api/openroad/integrations/linear/webhook`
+
+The endpoint requires `OPENROAD_LINEAR_WEBHOOK_SECRET`. It verifies the raw request body with the `Linear-Signature` header and HMAC-SHA256 before parsing JSON or mutating state. It also checks the Linear `webhookTimestamp` replay window and dedupes by `webhookId` or `Linear-Delivery` when present.
+
+Only `Issue` webhooks for active installations with `webhook:receive` can update OpenRoad, and only when the Linear issue is already linked to an OpenRoad request. Unmapped issues are logged as ignored sync events without creating requests. Responses and persisted events never include raw Linear payloads, signatures, webhook secrets, access tokens, refresh tokens, or encrypted credential material.
 
 ## Import Endpoint
 
@@ -105,6 +115,5 @@ Linear issue assignees are preserved in the imported description and tags. OpenR
 
 - OAuth callback and token exchange.
 - OAuth refresh-token rotation.
-- Linear webhook endpoint with `Linear-Signature` verification.
-- Full browser connect/import/disconnect flows and Linear sync logs.
+- Full browser import UI and Linear sync logs.
 - Provider write-back and conflict handling.

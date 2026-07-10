@@ -59,11 +59,13 @@ $env:OPENROAD_LINEAR_CLIENT_ID=""
 $env:OPENROAD_LINEAR_CLIENT_SECRET=""
 $env:OPENROAD_LINEAR_REDIRECT_URI=""
 $env:OPENROAD_LINEAR_API_URL="https://api.linear.app/graphql"
+$env:OPENROAD_LINEAR_WEBHOOK_SECRET=""
 $env:OPENROAD_JIRA_AUTH_BASE_URL="https://auth.atlassian.com"
 $env:OPENROAD_JIRA_CLIENT_ID=""
 $env:OPENROAD_JIRA_CLIENT_SECRET=""
 $env:OPENROAD_JIRA_REDIRECT_URI=""
 $env:OPENROAD_JIRA_API_BASE_URL="https://api.atlassian.com/ex/jira"
+$env:OPENROAD_JIRA_WEBHOOK_SECRET=""
 $env:OPENROAD_SINGLE_USER_MODE="false"
 $env:OPENROAD_TRUST_PROXY_HEADERS="false"
 $env:PORT="4173"
@@ -104,11 +106,13 @@ $env:OPENROAD_LINEAR_CLIENT_ID=""
 $env:OPENROAD_LINEAR_CLIENT_SECRET=""
 $env:OPENROAD_LINEAR_REDIRECT_URI=""
 $env:OPENROAD_LINEAR_API_URL="https://api.linear.app/graphql"
+$env:OPENROAD_LINEAR_WEBHOOK_SECRET=""
 $env:OPENROAD_JIRA_AUTH_BASE_URL="https://auth.atlassian.com"
 $env:OPENROAD_JIRA_CLIENT_ID=""
 $env:OPENROAD_JIRA_CLIENT_SECRET=""
 $env:OPENROAD_JIRA_REDIRECT_URI=""
 $env:OPENROAD_JIRA_API_BASE_URL="https://api.atlassian.com/ex/jira"
+$env:OPENROAD_JIRA_WEBHOOK_SECRET=""
 $env:OPENROAD_SINGLE_USER_MODE="false"
 $env:OPENROAD_TRUST_PROXY_HEADERS="false"
 $env:PORT="4173"
@@ -118,7 +122,7 @@ Do not expose `OPENROAD_ADMIN_TOKEN` to browser JavaScript beyond the one-time o
 
 Treat `OPENROAD_INVITATION_DELIVERY_FILE` as sensitive when invitation delivery file mode is enabled. The file contains raw invitation accept tokens and links for external mail/helpdesk workers. Treat `OPENROAD_ACCOUNT_RECOVERY_DELIVERY_FILE` as sensitive when account recovery file mode is enabled. It contains raw recovery tokens and reset links for external mail/helpdesk workers. These delivery files are not included in OpenRoad backups and should be rotated, shipped, or deleted according to your operations policy. Treat `OPENROAD_INVITATION_DELIVERY_HTTP_BEARER_TOKEN` as a server secret when HTTP provider mode is enabled; OpenRoad sends it only as an outbound authorization header.
 
-Do not expose GitHub App private keys, GitHub webhook secrets, Linear client secrets, Jira client secrets, or `OPENROAD_TOKEN_ENCRYPTION_KEY` to browser JavaScript. Prefer `OPENROAD_GITHUB_APP_PRIVATE_KEY_FILE` for self-host installs.
+Do not expose GitHub App private keys, GitHub webhook secrets, Linear client/webhook secrets, Jira client/webhook secrets, or `OPENROAD_TOKEN_ENCRYPTION_KEY` to browser JavaScript. Prefer `OPENROAD_GITHUB_APP_PRIVATE_KEY_FILE` for self-host installs.
 
 ## Docker Compose Self-Host
 
@@ -222,6 +226,16 @@ $env:OPENROAD_TOKEN_ENCRYPTION_KEY_ID="primary"
 ```
 
 Credential and provider installation management APIs require `integration:manage` and return only metadata. Settings can manually bootstrap GitHub, Linear, or Jira installation metadata, store encrypted provider credentials, list/revoke credential metadata, and disconnect provider installations from the same-origin app. Credential responses never return access tokens, refresh tokens, ciphertext, IVs, tags, or the encryption key. Provider disconnect revokes matching active credentials, disconnects matching mappings, and preserves OpenRoad product data. Signed GitHub installation deletion webhooks keep the same credential-revocation behavior.
+
+## Provider Webhooks
+
+OpenRoad accepts provider webhook callbacks only when the matching server-only secret is configured:
+
+- GitHub: `POST /api/openroad/integrations/github/webhook` with `OPENROAD_GITHUB_APP_WEBHOOK_SECRET` and `X-Hub-Signature-256`.
+- Linear: `POST /api/openroad/integrations/linear/webhook` with `OPENROAD_LINEAR_WEBHOOK_SECRET` and `Linear-Signature`.
+- Jira: `POST /api/openroad/integrations/jira/webhook` with `OPENROAD_JIRA_WEBHOOK_SECRET`, `X-Hub-Signature`, and `X-Atlassian-Webhook-Identifier`.
+
+Linear and Jira webhooks refresh already-linked issue mappings for active installations that include `webhook:receive`; they do not create new OpenRoad requests from provider payloads. Duplicate delivery ids are no-ops, raw provider payloads are not persisted, and webhook responses return sanitized sync-event metadata only.
 
 Changing the encryption key without re-encrypting credentials will make existing encrypted payloads unreadable to future sync workers. This release does not include external KMS or re-encryption tooling.
 
@@ -489,7 +503,7 @@ For local single-user mode without `OPENROAD_ADMIN_TOKEN`, omit `--admin-token`;
 - Owner browser sessions for admin-token self-hosting, backend invitation APIs, invitation UI, member invite sessions, JSONL invitation delivery handoff, HTTP invitation provider delivery, account password login and JSONL account recovery for existing team users, and owner member role/deactivation controls are implemented; built-in SMTP delivery, provider-specific invitation/recovery templates, OAuth login, email verification, bulk member operations, MFA/passkeys, SSO, and hosted account management are not implemented.
 - Team metadata is file-backed, not managed SQL.
 - Trusted proxy headers are disabled by default.
-- Payload-backed GitHub issue import, GitHub App installation verification, live issue fetch, signed webhooks, safe disconnect APIs, encrypted server-only provider credential storage, provider-neutral background sync job metadata, GitHub/Linear/Jira workers for already-linked issue mappings, payload-backed Linear issue import, payload-backed Jira issue import, requester notification outbox/preferences, and a server-side JSONL notification delivery handoff exist; OAuth callback exchange, Linear/Jira webhooks, provider write-back, direct email/provider notification delivery, conflict UI, and billing are not implemented.
+- Payload-backed GitHub issue import, GitHub App installation verification, live issue fetch, signed GitHub/Linear/Jira webhooks, safe disconnect APIs, encrypted server-only provider credential storage, provider-neutral background sync job metadata, GitHub/Linear/Jira workers for already-linked issue mappings, payload-backed Linear issue import, payload-backed Jira issue import, requester notification outbox/preferences, and a server-side JSONL notification delivery handoff exist; OAuth callback exchange, provider write-back, direct email/provider notification delivery, conflict UI, hosted webhook registration automation, and billing are not implemented.
 - Docker images are build-local by default; release manifests can record publishing metadata, but registry publishing infrastructure is not bundled yet.
 - Signed artifact infrastructure is not bundled yet; release manifests record signing as not configured unless an operator supplies signing metadata.
 - Named Docker volume backup requires an operator copy step or a future packaged volume helper.

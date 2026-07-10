@@ -33,8 +33,8 @@ import type { AuthOptions } from "./access";
 import { GitHubAppClientError, type GitHubAppClient, type GitHubAppConfig } from "./github-app";
 import type { JiraApiClient } from "./jira-api";
 import type { LinearApiClient } from "./linear-api";
-import type { LinearOAuthConfig } from "./linear";
-import type { JiraOAuthConfig } from "./jira";
+import type { LinearOAuthConfig, LinearWebhookConfig } from "./linear";
+import type { JiraOAuthConfig, JiraWebhookConfig } from "./jira";
 import {
   HttpInvitationDeliveryAdapter,
   type InvitationDeliveryAdapter
@@ -2525,11 +2525,11 @@ describe("OpenRoad production server", () => {
       },
       method: "POST"
     });
-    const invalidPermission = await fetchJson(
+    const jiraWebhook = await fetchJson(
       `${url}/api/openroad/workspaces/acme/integrations/jira/installations`,
       {
         body: JSON.stringify({
-          installationId: "manual-jira-invalid",
+          installationId: "manual-jira-webhook",
           permissions: ["read:external", "read:openroad", "write:openroad", "webhook:receive"],
           providerAccountId: "jira-cloud",
           providerAccountName: "Jira Cloud"
@@ -2575,7 +2575,12 @@ describe("OpenRoad production server", () => {
       providerAccountName: "Jira Cloud",
       status: "active"
     });
-    expect(invalidPermission.status).toBe(400);
+    expect(jiraWebhook.status).toBe(201);
+    expect(jiraWebhook.body.installation).toMatchObject({
+      id: "manual-jira-webhook-jira-cloud",
+      permissions: ["read:external", "read:openroad", "write:openroad", "webhook:receive"],
+      provider: "jira"
+    });
     expect(listed.status).toBe(200);
     expect(listed.body.installations).toEqual([
       expect.objectContaining({ id: "manual-linear", provider: "linear", status: "active" })
@@ -2585,7 +2590,7 @@ describe("OpenRoad production server", () => {
       expect.arrayContaining([
         expect.objectContaining({ activeInstallations: 1, provider: "github" }),
         expect.objectContaining({ activeInstallations: 1, provider: "linear" }),
-        expect.objectContaining({ activeInstallations: 1, provider: "jira" })
+        expect.objectContaining({ activeInstallations: 2, provider: "jira" })
       ])
     );
     expect(JSON.stringify(github.body)).not.toContain("encryptedSecret");
@@ -4276,7 +4281,7 @@ describe("OpenRoad production server", () => {
       "cloud-other:10042"
     ]);
     expect(second.body.installation.permissions).not.toContain("write:external");
-    expect(second.body.installation.permissions).not.toContain("webhook:receive");
+    expect(second.body.installation.permissions).toContain("webhook:receive");
   });
 
   it("rejects invalid or disconnected Jira imports without mutating core state", async () => {
@@ -4470,6 +4475,281 @@ describe("OpenRoad production server", () => {
       deliveryId: "delivery-unmapped-issue",
       result: "ignored"
     });
+  });
+
+  it("rejects Linear and Jira webhooks without configured secrets or valid signatures", async () => {
+    const unconfigured = await startTestServer();
+    const configured = await startTestServer({
+      jiraWebhookConfig: testJiraWebhookConfig(),
+      linearWebhookConfig: testLinearWebhookConfig()
+    });
+    await configured.integrationStore.load();
+    const beforeState = await readFile(configured.dataFile, "utf8");
+    const beforeIntegrations = await readFile(configured.integrationFile, "utf8");
+
+    const missingLinearSecret = await fetchJson(
+      `${unconfigured.url}/api/openroad/integrations/linear/webhook`,
+      {
+        body: JSON.stringify(linearWebhookPayload()),
+        headers: { "Content-Type": "application/json" },
+        method: "POST"
+      }
+    );
+    const missingJiraSecret = await fetchJson(`${unconfigured.url}/api/openroad/integrations/jira/webhook`, {
+      body: JSON.stringify(jiraWebhookPayload()),
+      headers: {
+        "Content-Type": "application/json",
+        "x-atlassian-webhook-identifier": "jira-missing-secret"
+      },
+      method: "POST"
+    });
+    const unsignedLinearInvalidJson = await fetchJson(
+      `${configured.url}/api/openroad/integrations/linear/webhook`,
+      {
+        body: "{",
+        headers: { "Content-Type": "application/json" },
+        method: "POST"
+      }
+    );
+    const unsignedJiraInvalidJson = await fetchJson(
+      `${configured.url}/api/openroad/integrations/jira/webhook`,
+      {
+        body: "{",
+        headers: {
+          "Content-Type": "application/json",
+          "x-atlassian-webhook-identifier": "jira-unsigned"
+        },
+        method: "POST"
+      }
+    );
+    const invalidLinearSignature = await fetchJson(
+      `${configured.url}/api/openroad/integrations/linear/webhook`,
+      signedLinearWebhookRequest(linearWebhookPayload({ webhookId: "linear-invalid-signature" }), {
+        signature: "bad"
+      })
+    );
+    const invalidJiraSignature = await fetchJson(
+      `${configured.url}/api/openroad/integrations/jira/webhook`,
+      signedJiraWebhookRequest(jiraWebhookPayload(), {
+        deliveryId: "jira-invalid-signature",
+        signature: "sha256=bad"
+      })
+    );
+    const staleLinearTimestamp = await fetchJson(
+      `${configured.url}/api/openroad/integrations/linear/webhook`,
+      signedLinearWebhookRequest(
+        linearWebhookPayload({
+          webhookId: "linear-stale",
+          webhookTimestamp: Date.now() - 10 * 60 * 1000
+        })
+      )
+    );
+
+    expect(missingLinearSecret.status).toBe(503);
+    expect(missingLinearSecret.body.error.code).toBe("not_configured");
+    expect(missingJiraSecret.status).toBe(503);
+    expect(missingJiraSecret.body.error.code).toBe("not_configured");
+    expect(unsignedLinearInvalidJson.status).toBe(403);
+    expect(unsignedLinearInvalidJson.body.error.code).toBe("forbidden");
+    expect(unsignedJiraInvalidJson.status).toBe(403);
+    expect(unsignedJiraInvalidJson.body.error.code).toBe("forbidden");
+    expect(invalidLinearSignature.status).toBe(403);
+    expect(invalidLinearSignature.body.error.code).toBe("forbidden");
+    expect(invalidJiraSignature.status).toBe(403);
+    expect(invalidJiraSignature.body.error.code).toBe("forbidden");
+    expect(staleLinearTimestamp.status).toBe(403);
+    expect(staleLinearTimestamp.body.error.code).toBe("forbidden");
+    expect(await readFile(configured.dataFile, "utf8")).toBe(beforeState);
+    expect(await readFile(configured.integrationFile, "utf8")).toBe(beforeIntegrations);
+  });
+
+  it("processes linked Linear issue webhooks idempotently without exposing secrets", async () => {
+    const { integrationStore, store, teamFile, url } = await startTestServer({
+      linearWebhookConfig: testLinearWebhookConfig()
+    });
+    const created = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/linear/issues/import`, {
+      body: JSON.stringify(
+        linearImportPayload({
+          installation: {
+            accountId: "linear-team",
+            accountName: "OpenRoad",
+            id: "linear-install",
+            permissions: ["read:external", "read:openroad", "write:openroad", "webhook:receive"]
+          }
+        })
+      ),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const first = await fetchJson(
+      `${url}/api/openroad/integrations/linear/webhook`,
+      signedLinearWebhookRequest(
+        linearWebhookPayload({
+          data: linearIssuePayload({
+            labels: { nodes: [{ name: "planned" }] },
+            state: { id: "state-started", name: "Started", type: "started" },
+            title: "Webhook updated Linear issue"
+          }),
+          webhookId: "linear-delivery-sync"
+        })
+      )
+    );
+    const duplicate = await fetchJson(
+      `${url}/api/openroad/integrations/linear/webhook`,
+      signedLinearWebhookRequest(
+        linearWebhookPayload({
+          data: linearIssuePayload({ title: "Duplicate Linear should not win" }),
+          webhookId: "linear-delivery-sync"
+        })
+      )
+    );
+    const status = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/status`);
+    const persisted = await store.load();
+    const integrations = await integrationStore.load();
+    const teamState = JSON.parse(await readFile(teamFile, "utf8")) as {
+      auditEvents: Array<{ actorType: string; summary: string; type: string; workspaceId: string }>;
+    };
+    const request = persisted.state.workspaces[0].requests.find(
+      (item) => item.id === created.body.request.id
+    );
+    const linearStatus = status.body.providers.find(
+      (provider: { provider: string }) => provider.provider === "linear"
+    );
+
+    expect(first.status).toBe(202);
+    expect(first.body).toMatchObject({
+      event: {
+        deliveryId: "linear-delivery-sync",
+        event: "Issue:update",
+        provider: "linear",
+        result: "synced",
+        workspaceId: "acme"
+      },
+      status: "synced"
+    });
+    expect(duplicate.status).toBe(200);
+    expect(duplicate.body.status).toBe("duplicate");
+    expect(linearStatus).toMatchObject({
+      capabilities: {
+        webhooks: true
+      },
+      provider: "linear"
+    });
+    expect(request).toMatchObject({
+      status: "Planned",
+      title: "Webhook updated Linear issue"
+    });
+    expect(JSON.stringify(request)).not.toContain("Duplicate Linear should not win");
+    expect(integrations.state.syncEvents).toHaveLength(1);
+    expect(integrations.state.syncEvents[0]).toMatchObject({ provider: "linear", result: "synced" });
+    expect(integrations.state.mappings.find((mapping) => mapping.external.provider === "linear")?.lastSyncedAt).toBeTruthy();
+    expect(teamState.auditEvents[0]).toMatchObject({
+      actorType: "integration",
+      type: "integration.linear.webhook.issue",
+      workspaceId: "acme"
+    });
+    expect(JSON.stringify(first.body)).not.toContain("linear-webhook-secret");
+  });
+
+  it("processes linked Jira issue webhooks idempotently without exposing secrets", async () => {
+    const { integrationStore, store, teamFile, url } = await startTestServer({
+      jiraWebhookConfig: testJiraWebhookConfig()
+    });
+    const created = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/jira/issues/import`, {
+      body: JSON.stringify(
+        jiraImportPayload({
+          installation: {
+            accountId: "jira-cloud",
+            accountName: "OpenRoad Jira",
+            id: "jira-install",
+            permissions: ["read:external", "read:openroad", "write:openroad", "webhook:receive"]
+          },
+          issue: jiraIssuePayload({
+            self: "https://api.atlassian.com/ex/jira/jira-cloud/rest/api/3/issue/10042"
+          })
+        })
+      ),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const first = await fetchJson(
+      `${url}/api/openroad/integrations/jira/webhook`,
+      signedJiraWebhookRequest(
+        jiraWebhookPayload({
+          issue: jiraIssuePayload({
+            fields: jiraFieldsPayload({
+              labels: ["planned"],
+              status: {
+                id: "4",
+                name: "In Progress",
+                statusCategory: { key: "indeterminate", name: "In Progress" }
+              },
+              summary: "Webhook updated Jira issue"
+            }),
+            self: "https://api.atlassian.com/ex/jira/jira-cloud/rest/api/3/issue/10042"
+          })
+        }),
+        { deliveryId: "jira-delivery-sync" }
+      )
+    );
+    const duplicate = await fetchJson(
+      `${url}/api/openroad/integrations/jira/webhook`,
+      signedJiraWebhookRequest(
+        jiraWebhookPayload({
+          issue: jiraIssuePayload({
+            fields: jiraFieldsPayload({ summary: "Duplicate Jira should not win" }),
+            self: "https://api.atlassian.com/ex/jira/jira-cloud/rest/api/3/issue/10042"
+          })
+        }),
+        { deliveryId: "jira-delivery-sync" }
+      )
+    );
+    const status = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/status`);
+    const persisted = await store.load();
+    const integrations = await integrationStore.load();
+    const teamState = JSON.parse(await readFile(teamFile, "utf8")) as {
+      auditEvents: Array<{ actorType: string; summary: string; type: string; workspaceId: string }>;
+    };
+    const request = persisted.state.workspaces[0].requests.find(
+      (item) => item.id === created.body.request.id
+    );
+    const jiraStatus = status.body.providers.find(
+      (provider: { provider: string }) => provider.provider === "jira"
+    );
+
+    expect(first.status).toBe(202);
+    expect(first.body).toMatchObject({
+      event: {
+        deliveryId: "jira-delivery-sync",
+        event: "jira:issue_updated",
+        provider: "jira",
+        result: "synced",
+        workspaceId: "acme"
+      },
+      status: "synced"
+    });
+    expect(duplicate.status).toBe(200);
+    expect(duplicate.body.status).toBe("duplicate");
+    expect(jiraStatus).toMatchObject({
+      capabilities: {
+        webhooks: true
+      },
+      provider: "jira"
+    });
+    expect(request).toMatchObject({
+      status: "Planned",
+      title: "Webhook updated Jira issue"
+    });
+    expect(JSON.stringify(request)).not.toContain("Duplicate Jira should not win");
+    expect(integrations.state.syncEvents).toHaveLength(1);
+    expect(integrations.state.syncEvents[0]).toMatchObject({ provider: "jira", result: "synced" });
+    expect(integrations.state.mappings.find((mapping) => mapping.external.provider === "jira")?.lastSyncedAt).toBeTruthy();
+    expect(teamState.auditEvents[0]).toMatchObject({
+      actorType: "integration",
+      type: "integration.jira.webhook.issue",
+      workspaceId: "acme"
+    });
+    expect(JSON.stringify(first.body)).not.toContain("jira-webhook-secret");
   });
 
   it("disconnects GitHub installations from signed installation webhooks without deleting requests", async () => {
@@ -5336,8 +5616,10 @@ async function startTestServer(
     invitationDeliveryPublicBaseUrl?: string;
     jiraApiClient?: JiraApiClient;
     jiraOAuthConfig?: JiraOAuthConfig;
+    jiraWebhookConfig?: JiraWebhookConfig;
     linearApiClient?: LinearApiClient;
     linearOAuthConfig?: LinearOAuthConfig;
+    linearWebhookConfig?: LinearWebhookConfig;
     notificationDeliveryAdapter?: NotificationDeliveryAdapter;
     portalRateLimiter?: PortalRateLimiter;
     sessionStore?: SessionStore;
@@ -5373,8 +5655,10 @@ async function startTestServer(
     invitationDeliveryPublicBaseUrl: options.invitationDeliveryPublicBaseUrl,
     jiraApiClient: options.jiraApiClient,
     jiraOAuthConfig: options.jiraOAuthConfig,
+    jiraWebhookConfig: options.jiraWebhookConfig,
     linearApiClient: options.linearApiClient,
     linearOAuthConfig: options.linearOAuthConfig,
+    linearWebhookConfig: options.linearWebhookConfig,
     logger: { error: vi.fn(), log: vi.fn() },
     notificationDeliveryAdapter: options.notificationDeliveryAdapter,
     portalRateLimiter: options.portalRateLimiter,
@@ -5681,6 +5965,20 @@ function testGitHubWebhookConfig(): GitHubAppConfig {
   };
 }
 
+function testLinearWebhookConfig(): LinearWebhookConfig {
+  return {
+    webhookSecret: "linear-webhook-secret",
+    webhookSecretConfigured: true
+  };
+}
+
+function testJiraWebhookConfig(): JiraWebhookConfig {
+  return {
+    webhookSecret: "jira-webhook-secret",
+    webhookSecretConfigured: true
+  };
+}
+
 function testTokenVault() {
   const vault = createIntegrationTokenVault({
     encryptionKey: "0123456789abcdef0123456789abcdef",
@@ -5721,6 +6019,79 @@ function signedGitHubWebhookRequest(
       "x-hub-signature-256": resolvedSignature
     },
     method: "POST"
+  };
+}
+
+function signedLinearWebhookRequest(
+  payload: Record<string, unknown>,
+  {
+    secret = "linear-webhook-secret",
+    signature
+  }: {
+    secret?: string;
+    signature?: string;
+  } = {}
+): RequestInit {
+  const body = JSON.stringify(payload);
+  const resolvedSignature = signature ?? createHmac("sha256", secret).update(body).digest("hex");
+
+  return {
+    body,
+    headers: {
+      "Content-Type": "application/json",
+      "linear-signature": resolvedSignature
+    },
+    method: "POST"
+  };
+}
+
+function linearWebhookPayload(overrides: Record<string, unknown> = {}) {
+  return {
+    action: "update",
+    data: linearIssuePayload(),
+    organizationId: "linear-team",
+    type: "Issue",
+    webhookId: "linear-delivery-1",
+    webhookTimestamp: Date.now(),
+    ...overrides
+  };
+}
+
+function signedJiraWebhookRequest(
+  payload: Record<string, unknown>,
+  {
+    deliveryId = "jira-delivery-1",
+    secret = "jira-webhook-secret",
+    signature
+  }: {
+    deliveryId?: string;
+    secret?: string;
+    signature?: string;
+  } = {}
+): RequestInit {
+  const body = JSON.stringify(payload);
+  const resolvedSignature =
+    signature ?? `sha256=${createHmac("sha256", secret).update(body).digest("hex")}`;
+
+  return {
+    body,
+    headers: {
+      "Content-Type": "application/json",
+      "x-atlassian-webhook-identifier": deliveryId,
+      "x-hub-signature": resolvedSignature
+    },
+    method: "POST"
+  };
+}
+
+function jiraWebhookPayload(overrides: Record<string, unknown> = {}) {
+  return {
+    issue: jiraIssuePayload({
+      cloudId: "jira-cloud",
+      self: "https://api.atlassian.com/ex/jira/jira-cloud/rest/api/3/issue/10042"
+    }),
+    webhookEvent: "jira:issue_updated",
+    ...overrides
   };
 }
 

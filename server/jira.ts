@@ -5,6 +5,11 @@ export type JiraOAuthConfig = {
   redirectUri?: string;
 };
 
+export type JiraWebhookConfig = {
+  webhookSecret?: string;
+  webhookSecretConfigured: boolean;
+};
+
 export type SafeJiraOAuthSetup = {
   authorizeUrl?: string;
   configured: boolean;
@@ -21,6 +26,15 @@ export function jiraOAuthConfigFromEnv(env = process.env): JiraOAuthConfig {
     clientId: normalizeEnvValue(env.OPENROAD_JIRA_CLIENT_ID),
     clientSecret: normalizeEnvValue(env.OPENROAD_JIRA_CLIENT_SECRET),
     redirectUri: normalizeEnvValue(env.OPENROAD_JIRA_REDIRECT_URI)
+  };
+}
+
+export function jiraWebhookConfigFromEnv(env = process.env): JiraWebhookConfig {
+  const webhookSecret = normalizeEnvValue(env.OPENROAD_JIRA_WEBHOOK_SECRET);
+
+  return {
+    webhookSecret,
+    webhookSecretConfigured: Boolean(webhookSecret)
   };
 }
 

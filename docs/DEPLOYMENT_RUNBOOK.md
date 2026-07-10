@@ -37,6 +37,7 @@ $env:OPENROAD_OWNER_EMAIL="owner@example.com"
 $env:OPENROAD_OWNER_NAME="Workspace Owner"
 $env:OPENROAD_ADMIN_TOKEN="replace-with-long-random-token"
 $env:OPENROAD_PUBLIC_APP_URL="http://127.0.0.1:4173/"
+$env:OPENROAD_WEBHOOK_PUBLIC_BASE_URL=""
 $env:OPENROAD_INVITATION_DELIVERY_MODE="disabled"
 $env:OPENROAD_INVITATION_DELIVERY_FILE="C:\openroad\openroad-invitation-deliveries.jsonl"
 $env:OPENROAD_INVITATION_DELIVERY_HTTP_URL=""
@@ -86,6 +87,7 @@ $env:OPENROAD_OWNER_EMAIL="owner@example.com"
 $env:OPENROAD_OWNER_NAME="Workspace Owner"
 $env:OPENROAD_ADMIN_TOKEN="replace-with-long-random-token"
 $env:OPENROAD_PUBLIC_APP_URL="http://127.0.0.1:4173/"
+$env:OPENROAD_WEBHOOK_PUBLIC_BASE_URL=""
 $env:OPENROAD_INVITATION_DELIVERY_MODE="disabled"
 $env:OPENROAD_INVITATION_DELIVERY_FILE="C:\openroad\openroad-invitation-deliveries.jsonl"
 $env:OPENROAD_INVITATION_DELIVERY_HTTP_URL=""
@@ -214,7 +216,7 @@ The manifest records creation time, app package version, source paths, file size
 
 OpenRoad state schema `7` stores anonymous public portal voter keys and requester notification delivery metadata inside `openroad-state.json`. Upgrade from schema `6` is automatic on load and initializes existing notification events with `deliveryAttempts: 0`. Downgrading to a schema `6` or older build after schema `7` data is written requires restoring a pre-upgrade backup.
 
-Integration metadata schema `3` stores server-only encrypted provider credential records and background sync job metadata in `openroad-integrations.json`. Upgrade from schema `1` or `2` is automatic on load and initializes missing `credentials: []` and `syncJobs: []`. Downgrading to an older integration metadata build after credentials or sync jobs are created requires revoking/removing credentials, draining/removing sync jobs, or restoring a pre-upgrade integration backup.
+Integration metadata schema `4` stores server-only encrypted provider credential records, background sync job metadata, and hosted webhook registration metadata in `openroad-integrations.json`. Upgrade from schema `1`, `2`, or `3` is automatic on load and initializes missing `credentials: []`, `syncJobs: []`, and `webhookRegistrations: []`. Downgrading to an older integration metadata build after credentials, sync jobs, or webhook registration records are created requires revoking/removing credentials, draining/removing sync jobs, resetting external webhook config where needed, or restoring a pre-upgrade integration backup.
 
 Session metadata schema `2` stores actor-aware owner and workspace-member browser session records in `openroad-sessions.json`. Owner records remain bound to the active admin-token hash; member records store the workspace-member actor and do not store admin-token material. Records contain hashes, ids, timestamps, and bounded client metadata only. Schema `1` owner-session files migrate automatically on load. Deleting this file signs out browsers without changing OpenRoad product data.
 
@@ -240,6 +242,14 @@ OpenRoad accepts provider webhook callbacks only when the matching server-only s
 - Jira: `POST /api/openroad/integrations/jira/webhook` with `OPENROAD_JIRA_WEBHOOK_SECRET`, `X-Hub-Signature`, and `X-Atlassian-Webhook-Identifier`.
 
 Linear and Jira webhooks refresh already-linked issue mappings for active installations that include `webhook:receive`; they do not create new OpenRoad requests from provider payloads. Duplicate delivery ids are no-ops, raw provider payloads are not persisted, and webhook responses return sanitized sync-event metadata only.
+
+Hosted webhook registration is available at:
+
+- `POST /api/openroad/workspaces/:workspaceId/integrations/:provider/webhooks/register`
+
+The route requires `integration:manage` and accepts only an `installationId`. For GitHub, OpenRoad uses server-only GitHub App credentials to update the GitHub App webhook config to `${OPENROAD_WEBHOOK_PUBLIC_BASE_URL || OPENROAD_PUBLIC_APP_URL}/api/openroad/integrations/github/webhook`, with JSON payloads, SSL verification enabled, and `OPENROAD_GITHUB_APP_WEBHOOK_SECRET` as the shared secret. Linear and Jira registration attempts are recorded as blocked unless OpenRoad can verify future provider-created deliveries with a server-known secret; OpenRoad does not create unverifiable Linear/Jira provider webhooks. Settings shows the registration control only when the server reports a safe capability.
+
+For hosted GitHub registration, configure `OPENROAD_PUBLIC_APP_URL` or `OPENROAD_WEBHOOK_PUBLIC_BASE_URL`. The public base must be HTTPS except for localhost/loopback development and tests.
 
 Changing the encryption key without re-encrypting credentials will make existing encrypted payloads unreadable to future sync workers. This release does not include external KMS or re-encryption tooling.
 
@@ -508,7 +518,7 @@ For local single-user mode without `OPENROAD_ADMIN_TOKEN`, omit `--admin-token`;
 - Owner browser sessions for admin-token self-hosting, backend invitation APIs, invitation UI, member invite sessions, JSONL invitation delivery handoff, HTTP invitation provider delivery, account password login and JSONL account recovery for existing team users, and owner member role/deactivation controls are implemented; built-in SMTP delivery, provider-specific invitation/recovery templates, OAuth login, email verification, bulk member operations, MFA/passkeys, SSO, and hosted account management are not implemented.
 - Team metadata is file-backed, not managed SQL.
 - Trusted proxy headers are disabled by default.
-- Payload-backed GitHub issue import, GitHub App installation verification, live issue fetch, signed GitHub/Linear/Jira webhooks, safe disconnect APIs, encrypted server-only provider credential storage, provider-neutral background sync job metadata, GitHub/Linear/Jira workers for already-linked issue mappings, Linear/Jira OAuth callback exchange and refresh-token rotation, explicit provider write-back for linked GitHub/Linear/Jira issues, provider conflict resolution controls, payload-backed Linear issue import, payload-backed Jira issue import, requester notification outbox/preferences, and a server-side JSONL notification delivery handoff exist; direct email/provider notification delivery, hosted webhook registration automation, and billing are not implemented.
+- Payload-backed GitHub issue import, GitHub App installation verification, live issue fetch, signed GitHub/Linear/Jira webhooks, hosted GitHub App webhook registration, safe disconnect APIs, encrypted server-only provider credential storage, provider-neutral background sync job metadata, GitHub/Linear/Jira workers for already-linked issue mappings, Linear/Jira OAuth callback exchange and refresh-token rotation, explicit provider write-back for linked GitHub/Linear/Jira issues, provider conflict resolution controls, payload-backed Linear issue import, payload-backed Jira issue import, requester notification outbox/preferences, and a server-side JSONL notification delivery handoff exist; direct email/provider notification delivery, Linear/Jira hosted webhook creation, and billing are not implemented.
 - Docker images are build-local by default; release manifests can record publishing metadata, but registry publishing infrastructure is not bundled yet.
 - Signed artifact infrastructure is not bundled yet; release manifests record signing as not configured unless an operator supplies signing metadata.
 - Named Docker volume backup requires an operator copy step or a future packaged volume helper.

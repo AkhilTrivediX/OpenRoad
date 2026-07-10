@@ -101,6 +101,13 @@ describe("OpenRoad API access contract", () => {
     );
     expect(openRoadApiContract.routeProtections).toContainEqual(
       expect.objectContaining({
+        path: "/api/openroad/workspaces/:workspaceId/integrations/:provider/webhooks/register",
+        permission: "integration:manage",
+        scope: "workspace"
+      })
+    );
+    expect(openRoadApiContract.routeProtections).toContainEqual(
+      expect.objectContaining({
         path: "/api/openroad/workspaces/:workspaceId/integrations/linear/issues/import",
         permission: "workspace:write",
         scope: "workspace"

@@ -1792,7 +1792,7 @@ dd {
   background: var(--plate);
   display: grid;
   gap: 10px;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
   padding: 12px;
 }
 
@@ -1848,7 +1848,7 @@ dd {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  justify-content: flex-end;
+  justify-content: flex-start;
 }
 
 .provider-action {
@@ -3062,6 +3062,19 @@ dd {
   .brief-instruments {
     min-width: 0;
   }
+
+  .top-actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    justify-content: stretch;
+    min-width: 0;
+  }
+
+  .top-actions .secondary-action {
+    min-width: 0;
+    padding: 0 8px;
+    width: 100%;
+  }
 }
 
 @media (max-width: 760px) {
@@ -3118,6 +3131,24 @@ dd {
     margin: -10px -10px 10px;
     padding: 10px;
     top: -10px;
+  }
+
+  .top-actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 38px 38px;
+    justify-content: stretch;
+    min-width: 0;
+  }
+
+  .top-actions .secondary-action {
+    min-width: 0;
+    padding: 0 8px;
+    width: 100%;
+  }
+
+  .top-actions .icon-button,
+  .top-actions .avatar {
+    display: none;
   }
 
   .workspace-form,

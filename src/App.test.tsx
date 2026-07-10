@@ -417,6 +417,32 @@ describe("OpenRoad workspace shell", () => {
     expect(document.body.textContent).not.toContain("installation-token");
   });
 
+  it("registers a GitHub hosted webhook from Settings without exposing secrets", async () => {
+    vi.stubEnv("VITE_OPENROAD_SERVER_SYNC", "on");
+    const fetchMock = createSettingsIntegrationFetchMock({ githubWebhookReady: true });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "GitHub register webhook delivery" }));
+
+    expect(
+      await screen.findByText("Registered GitHub App webhook delivery for this OpenRoad deployment.")
+    ).toBeInTheDocument();
+    expect(screen.getByText("Webhook active")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/openroad/workspaces/acme/integrations/github/webhooks/register",
+      expect.objectContaining({
+        body: JSON.stringify({ installationId: "github-install" }),
+        credentials: "same-origin",
+        method: "POST"
+      })
+    );
+    expect(document.body.textContent).not.toContain("github-hook-secret");
+    expect(document.body.textContent).not.toContain("raw-secret");
+  });
+
   it("resolves a provider conflict from Settings without exposing provider secrets", async () => {
     vi.stubEnv("VITE_OPENROAD_SERVER_SYNC", "on");
     const fetchMock = createSettingsIntegrationFetchMock({ githubConflict: true });
@@ -2032,6 +2058,8 @@ function createMemberInvitationLoginFetchMock() {
 function createSettingsIntegrationFetchMock(
   options: {
     githubConflict?: boolean;
+    githubWebhookReady?: boolean;
+    githubWebhookRegistered?: boolean;
     githubWriteBack?: boolean;
     jiraReady?: boolean;
     linearReady?: boolean;
@@ -2040,6 +2068,7 @@ function createSettingsIntegrationFetchMock(
 ) {
   const state = createInitialOpenRoadState();
   let githubConflictResolved = false;
+  let githubWebhookRegistered = Boolean(options.githubWebhookRegistered);
   if (options.requestSource) {
     state.workspaces[0].requests[0] = {
       ...state.workspaces[0].requests[0],
@@ -2062,7 +2091,7 @@ function createSettingsIntegrationFetchMock(
       return jsonResponse({
         integrationMetadata: {
           recovered: false,
-          schemaVersion: 3,
+          schemaVersion: 4,
           status: "ready"
         },
         providers: [
@@ -2082,6 +2111,7 @@ function createSettingsIntegrationFetchMock(
               import: true,
               liveSync: true,
               manualSync: true,
+              registerWebhook: Boolean(options.githubWebhookReady),
               resolveConflicts: Boolean(options.githubConflict && !githubConflictResolved),
               setup: true,
               webhooks: true,
@@ -2137,7 +2167,25 @@ function createSettingsIntegrationFetchMock(
             setupConfigured: true,
             statusText: "Connected. 1 linked issue mapping ready for manual sync.",
             syncWorkerConfigured: true,
-            totalInstallations: 1
+            totalInstallations: 1,
+            webhookRegistrations: githubWebhookRegistered
+              ? [
+                  {
+                    attempt: 1,
+                    createdAt: "2026-07-04T00:00:00Z",
+                    events: ["issues"],
+                    id: "webhook-registration-1",
+                    installationId: "github-install",
+                    provider: "github",
+                    providerAccountName: "AkhilTrivediX",
+                    status: "active",
+                    targetUrl:
+                      "https://openroad.example.com/api/openroad/integrations/github/webhook?access_token=raw-secret",
+                    updatedAt: "2026-07-04T00:00:00Z",
+                    workspaceId: "acme"
+                  }
+                ]
+              : []
           },
           {
             accounts: options.jiraReady
@@ -2157,6 +2205,7 @@ function createSettingsIntegrationFetchMock(
               import: Boolean(options.jiraReady),
               liveSync: Boolean(options.jiraReady),
               manualSync: Boolean(options.jiraReady),
+              registerWebhook: false,
               resolveConflicts: false,
               setup: false,
               webhooks: false,
@@ -2177,7 +2226,8 @@ function createSettingsIntegrationFetchMock(
               ? "Connected. 1 linked issue mapping ready for manual sync."
               : "Optional. Server setup is not configured yet.",
             syncWorkerConfigured: Boolean(options.jiraReady),
-            totalInstallations: options.jiraReady ? 1 : 0
+            totalInstallations: options.jiraReady ? 1 : 0,
+            webhookRegistrations: []
           },
           {
             accounts: options.linearReady
@@ -2197,6 +2247,7 @@ function createSettingsIntegrationFetchMock(
               import: Boolean(options.linearReady),
               liveSync: Boolean(options.linearReady),
               manualSync: Boolean(options.linearReady),
+              registerWebhook: false,
               resolveConflicts: false,
               setup: false,
               webhooks: false,
@@ -2217,7 +2268,8 @@ function createSettingsIntegrationFetchMock(
               ? "Connected. 1 linked issue mapping ready for manual sync."
               : "Optional. Server setup is not configured yet.",
             syncWorkerConfigured: Boolean(options.linearReady),
-            totalInstallations: options.linearReady ? 1 : 0
+            totalInstallations: options.linearReady ? 1 : 0,
+            webhookRegistrations: []
           }
         ],
         status: "ready",
@@ -2227,6 +2279,29 @@ function createSettingsIntegrationFetchMock(
 
     if (url === "/api/openroad/workspaces/acme/integrations/github/sync/jobs") {
       return jsonResponse({ job: { id: "sync-job-1", status: "queued" }, status: "queued" }, 201);
+    }
+
+    if (url === "/api/openroad/workspaces/acme/integrations/github/webhooks/register" && method === "POST") {
+      githubWebhookRegistered = true;
+      return jsonResponse({
+        message: "Registered GitHub App webhook delivery for this OpenRoad deployment.",
+        provider: "github",
+        registration: {
+          attempt: 1,
+          createdAt: "2026-07-04T00:00:00Z",
+          events: ["issues"],
+          id: "webhook-registration-1",
+          installationId: "github-install",
+          provider: "github",
+          providerAccountName: "AkhilTrivediX",
+          status: "active",
+          targetUrl:
+            "https://openroad.example.com/api/openroad/integrations/github/webhook?access_token=raw-secret",
+          updatedAt: "2026-07-04T00:00:00Z",
+          workspaceId: "acme"
+        },
+        status: "active"
+      });
     }
 
     if (url === "/api/openroad/workspaces/acme/integrations/linear/sync/jobs") {
@@ -2344,7 +2419,7 @@ function createSettingsProviderSetupFetchMock() {
       return jsonResponse({
         integrationMetadata: {
           recovered: false,
-          schemaVersion: 3,
+          schemaVersion: 4,
           status: "ready"
         },
         providers: [

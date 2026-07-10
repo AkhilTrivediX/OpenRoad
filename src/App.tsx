@@ -133,6 +133,7 @@ import {
   disconnectProviderInstallation,
   listProviderCredentials,
   loadWorkspaceIntegrationStatus,
+  registerProviderWebhook,
   resolveProviderConflict,
   revokeProviderCredential,
   runProviderManualSync,
@@ -142,6 +143,7 @@ import {
   type IntegrationConflictSummary,
   type IntegrationCredentialMetadata,
   type IntegrationProviderStatus,
+  type IntegrationWebhookRegistrationStatus,
   type ProviderConflictResolution,
   type WorkspaceIntegrationStatus
 } from "./persistence/openroadIntegrations";
@@ -1239,6 +1241,34 @@ export function App() {
       if (result.status === "disconnected") {
         await refreshIntegrationWorkspaceState();
         await refreshProviderCredentials(provider.provider);
+      }
+    } finally {
+      setIntegrationSetupBusy(undefined);
+    }
+  }
+
+  async function registerProviderWebhookDelivery(provider: IntegrationProviderStatus) {
+    if (
+      integrationSetupBusy ||
+      (provider.provider !== "github" &&
+        provider.provider !== "jira" &&
+        provider.provider !== "linear")
+    ) {
+      return;
+    }
+
+    const installationId = provider.accounts[0]?.id;
+    if (!installationId || !provider.capabilities.registerWebhook) return;
+
+    setIntegrationSetupBusy(`${provider.provider}:webhook-register`);
+    setIntegrationActionMessage(`Registering ${provider.label} webhook delivery...`);
+
+    try {
+      const result = await registerProviderWebhook(provider.provider, workspace.id, installationId);
+      setIntegrationActionMessage(result.message);
+
+      if (result.status === "active" || result.status === "blocked" || result.status === "failed") {
+        await refreshIntegrationWorkspaceState();
       }
     } finally {
       setIntegrationSetupBusy(undefined);
@@ -5373,8 +5403,12 @@ export function App() {
                     const disconnectedAccount = provider.disconnectedAccounts[0];
                     const credentialInstallationId =
                       credentialDraft.installationId || activeAccount?.id || "";
-                    const isProviderBusy = Boolean(
-                      integrationSetupBusy?.startsWith(`${provider.provider}:`)
+                    const webhookRegistration = provider.webhookRegistrations[0];
+                    const canRegisterWebhook = Boolean(
+                      canManageProvider &&
+                        activeAccount &&
+                        provider.capabilities.registerWebhook &&
+                        !integrationSetupBusy
                     );
 
                     return (
@@ -5394,6 +5428,29 @@ export function App() {
                           <span className={`status-badge ${getProviderTone(provider)}`}>
                             {getProviderConnectionLabel(provider)}
                           </span>
+                          {webhookRegistration ? (
+                            <span
+                              className={`status-badge ${getWebhookRegistrationTone(
+                                webhookRegistration.status
+                              )}`}
+                            >
+                              Webhook {getWebhookRegistrationLabel(webhookRegistration.status)}
+                            </span>
+                          ) : null}
+                          {provider.capabilities.registerWebhook ? (
+                            <button
+                              aria-label={`${provider.label} register webhook delivery`}
+                              className="secondary-action compact provider-action"
+                              disabled={!canRegisterWebhook}
+                              onClick={() => void registerProviderWebhookDelivery(provider)}
+                              type="button"
+                            >
+                              <RadioTower aria-hidden="true" size={14} />
+                              {integrationSetupBusy === `${provider.provider}:webhook-register`
+                                ? "Registering..."
+                                : "Register webhook"}
+                            </button>
+                          ) : null}
                           <button
                             aria-label={`${provider.label} sync linked issues`}
                             className="secondary-action compact provider-action"
@@ -5924,6 +5981,18 @@ function getProviderTone(provider: IntegrationProviderStatus) {
   if (provider.connection === "attention") return "warning";
   if (provider.connection === "ready") return "info";
   return "neutral";
+}
+
+function getWebhookRegistrationTone(status: IntegrationWebhookRegistrationStatus) {
+  if (status === "active") return "success";
+  if (status === "blocked") return "warning";
+  return "neutral";
+}
+
+function getWebhookRegistrationLabel(status: IntegrationWebhookRegistrationStatus) {
+  if (status === "active") return "active";
+  if (status === "blocked") return "blocked";
+  return "failed";
 }
 
 function getProviderConnectionLabel(provider: IntegrationProviderStatus) {

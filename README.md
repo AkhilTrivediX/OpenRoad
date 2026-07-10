@@ -41,6 +41,7 @@ OpenRoad now has a working standalone product loop, production server foundation
 - Server-only GitHub App setup and installation verification foundation.
 - Live GitHub issue fetch through verified installations without persisted tokens.
 - Signed GitHub App, Linear, and Jira webhook ingestion for idempotent linked issue sync, plus safe GitHub installation disconnect handling.
+- Hosted GitHub App webhook registration from server-only config, with safe blocked registration records for Linear/Jira until unverifiable provider-created deliveries are supported.
 - Encrypted server-only provider credential storage primitives for GitHub, Linear, and Jira.
 - Provider-neutral background sync job foundation with private runner boundary and GitHub/Linear/Jira linked-issue workers.
 - Settings-managed provider installation bootstrap, credential metadata listing/storage/revoke, and provider-neutral disconnect for GitHub, Linear, and Jira.
@@ -53,7 +54,7 @@ OpenRoad now has a working standalone product loop, production server foundation
 - Release candidate manifest tooling for version, checksum, support-window, and dry-run publishing verification.
 - Docker Compose, backup/restore, and smoke-check commands for self-host operators.
 
-Current production limits are explicit: built-in SMTP delivery, provider-specific invitation/recovery templates, direct recovery provider delivery, OAuth login, email verification, managed database migrations, hosted release promotion, deeper observability, hosted organization administration, bulk member operations, direct provider notification delivery, hosted webhook registration automation, and real model-backed AI adapters with consent/prompt redaction/audit logs are planned next-stage work. Admin-token self-hosting has an httpOnly owner browser session path, invitation tokens can create scoped member browser sessions, existing users can sign in with account passwords, and password recovery can be routed through a sensitive JSONL handoff without exposing raw reset tokens in team metadata.
+Current production limits are explicit: built-in SMTP delivery, provider-specific invitation/recovery templates, direct recovery provider delivery, OAuth login, email verification, managed database migrations, hosted release promotion, deeper observability, hosted organization administration, bulk member operations, direct provider notification delivery, Linear/Jira hosted webhook creation, and real model-backed AI adapters with consent/prompt redaction/audit logs are planned next-stage work. Admin-token self-hosting has an httpOnly owner browser session path, invitation tokens can create scoped member browser sessions, existing users can sign in with account passwords, and password recovery can be routed through a sensitive JSONL handoff without exposing raw reset tokens in team metadata.
 
 Current docs:
 
@@ -71,6 +72,7 @@ Current docs:
 - [Background sync foundation](docs/BACKGROUND_SYNC_FOUNDATION.md)
 - [Provider write-back](docs/PROVIDER_WRITE_BACK.md)
 - [Provider conflict resolution](docs/PROVIDER_CONFLICT_RESOLUTION.md)
+- [Hosted webhook registration](docs/HOSTED_WEBHOOK_REGISTRATION.md)
 - [Requester notifications](docs/REQUESTER_NOTIFICATIONS.md)
 - [AI-assisted triage](docs/AI_ASSISTED_TRIAGE.md)
 - [Release operations](docs/RELEASE_OPERATIONS.md)
@@ -105,6 +107,7 @@ $env:OPENROAD_SESSION_FILE="C:\openroad\openroad-sessions.json"
 $env:OPENROAD_SESSION_TTL_MS="604800000"
 $env:OPENROAD_TEAM_FILE="C:\openroad\openroad-team.json"
 $env:OPENROAD_PUBLIC_APP_URL="http://127.0.0.1:4173/"
+$env:OPENROAD_WEBHOOK_PUBLIC_BASE_URL=""
 $env:OPENROAD_INVITATION_DELIVERY_MODE="disabled"
 $env:OPENROAD_INVITATION_DELIVERY_FILE="C:\openroad\openroad-invitation-deliveries.jsonl"
 $env:OPENROAD_INVITATION_DELIVERY_HTTP_URL=""
@@ -179,6 +182,7 @@ The server exposes:
 - `POST /api/openroad/workspaces/:workspaceId/integrations/:provider/credentials/:credentialId/revoke`
 - `POST /api/openroad/workspaces/:workspaceId/integrations/:provider/write-back`
 - `POST /api/openroad/workspaces/:workspaceId/integrations/:provider/conflicts/:mappingId/resolve`
+- `POST /api/openroad/workspaces/:workspaceId/integrations/:provider/webhooks/register`
 - `POST /api/openroad/workspaces/:workspaceId/integrations/:provider/sync/jobs`
 - `GET /api/openroad/workspaces/:workspaceId/invitations`
 - `POST /api/openroad/workspaces/:workspaceId/invitations`

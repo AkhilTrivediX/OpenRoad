@@ -2602,6 +2602,286 @@ describe("OpenRoad production server", () => {
     expect(integrationStateText).not.toContain("refreshToken");
   });
 
+  it("registers GitHub hosted webhooks with owner-only access and idempotent metadata", async () => {
+    const webhookUpdates: Parameters<GitHubAppClient["updateAppWebhookConfig"]>[0][] = [];
+    const { integrationStore, url } = await startTestServer({
+      auth: { adminToken: "secret", singleUserMode: false, trustProxyHeaders: true },
+      githubAppClient: {
+        ...fakeGitHubAppClient(),
+        async updateAppWebhookConfig(options) {
+          webhookUpdates.push(options);
+          return {
+            contentType: options.contentType,
+            insecureSsl: options.insecureSsl,
+            secretConfigured: Boolean(options.secret),
+            url: options.url
+          };
+        }
+      },
+      githubAppConfig: {
+        ...completeGitHubAppConfig(),
+        webhookSecret: "github-hook-secret",
+        webhookSecretConfigured: true
+      },
+      webhookRegistrationPublicBaseUrl: "https://openroad.example.com"
+    });
+
+    const installation = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/github/installations`, {
+      body: JSON.stringify({
+        installationId: "manual-github",
+        permissions: ["read:external", "read:openroad", "write:openroad", "webhook:receive"],
+        providerAccountId: "gh-org",
+        providerAccountName: "GitHub Org"
+      }),
+      headers: {
+        ...workspaceActorHeaders("acme", "Owner"),
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    const statusBefore = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/status`, {
+      headers: workspaceActorHeaders("acme", "Owner")
+    });
+    const viewer = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/github/webhooks/register`,
+      {
+        body: JSON.stringify({ installationId: "manual-github" }),
+        headers: {
+          ...workspaceActorHeaders("acme", "Viewer"),
+          "Content-Type": "application/json"
+        },
+        method: "POST"
+      }
+    );
+    const first = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/github/webhooks/register`,
+      {
+        body: JSON.stringify({ installationId: "manual-github" }),
+        headers: {
+          ...workspaceActorHeaders("acme", "Owner"),
+          "Content-Type": "application/json"
+        },
+        method: "POST"
+      }
+    );
+    const replay = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/github/webhooks/register`,
+      {
+        body: JSON.stringify({ installationId: "manual-github" }),
+        headers: {
+          ...workspaceActorHeaders("acme", "Owner"),
+          "Content-Type": "application/json"
+        },
+        method: "POST"
+      }
+    );
+    const statusAfter = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/status`, {
+      headers: workspaceActorHeaders("acme", "Owner")
+    });
+    const integrations = await integrationStore.load();
+    const githubStatusBefore = statusBefore.body.providers.find(
+      (provider: { provider: string }) => provider.provider === "github"
+    );
+    const githubStatusAfter = statusAfter.body.providers.find(
+      (provider: { provider: string }) => provider.provider === "github"
+    );
+    const responseText = JSON.stringify(first.body);
+
+    expect(installation.status).toBe(201);
+    expect(githubStatusBefore).toMatchObject({
+      capabilities: { registerWebhook: true },
+      webhookRegistrations: []
+    });
+    expect(viewer.status).toBe(403);
+    expect(first.status).toBe(200);
+    expect(first.body).toMatchObject({
+      provider: "github",
+      registration: {
+        attempt: 1,
+        installationId: "manual-github",
+        provider: "github",
+        status: "active",
+        targetUrl: "https://openroad.example.com/api/openroad/integrations/github/webhook"
+      },
+      status: "active"
+    });
+    expect(replay.status).toBe(200);
+    expect(webhookUpdates).toEqual([
+      {
+        contentType: "json",
+        insecureSsl: "0",
+        secret: "github-hook-secret",
+        url: "https://openroad.example.com/api/openroad/integrations/github/webhook"
+      },
+      {
+        contentType: "json",
+        insecureSsl: "0",
+        secret: "github-hook-secret",
+        url: "https://openroad.example.com/api/openroad/integrations/github/webhook"
+      }
+    ]);
+    expect(integrations.state.webhookRegistrations).toHaveLength(1);
+    expect(integrations.state.webhookRegistrations[0]).toMatchObject({
+      attempt: 2,
+      installationId: "manual-github",
+      provider: "github",
+      status: "active"
+    });
+    expect(integrations.state.syncEvents[0]).toMatchObject({
+      event: "webhook_registration",
+      installationId: "manual-github",
+      provider: "github",
+      result: "synced"
+    });
+    expect(githubStatusAfter).toMatchObject({
+      capabilities: { registerWebhook: true },
+      webhookRegistrations: [
+        expect.objectContaining({
+          attempt: 2,
+          providerAccountName: "GitHub Org",
+          status: "active"
+        })
+      ]
+    });
+    expect(responseText).not.toContain("github-hook-secret");
+  });
+
+  it("rejects GitHub webhook registration when deployment config is incomplete", async () => {
+    const webhookUpdates: Parameters<GitHubAppClient["updateAppWebhookConfig"]>[0][] = [];
+    const { integrationStore, url } = await startTestServer({
+      auth: { adminToken: "secret", singleUserMode: false, trustProxyHeaders: true },
+      githubAppClient: {
+        ...fakeGitHubAppClient(),
+        async updateAppWebhookConfig(options) {
+          webhookUpdates.push(options);
+          return {
+            contentType: options.contentType,
+            insecureSsl: options.insecureSsl,
+            secretConfigured: Boolean(options.secret),
+            url: options.url
+          };
+        }
+      },
+      githubAppConfig: {
+        ...completeGitHubAppConfig(),
+        webhookSecret: "github-hook-secret",
+        webhookSecretConfigured: true
+      },
+      webhookRegistrationPublicBaseUrl: ""
+    });
+
+    await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/github/installations`, {
+      body: JSON.stringify({
+        installationId: "manual-github",
+        permissions: ["read:external", "read:openroad", "write:openroad", "webhook:receive"],
+        providerAccountId: "gh-org",
+        providerAccountName: "GitHub Org"
+      }),
+      headers: {
+        ...workspaceActorHeaders("acme", "Owner"),
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    const response = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/github/webhooks/register`,
+      {
+        body: JSON.stringify({ installationId: "manual-github" }),
+        headers: {
+          ...workspaceActorHeaders("acme", "Owner"),
+          "Content-Type": "application/json"
+        },
+        method: "POST"
+      }
+    );
+    const integrations = await integrationStore.load();
+
+    expect(response.status).toBe(503);
+    expect(response.body.error.code).toBe("not_configured");
+    expect(webhookUpdates).toEqual([]);
+    expect(integrations.state.webhookRegistrations).toEqual([]);
+  });
+
+  it("blocks hosted webhook registration for providers OpenRoad cannot verify safely", async () => {
+    const webhookUpdates: Parameters<GitHubAppClient["updateAppWebhookConfig"]>[0][] = [];
+    const { integrationStore, url } = await startTestServer({
+      auth: { adminToken: "secret", singleUserMode: false, trustProxyHeaders: true },
+      githubAppClient: {
+        ...fakeGitHubAppClient(),
+        async updateAppWebhookConfig(options) {
+          webhookUpdates.push(options);
+          return {
+            contentType: options.contentType,
+            insecureSsl: options.insecureSsl,
+            secretConfigured: Boolean(options.secret),
+            url: options.url
+          };
+        }
+      },
+      webhookRegistrationPublicBaseUrl: "https://openroad.example.com"
+    });
+
+    const linearInstallation = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/linear/installations`,
+      {
+        body: JSON.stringify({
+          installationId: "manual-linear",
+          permissions: ["read:external", "read:openroad", "write:openroad", "webhook:receive"],
+          providerAccountId: "linear-team",
+          providerAccountName: "Linear Team"
+        }),
+        headers: {
+          ...workspaceActorHeaders("acme", "Owner"),
+          "Content-Type": "application/json"
+        },
+        method: "POST"
+      }
+    );
+    const response = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/linear/webhooks/register`,
+      {
+        body: JSON.stringify({ installationId: "manual-linear" }),
+        headers: {
+          ...workspaceActorHeaders("acme", "Owner"),
+          "Content-Type": "application/json"
+        },
+        method: "POST"
+      }
+    );
+    const status = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/status`, {
+      headers: workspaceActorHeaders("acme", "Owner")
+    });
+    const integrations = await integrationStore.load();
+    const linearStatus = status.body.providers.find(
+      (provider: { provider: string }) => provider.provider === "linear"
+    );
+
+    expect(linearInstallation.status).toBe(201);
+    expect(response.status).toBe(202);
+    expect(response.body).toMatchObject({
+      provider: "linear",
+      registration: {
+        installationId: "manual-linear",
+        provider: "linear",
+        status: "blocked",
+        targetUrl: "https://openroad.example.com/api/openroad/integrations/linear/webhook"
+      },
+      status: "blocked"
+    });
+    expect(webhookUpdates).toEqual([]);
+    expect(integrations.state.webhookRegistrations).toEqual([
+      expect.objectContaining({
+        installationId: "manual-linear",
+        provider: "linear",
+        status: "blocked"
+      })
+    ]);
+    expect(linearStatus).toMatchObject({
+      capabilities: { registerWebhook: false },
+      webhookRegistrations: [expect.objectContaining({ status: "blocked" })]
+    });
+  });
+
   it("disconnects Linear and Jira installations through the provider-neutral route", async () => {
     const { integrationStore, store, url } = await startTestServer({
       auth: { adminToken: "secret", singleUserMode: false, trustProxyHeaders: true },
@@ -6612,6 +6892,7 @@ async function startTestServer(
     portalRateLimiter?: PortalRateLimiter;
     sessionStore?: SessionStore;
     tokenVault?: IntegrationTokenVault;
+    webhookRegistrationPublicBaseUrl?: string;
   } = {}
 ) {
   const directory = await mkdtemp(join(tmpdir(), "openroad-server-"));
@@ -6655,7 +6936,8 @@ async function startTestServer(
     sessionStore,
     store,
     teamStore,
-    tokenVault: options.tokenVault
+    tokenVault: options.tokenVault,
+    webhookRegistrationPublicBaseUrl: options.webhookRegistrationPublicBaseUrl
   });
   const url = await listen(server);
   openServers.push(server);
@@ -7250,6 +7532,14 @@ function fakeGitHubAppClient(): GitHubAppClient {
         title: options.title,
         updatedAt: "2026-07-04T00:30:00Z",
         url: `https://github.com/${options.owner}/${options.repo}/issues/${options.issueNumber}`
+      };
+    },
+    async updateAppWebhookConfig(options) {
+      return {
+        contentType: options.contentType,
+        insecureSsl: options.insecureSsl,
+        secretConfigured: Boolean(options.secret),
+        url: options.url
       };
     }
   };

@@ -133,11 +133,27 @@ As a workspace owner, I can connect GitHub, Linear, or Jira from Settings using 
 ## Evidence
 
 - Branch: `feat/provider-connect-disconnect-ui`
-- Implementation commit SHA: Pending.
-- Date: Pending.
-- Commands run: Pending.
-- Browser/viewports tested: Pending.
-- Accessibility checks: Pending.
-- Reviewer notes: Pending.
+- Implementation commit SHA: `71694107b447cce9e682b0e048cb6fa6a05eac95`
+- Date: July 10, 2026.
+- Commands run:
+  - `pnpm vitest run server/access.test.ts server/http.test.ts` -> 102 tests passed.
+  - `pnpm vitest run src/persistence/openroadIntegrations.test.ts` -> 9 tests passed.
+  - `pnpm vitest run src/App.test.tsx src/persistence/openroadIntegrations.test.ts` -> 75 tests passed.
+  - `pnpm exec tsc --noEmit` -> passed.
+  - `node C:\Users\PC\.agents\skills\impeccable\scripts\detect.mjs --json src\App.tsx src\styles.css` -> no findings.
+  - `pnpm build` -> client and server builds passed.
+  - Built-server smoke on temporary production server -> manual Linear installation create, credential store/list/revoke, credential restorage, provider disconnect, status refresh, API redaction, and persisted raw-token redaction passed.
+  - Browser QA on built app at `http://127.0.0.1:4187/#settings` -> desktop and mobile provider drawer checks passed after overflow fix.
+  - `pnpm check` -> 398 tests passed plus client/server builds.
+  - `pnpm release:verify` -> release candidate dry-run manifest passed.
+- Browser/viewports tested:
+  - Desktop default in-app browser viewport: Linear provider management drawer expanded; no integration-area horizontal overflow after the form-grid fix.
+  - Mobile `390x844`: Linear provider management drawer expanded; no horizontal overflow, body/root remained fixed-height with internal app scrolling.
+- Accessibility checks:
+  - Provider forms use native labels and accessible names for installation id, account id, account name, credential installation id, access token, refresh token, label, scopes, and token type.
+  - Provider actions use icon plus text, visible focus remains intact, status badges include text, and advanced fields stay behind native disclosure.
+- Reviewer notes:
+  - Desktop visual QA initially found provider form overflow in the Settings column; fixed by reducing provider form grids to three ledger columns and rechecked desktop/mobile successfully.
+  - The Settings UI keeps integrations progressive: default rows show status, sync, disconnect, and one native management disclosure; credential/install fields remain collapsed until requested.
 - Known unresolved risks: Hosted OAuth callback exchange, Linear/Jira webhooks, provider write-back, conflict UI, full sync/audit timeline, distributed credential rotation policy, and hosted account administration remain later production slices.
-- Rollback notes: Pending.
+- Rollback notes: Revert this branch or restore the previous app build. If provider install/credential/disconnect mutations were used, restore a pre-mutation `OPENROAD_INTEGRATION_FILE` backup before downgrading or before recovering accidentally disconnected installations.

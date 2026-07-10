@@ -35,7 +35,7 @@ describe("openroad ops", () => {
     expect(manifest.files.data.schemaVersion).toBe(2);
     expect(manifest.files.integration.schemaVersion).toBe(3);
     expect(manifest.files.session.schemaVersion).toBe(2);
-    expect(manifest.files.team.schemaVersion).toBe(4);
+    expect(manifest.files.team.schemaVersion).toBe(5);
     await expect(readFile(join(result.backupDir, "openroad-state.json"), "utf8")).resolves.toContain("acme");
     await expect(readFile(join(result.backupDir, "openroad-integrations.json"), "utf8")).resolves.toContain(
       "installations"
@@ -355,10 +355,11 @@ async function writeOpenRoadPair(root, workspaceId = "acme") {
     JSON.stringify(
       {
         auditEvents: [],
+        accountRecoveryRequests: [],
         credentials: [],
         invitations: [],
         memberships: [],
-        schemaVersion: 4,
+        schemaVersion: 5,
         users: [{ createdAt: "seed", email: "owner@example.com", id: "owner", name: "Owner" }]
       },
       null,

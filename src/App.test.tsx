@@ -280,6 +280,74 @@ describe("OpenRoad workspace shell", () => {
     expect(document.body.textContent).not.toContain("oinv_link-secret");
   });
 
+  it("requests account recovery from the member sign-in surface", async () => {
+    vi.stubEnv("VITE_OPENROAD_SERVER_SYNC", "on");
+    const fetchMock = createMemberInvitationLoginFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "Forgot password?" }));
+    const recoveryForm = await screen.findByRole("form", { name: "Request account recovery" });
+    await user.type(within(recoveryForm).getByLabelText("Email"), "member@example.com");
+    await user.type(within(recoveryForm).getByLabelText("Workspace id"), "acme");
+    await user.click(within(recoveryForm).getByRole("button", { name: "Send reset instructions" }));
+
+    expect(
+      await within(recoveryForm).findByText(
+        "If this account can be recovered, OpenRoad will send password reset instructions."
+      )
+    ).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/openroad/account/recovery/request",
+      expect.objectContaining({
+        body: JSON.stringify({ email: "member@example.com", workspaceId: "acme" }),
+        credentials: "same-origin",
+        method: "POST"
+      })
+    );
+    expect(document.body.textContent).not.toContain("member@example.com");
+  });
+
+  it("prefills account recovery links from the URL and removes the token from history", async () => {
+    vi.stubEnv("VITE_OPENROAD_SERVER_SYNC", "on");
+    window.history.replaceState(null, "", "/?recovery=orec_link-secret&utm=email#reset");
+    const fetchMock = createMemberInvitationLoginFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    const resetForm = await screen.findByRole("form", { name: "Complete account recovery" });
+    const tokenInput = within(resetForm).getByLabelText("Recovery token");
+    expect(tokenInput).toHaveValue("orec_link-secret");
+    expect(window.location.search).toBe("?utm=email");
+    expect(window.location.hash).toBe("#reset");
+
+    await user.type(within(resetForm).getByLabelText("New password"), "new recovered password");
+    await user.click(within(resetForm).getByRole("button", { name: "Set new password" }));
+
+    expect(await screen.findByRole("combobox", { name: "Workspace" })).toHaveDisplayValue(
+      "Member Workspace"
+    );
+    const confirmCall = fetchMock.mock.calls.find(
+      ([url]) => url === "/api/openroad/account/recovery/confirm"
+    );
+    const confirmInit = confirmCall?.[1] as RequestInit;
+    expect(confirmInit).toMatchObject({
+      credentials: "same-origin",
+      method: "POST"
+    });
+    expect(JSON.parse(String(confirmInit.body))).toEqual({
+      password: "new recovered password",
+      token: "orec_link-secret"
+    });
+    expect(window.location.href).not.toContain("orec_link-secret");
+    expect(document.body.textContent).not.toContain("orec_link-secret");
+    expect(document.body.textContent).not.toContain("new recovered password");
+  });
+
   it("refreshes invitation access after owner sign-in", async () => {
     vi.stubEnv("VITE_OPENROAD_SERVER_SYNC", "on");
     const fetchMock = createOwnerLoginFetchMock({ loginSucceeds: true });
@@ -1770,6 +1838,19 @@ function createMemberInvitationLoginFetchMock() {
     }
 
     if (url === "/api/openroad/auth/password/login" && method === "POST") {
+      isMemberAuthenticated = true;
+      return jsonResponse({ authenticated: true, status: "authenticated" });
+    }
+
+    if (url === "/api/openroad/account/recovery/request" && method === "POST") {
+      return jsonResponse({
+        message:
+          "If this account can be recovered, OpenRoad will send password reset instructions.",
+        status: "requested"
+      });
+    }
+
+    if (url === "/api/openroad/account/recovery/confirm" && method === "POST") {
       isMemberAuthenticated = true;
       return jsonResponse({ authenticated: true, status: "authenticated" });
     }

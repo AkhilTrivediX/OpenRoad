@@ -365,7 +365,8 @@ function validateTeamState(value) {
     !Array.isArray(value.memberships) ||
     !Array.isArray(value.auditEvents) ||
     (value.schemaVersion >= 2 && !Array.isArray(value.invitations)) ||
-    (value.schemaVersion >= 4 && !Array.isArray(value.credentials))
+    (value.schemaVersion >= 4 && !Array.isArray(value.credentials)) ||
+    (value.schemaVersion >= 5 && !Array.isArray(value.accountRecoveryRequests))
   ) {
     throw new OpsError("invalid_team_state", "OpenRoad team metadata backup is missing required collections.");
   }

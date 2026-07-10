@@ -34,6 +34,7 @@ OpenRoad now has a working standalone product loop, production server foundation
 - Server-side JSONL invitation delivery handoff with invite links that prefill the member join flow.
 - Server-side HTTP invitation delivery provider mode for HTTPS mail/webhook providers.
 - Account password login for existing team users with server-side salted hashes and scoped member sessions.
+- Account recovery foundation with hashed reset tokens, generic public requests, JSONL operator handoff, and stale member-session revocation.
 - Owner-only member management for listing workspace members, changing roles, and deactivating memberships with affected member sessions revoked.
 - App-level crash recovery boundary with retry and local browser-data reset actions.
 - Provider-neutral integration mappings plus a payload-backed GitHub issue import/link API.
@@ -49,7 +50,7 @@ OpenRoad now has a working standalone product loop, production server foundation
 - Release candidate manifest tooling for version, checksum, support-window, and dry-run publishing verification.
 - Docker Compose, backup/restore, and smoke-check commands for self-host operators.
 
-Current production limits are explicit: built-in SMTP delivery, provider-specific invitation templates, OAuth login, email verification, account recovery, managed database migrations, hosted release promotion, deeper observability, hosted organization administration, bulk member operations, full integration connect/disconnect Settings flows, OAuth callback exchange, Linear/Jira webhooks, provider write-back, direct provider notification delivery, real model-backed AI adapters with consent/prompt redaction/audit logs, and conflict UI are planned next-stage work. Admin-token self-hosting has an httpOnly owner browser session path, invitation tokens can create scoped member browser sessions, and invited users can set a server-side account password without exposing the server admin token.
+Current production limits are explicit: built-in SMTP delivery, provider-specific invitation/recovery templates, direct recovery provider delivery, OAuth login, email verification, managed database migrations, hosted release promotion, deeper observability, hosted organization administration, bulk member operations, full integration connect/disconnect Settings flows, OAuth callback exchange, Linear/Jira webhooks, provider write-back, direct provider notification delivery, real model-backed AI adapters with consent/prompt redaction/audit logs, and conflict UI are planned next-stage work. Admin-token self-hosting has an httpOnly owner browser session path, invitation tokens can create scoped member browser sessions, existing users can sign in with account passwords, and password recovery can be routed through a sensitive JSONL handoff without exposing raw reset tokens in team metadata.
 
 Current docs:
 
@@ -104,6 +105,9 @@ $env:OPENROAD_INVITATION_DELIVERY_FILE="C:\openroad\openroad-invitation-deliveri
 $env:OPENROAD_INVITATION_DELIVERY_HTTP_URL=""
 $env:OPENROAD_INVITATION_DELIVERY_HTTP_BEARER_TOKEN=""
 $env:OPENROAD_INVITATION_DELIVERY_HTTP_TIMEOUT_MS="10000"
+$env:OPENROAD_ACCOUNT_RECOVERY_DELIVERY_MODE="disabled"
+$env:OPENROAD_ACCOUNT_RECOVERY_DELIVERY_FILE="C:\openroad\openroad-account-recovery-deliveries.jsonl"
+$env:OPENROAD_ACCOUNT_RECOVERY_PUBLIC_BASE_URL=""
 $env:PORT="4173"
 pnpm start
 ```
@@ -128,7 +132,7 @@ pnpm ops:smoke -- --base-url http://127.0.0.1:4173 --workspace-id acme --admin-t
 pnpm ops:backup -- --output-dir C:\openroad\backups
 ```
 
-Keep `.env.selfhost`, `/data`, backup directories, restore-safety directories, and any configured invitation/notification delivery JSONL files private. Backups contain OpenRoad product data, requester information, integration metadata, team metadata, invitation token hashes, memberships, and audit events. Invitation delivery JSONL files contain raw invitation accept tokens by design so an external delivery worker can send them. HTTP invitation provider bearer tokens are read from environment and must be treated as server secrets. HTTP provider mode requires `OPENROAD_PUBLIC_APP_URL` so invitation links are generated from an operator-owned origin instead of request headers.
+Keep `.env.selfhost`, `/data`, backup directories, restore-safety directories, and any configured invitation/recovery/notification delivery JSONL files private. Backups contain OpenRoad product data, requester information, integration metadata, team metadata, invitation token hashes, account recovery token hashes, memberships, and audit events. Invitation and account recovery delivery JSONL files contain raw accept/reset tokens by design so an external delivery worker can send them. HTTP invitation provider bearer tokens are read from environment and must be treated as server secrets. HTTP provider mode requires `OPENROAD_PUBLIC_APP_URL` so invitation links are generated from an operator-owned origin instead of request headers.
 
 The server exposes:
 
@@ -139,6 +143,8 @@ The server exposes:
 - `POST /api/openroad/auth/logout`
 - `POST /api/openroad/auth/password/login`
 - `POST /api/openroad/account/password`
+- `POST /api/openroad/account/recovery/request`
+- `POST /api/openroad/account/recovery/confirm`
 - `POST /api/openroad/invitations/accept`
 - `POST /api/openroad/invitations/session`
 - `GET /api/openroad/state`

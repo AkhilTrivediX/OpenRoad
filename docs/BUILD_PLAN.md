@@ -10,7 +10,7 @@ Each feature must also satisfy `docs/PRODUCTION_READINESS.md` before merging to 
 
 Current stage: Stage 2 Team Beta foundation in progress.
 
-The standalone loop now covers workspaces, requests, triage, internal work, roadmap planning, changelog drafts, public portal preview, local durability, production APIs, basic tenancy boundaries, file-backed team metadata, audit events, self-host operations, owner browser sessions and owner sign-in for admin-token deployments, team invitation/account-access APIs, scoped member browser sessions from invitation tokens, server-side JSONL invitation delivery handoff, server-side HTTP invitation provider delivery, durable account password login for existing team users, owner member-management UI/APIs with stale-session revocation, app-level crash recovery, a first app-module boundary, hardened public portal write APIs with persisted visitor vote identity, the provider-neutral integration adapter contract, a payload-backed GitHub issue import/link API, server-only GitHub App installation verification, live GitHub issue fetch through verified installations, signed GitHub webhooks, safe disconnect handling, encrypted server-only provider credential storage, provider-neutral background sync job foundations, GitHub/Linear/Jira workers for already-linked issue mappings, progressive Settings visibility with GitHub/Linear/Jira manual sync controls, Linear issue import/link, Jira issue import/link with explicit field mapping, requester notification preferences/outbox events plus JSONL delivery handoff, deterministic local assistant triage, and release candidate manifest tooling. The next production work should deepen account lifecycle controls and provider connect/disconnect, while Linear/Jira webhooks, provider write-back, conflict UI, and real model-backed AI adapters remain separate hardening slices.
+The standalone loop now covers workspaces, requests, triage, internal work, roadmap planning, changelog drafts, public portal preview, local durability, production APIs, basic tenancy boundaries, file-backed team metadata, audit events, self-host operations, owner browser sessions and owner sign-in for admin-token deployments, team invitation/account-access APIs, scoped member browser sessions from invitation tokens, server-side JSONL invitation delivery handoff, server-side HTTP invitation provider delivery, durable account password login for existing team users, JSONL account recovery handoff with reset-token confirmation, owner member-management UI/APIs with stale-session revocation, app-level crash recovery, a first app-module boundary, hardened public portal write APIs with persisted visitor vote identity, the provider-neutral integration adapter contract, a payload-backed GitHub issue import/link API, server-only GitHub App installation verification, live GitHub issue fetch through verified installations, signed GitHub webhooks, safe disconnect handling, encrypted server-only provider credential storage, provider-neutral background sync job foundations, GitHub/Linear/Jira workers for already-linked issue mappings, progressive Settings visibility with GitHub/Linear/Jira manual sync controls, Linear issue import/link, Jira issue import/link with explicit field mapping, requester notification preferences/outbox events plus JSONL delivery handoff, deterministic local assistant triage, and release candidate manifest tooling. The next production work should make provider connect/disconnect usable from Settings, while Linear/Jira webhooks, provider write-back, conflict UI, and real model-backed AI adapters remain separate hardening slices.
 
 ## Feature 1: Workspace Shell
 
@@ -342,6 +342,30 @@ Acceptance:
 - Account login produces the same workspace-member permission boundary as invitation sessions.
 - Multi-workspace users cannot accidentally sign into an ambiguous workspace.
 - Owner sessions, bearer-token scripts, invitation sessions, invitation delivery, public portal, integrations, ops, and release verification continue to pass.
+
+### Account Recovery Foundation
+
+Branch: `feat/account-recovery-foundation`
+
+Status: implemented and production-checked.
+
+Build:
+
+- Team metadata schema `5` with account recovery request records.
+- Hashed, expiring, single-use reset tokens for existing credentialed team users.
+- Public, enumeration-safe recovery request API.
+- Public recovery confirmation API that sets a new password, consumes the token, revokes stale member sessions, and creates a fresh scoped member session.
+- Server-side JSONL recovery delivery handoff using an operator-owned public base URL.
+- Compact sign-in recovery/reset UI that consumes `?recovery=` or `?reset=` links and clears browser history.
+- Backup/release schema notes and recovery rollback documentation.
+
+Acceptance:
+
+- Recovery delivery is disabled by default and standalone mode remains usable with no recovery delivery provider.
+- Eligible requests append one sensitive JSONL handoff record only in file mode; unknown, ineligible, ambiguous, or disabled requests return the same generic response without writing raw reset tokens.
+- Raw reset tokens are stored only as hashes in team metadata and are never returned by APIs, audit events, backups, or browser-visible state.
+- Recovery confirmation rejects expired, consumed, malformed, or wrong tokens and old passwords stop working after a successful reset.
+- Account password login, password change, invitation sessions, member management, owner sessions, public portal, integrations, ops, and release verification continue to pass.
 
 ### Member Management UI
 

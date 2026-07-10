@@ -115,11 +115,13 @@ import {
 } from "./app/openroadViewModel";
 import {
   acceptOpenRoadInvitationSession,
+  confirmOpenRoadAccountRecovery,
   isServerPersistenceEnabled,
   isOpenRoadServerAuthRequiredError,
   loginOpenRoadAccount,
   loginOpenRoadOwner,
   loadServerOpenRoadState,
+  requestOpenRoadAccountRecovery,
   saveServerOpenRoadState,
   setOpenRoadAccountPassword,
   type ServerOpenRoadScope
@@ -202,7 +204,9 @@ export function App() {
   const [memberLoginDraft, setMemberLoginDraft] = useState({ name: "", token: "" });
   const [memberLoginState, setMemberLoginState] = useState<"idle" | "submitting">("idle");
   const [memberLoginMessage, setMemberLoginMessage] = useState("");
-  const [memberAuthMode, setMemberAuthMode] = useState<"account" | "invite">("account");
+  const [memberAuthMode, setMemberAuthMode] = useState<
+    "account" | "invite" | "recovery" | "reset"
+  >("account");
   const [accountLoginDraft, setAccountLoginDraft] = useState({
     email: "",
     password: "",
@@ -210,6 +214,19 @@ export function App() {
   });
   const [accountLoginState, setAccountLoginState] = useState<"idle" | "submitting">("idle");
   const [accountLoginMessage, setAccountLoginMessage] = useState("");
+  const [accountRecoveryDraft, setAccountRecoveryDraft] = useState({
+    email: "",
+    workspaceId: ""
+  });
+  const [accountRecoveryState, setAccountRecoveryState] = useState<"idle" | "submitting">("idle");
+  const [accountRecoveryMessage, setAccountRecoveryMessage] = useState("");
+  const [accountResetDraft, setAccountResetDraft] = useState({
+    password: "",
+    token: "",
+    workspaceId: ""
+  });
+  const [accountResetState, setAccountResetState] = useState<"idle" | "submitting">("idle");
+  const [accountResetMessage, setAccountResetMessage] = useState("");
   const [accountPasswordDraft, setAccountPasswordDraft] = useState({
     currentPassword: "",
     password: ""
@@ -297,17 +314,27 @@ export function App() {
 
   useEffect(() => {
     const invitationToken = consumeInvitationTokenFromUrl();
-    if (!invitationToken) return;
+    const recoveryToken = consumeAccountRecoveryTokenFromUrl();
 
-    setMemberLoginDraft((draft) => ({
-      ...draft,
-      token: draft.token || invitationToken
-    }));
-    setAcceptTokenDraft((draft) => ({
-      ...draft,
-      token: draft.token || invitationToken
-    }));
-    setMemberAuthMode("invite");
+    if (invitationToken) {
+      setMemberLoginDraft((draft) => ({
+        ...draft,
+        token: draft.token || invitationToken
+      }));
+      setAcceptTokenDraft((draft) => ({
+        ...draft,
+        token: draft.token || invitationToken
+      }));
+      setMemberAuthMode("invite");
+    }
+
+    if (recoveryToken) {
+      setAccountResetDraft((draft) => ({
+        ...draft,
+        token: draft.token || recoveryToken
+      }));
+      setMemberAuthMode("reset");
+    }
   }, []);
 
   function applyServerLoadResult(result: Awaited<ReturnType<typeof loadServerOpenRoadState>>) {
@@ -325,6 +352,8 @@ export function App() {
     setOwnerLoginMessage("");
     setMemberLoginMessage("");
     setAccountLoginMessage("");
+    setAccountRecoveryMessage("");
+    setAccountResetMessage("");
     setPersistenceMessage(
       result.serverScope === "workspace-member"
         ? "Member workspace connected."
@@ -411,6 +440,67 @@ export function App() {
       );
     } finally {
       setAccountLoginState("idle");
+    }
+  }
+
+  async function requestAccountRecovery(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    const email = accountRecoveryDraft.email.trim();
+    const workspaceId = accountRecoveryDraft.workspaceId.trim();
+    if (!email || accountRecoveryState === "submitting") return;
+
+    setAccountRecoveryState("submitting");
+    setAccountRecoveryMessage("");
+    setAccountLoginMessage("");
+    setMemberLoginMessage("");
+    setOwnerLoginMessage("");
+
+    try {
+      const result = await requestOpenRoadAccountRecovery(email, workspaceId);
+      setAccountRecoveryDraft({ email: "", workspaceId: "" });
+      setAccountRecoveryMessage(
+        result.message || "If this account can be recovered, OpenRoad will send password reset instructions."
+      );
+    } catch (error) {
+      setAccountRecoveryMessage(
+        error instanceof Error
+          ? error.message
+          : "OpenRoad could not request account recovery."
+      );
+    } finally {
+      setAccountRecoveryState("idle");
+    }
+  }
+
+  async function confirmAccountRecovery(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    const token = accountResetDraft.token.trim();
+    const password = accountResetDraft.password;
+    const workspaceId = accountResetDraft.workspaceId.trim();
+    if (!token || !password || accountResetState === "submitting") return;
+
+    setAccountResetState("submitting");
+    setAccountResetMessage("");
+    setAccountRecoveryMessage("");
+    setAccountLoginMessage("");
+    setMemberLoginMessage("");
+    setOwnerLoginMessage("");
+
+    try {
+      await confirmOpenRoadAccountRecovery(token, password, workspaceId);
+      const result = await loadServerOpenRoadState();
+      applyServerLoadResult(result);
+      setAccountResetDraft({ password: "", token: "", workspaceId: "" });
+    } catch (error) {
+      setAccountResetMessage(
+        error instanceof Error
+          ? error.message
+          : "OpenRoad could not complete account recovery."
+      );
+    } finally {
+      setAccountResetState("idle");
     }
   }
 
@@ -1740,6 +1830,32 @@ export function App() {
     const isSigningIn = ownerLoginState === "submitting";
     const isJoiningWorkspace = memberLoginState === "submitting";
     const isAccountSigningIn = accountLoginState === "submitting";
+    const isRequestingRecovery = accountRecoveryState === "submitting";
+    const isCompletingRecovery = accountResetState === "submitting";
+    const memberAuthFormLabel =
+      memberAuthMode === "account"
+        ? "Sign in with account"
+        : memberAuthMode === "invite"
+        ? "Join invited workspace"
+        : memberAuthMode === "recovery"
+        ? "Request account recovery"
+        : "Complete account recovery";
+    const memberAuthTitle =
+      memberAuthMode === "account"
+        ? "Sign in as a member"
+        : memberAuthMode === "invite"
+        ? "Join as a member"
+        : memberAuthMode === "recovery"
+        ? "Recover account access"
+        : "Set a new password";
+    const submitMemberAuthForm =
+      memberAuthMode === "account"
+        ? signInWithAccount
+        : memberAuthMode === "invite"
+        ? signInWithInvitation
+        : memberAuthMode === "recovery"
+        ? requestAccountRecovery
+        : confirmAccountRecovery;
 
     return (
       <main className="app-shell owner-auth-shell" aria-label="OpenRoad owner sign-in">
@@ -1808,9 +1924,9 @@ export function App() {
           </form>
 
           <form
-            aria-label={memberAuthMode === "account" ? "Sign in with account" : "Join invited workspace"}
+            aria-label={memberAuthFormLabel}
             className="owner-auth-panel member-auth-panel"
-            onSubmit={memberAuthMode === "account" ? signInWithAccount : signInWithInvitation}
+            onSubmit={submitMemberAuthForm}
           >
             <div className="owner-auth-heading">
               <span className="owner-auth-icon" aria-hidden="true">
@@ -1818,7 +1934,7 @@ export function App() {
               </span>
               <div>
                 <span className="section-label">Member access</span>
-                <h2>{memberAuthMode === "account" ? "Sign in as a member" : "Join as a member"}</h2>
+                <h2>{memberAuthTitle}</h2>
               </div>
             </div>
 
@@ -1826,7 +1942,11 @@ export function App() {
               <button
                 aria-pressed={memberAuthMode === "account"}
                 className={memberAuthMode === "account" ? "active" : ""}
-                onClick={() => setMemberAuthMode("account")}
+                onClick={() => {
+                  setMemberAuthMode("account");
+                  setAccountRecoveryMessage("");
+                  setAccountResetMessage("");
+                }}
                 type="button"
               >
                 Account
@@ -1834,7 +1954,11 @@ export function App() {
               <button
                 aria-pressed={memberAuthMode === "invite"}
                 className={memberAuthMode === "invite" ? "active" : ""}
-                onClick={() => setMemberAuthMode("invite")}
+                onClick={() => {
+                  setMemberAuthMode("invite");
+                  setAccountRecoveryMessage("");
+                  setAccountResetMessage("");
+                }}
                 type="button"
               >
                 Invite
@@ -1903,6 +2027,171 @@ export function App() {
                   >
                     <KeyRound aria-hidden="true" size={15} />
                     {isAccountSigningIn ? "Signing in..." : "Sign in"}
+                  </button>
+                  <button
+                    className="ghost-action"
+                    onClick={() => {
+                      setMemberAuthMode("recovery");
+                      setAccountRecoveryDraft((draft) => ({
+                        ...draft,
+                        email: draft.email || accountLoginDraft.email,
+                        workspaceId: draft.workspaceId || accountLoginDraft.workspaceId
+                      }));
+                      setAccountLoginMessage("");
+                    }}
+                    type="button"
+                  >
+                    Forgot password?
+                  </button>
+                </div>
+              </>
+            ) : memberAuthMode === "recovery" ? (
+              <>
+                <label className="owner-token-field">
+                  <span>Email</span>
+                  <input
+                    autoComplete="email"
+                    disabled={isRequestingRecovery}
+                    onChange={(event) =>
+                      setAccountRecoveryDraft((draft) => ({
+                        ...draft,
+                        email: event.target.value
+                      }))
+                    }
+                    type="email"
+                    value={accountRecoveryDraft.email}
+                  />
+                </label>
+
+                <label className="owner-token-field">
+                  <span>Workspace id</span>
+                  <input
+                    autoComplete="off"
+                    disabled={isRequestingRecovery}
+                    onChange={(event) =>
+                      setAccountRecoveryDraft((draft) => ({
+                        ...draft,
+                        workspaceId: event.target.value
+                      }))
+                    }
+                    placeholder="Optional"
+                    value={accountRecoveryDraft.workspaceId}
+                  />
+                </label>
+
+                {accountRecoveryMessage ? (
+                  <p className="owner-auth-message" role="status">
+                    {accountRecoveryMessage}
+                  </p>
+                ) : null}
+
+                <div className="owner-auth-actions">
+                  <button
+                    className="secondary-action"
+                    disabled={!accountRecoveryDraft.email.trim() || isRequestingRecovery}
+                    type="submit"
+                  >
+                    <KeyRound aria-hidden="true" size={15} />
+                    {isRequestingRecovery ? "Sending..." : "Send reset instructions"}
+                  </button>
+                  <button
+                    className="ghost-action"
+                    onClick={() => setMemberAuthMode("reset")}
+                    type="button"
+                  >
+                    I have a reset token
+                  </button>
+                  <button
+                    className="ghost-action"
+                    onClick={() => setMemberAuthMode("account")}
+                    type="button"
+                  >
+                    Back to sign in
+                  </button>
+                </div>
+              </>
+            ) : memberAuthMode === "reset" ? (
+              <>
+                <label className="owner-token-field">
+                  <span>Recovery token</span>
+                  <input
+                    autoComplete="one-time-code"
+                    disabled={isCompletingRecovery}
+                    onChange={(event) =>
+                      setAccountResetDraft((draft) => ({
+                        ...draft,
+                        token: event.target.value
+                      }))
+                    }
+                    type="password"
+                    value={accountResetDraft.token}
+                  />
+                </label>
+
+                <label className="owner-token-field">
+                  <span>New password</span>
+                  <input
+                    autoComplete="new-password"
+                    disabled={isCompletingRecovery}
+                    onChange={(event) =>
+                      setAccountResetDraft((draft) => ({
+                        ...draft,
+                        password: event.target.value
+                      }))
+                    }
+                    type="password"
+                    value={accountResetDraft.password}
+                  />
+                </label>
+
+                <label className="owner-token-field">
+                  <span>Workspace id</span>
+                  <input
+                    autoComplete="off"
+                    disabled={isCompletingRecovery}
+                    onChange={(event) =>
+                      setAccountResetDraft((draft) => ({
+                        ...draft,
+                        workspaceId: event.target.value
+                      }))
+                    }
+                    placeholder="Optional"
+                    value={accountResetDraft.workspaceId}
+                  />
+                </label>
+
+                {accountResetMessage ? (
+                  <p className="owner-auth-message" role="alert">
+                    {accountResetMessage}
+                  </p>
+                ) : null}
+
+                <div className="owner-auth-actions">
+                  <button
+                    className="secondary-action"
+                    disabled={
+                      !accountResetDraft.token.trim() ||
+                      accountResetDraft.password.length < 12 ||
+                      isCompletingRecovery
+                    }
+                    type="submit"
+                  >
+                    <KeyRound aria-hidden="true" size={15} />
+                    {isCompletingRecovery ? "Updating..." : "Set new password"}
+                  </button>
+                  <button
+                    className="ghost-action"
+                    onClick={() => setMemberAuthMode("recovery")}
+                    type="button"
+                  >
+                    Need instructions?
+                  </button>
+                  <button
+                    className="ghost-action"
+                    onClick={() => setMemberAuthMode("account")}
+                    type="button"
+                  >
+                    Back to sign in
                   </button>
                 </div>
               </>
@@ -4831,6 +5120,20 @@ function consumeInvitationTokenFromUrl() {
 
   url.searchParams.delete("invite");
   url.searchParams.delete("invitation");
+  window.history.replaceState(null, document.title, `${url.pathname}${url.search}${url.hash}`);
+  return normalizedToken;
+}
+
+function consumeAccountRecoveryTokenFromUrl() {
+  if (typeof window === "undefined") return undefined;
+
+  const url = new URL(window.location.href);
+  const token = url.searchParams.get("recovery") ?? url.searchParams.get("reset");
+  const normalizedToken = token?.trim().slice(0, 512);
+  if (!normalizedToken) return undefined;
+
+  url.searchParams.delete("recovery");
+  url.searchParams.delete("reset");
   window.history.replaceState(null, document.title, `${url.pathname}${url.search}${url.hash}`);
   return normalizedToken;
 }

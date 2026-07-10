@@ -132,6 +132,18 @@ export const routeProtections: RouteProtection[] = [
   },
   {
     methods: ["POST"],
+    path: "/api/openroad/account/recovery/request",
+    permission: "contract:read",
+    scope: "public"
+  },
+  {
+    methods: ["POST"],
+    path: "/api/openroad/account/recovery/confirm",
+    permission: "contract:read",
+    scope: "public"
+  },
+  {
+    methods: ["POST"],
     path: "/api/openroad/invitations/accept",
     permission: "contract:read",
     scope: "public"

@@ -594,7 +594,8 @@ h3 {
 }
 
 .primary-action,
-.secondary-action {
+.secondary-action,
+.ghost-action {
   align-items: center;
   display: inline-flex;
   font-family: var(--label-font);
@@ -622,6 +623,18 @@ h3 {
   border: 1px solid var(--line);
   color: var(--ink);
   padding: 0 12px;
+}
+
+.ghost-action {
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  min-height: 34px;
+  padding: 0 4px;
+}
+
+.ghost-action:hover {
+  color: var(--ink);
 }
 
 .secondary-action:hover,

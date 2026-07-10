@@ -221,7 +221,7 @@ $env:OPENROAD_TOKEN_ENCRYPTION_KEY="replace-with-at-least-32-random-characters"
 $env:OPENROAD_TOKEN_ENCRYPTION_KEY_ID="primary"
 ```
 
-Credential APIs require `integration:manage` and return only metadata. They never return access tokens, refresh tokens, ciphertext, IVs, tags, or the encryption key. Manual GitHub disconnects and signed GitHub installation deletion webhooks revoke matching credentials.
+Credential and provider installation management APIs require `integration:manage` and return only metadata. Settings can manually bootstrap GitHub, Linear, or Jira installation metadata, store encrypted provider credentials, list/revoke credential metadata, and disconnect provider installations from the same-origin app. Credential responses never return access tokens, refresh tokens, ciphertext, IVs, tags, or the encryption key. Provider disconnect revokes matching active credentials, disconnects matching mappings, and preserves OpenRoad product data. Signed GitHub installation deletion webhooks keep the same credential-revocation behavior.
 
 Changing the encryption key without re-encrypting credentials will make existing encrypted payloads unreadable to future sync workers. This release does not include external KMS or re-encryption tooling.
 

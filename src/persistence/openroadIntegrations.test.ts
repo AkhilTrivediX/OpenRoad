@@ -1,9 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  createProviderInstallation,
+  disconnectProviderInstallation,
+  listProviderCredentials,
+  listProviderInstallations,
   loadWorkspaceIntegrationStatus,
+  revokeProviderCredential,
   runGitHubManualSync,
-  runProviderManualSync
+  runProviderManualSync,
+  storeProviderCredential,
+  verifyGitHubAppInstallation
 } from "./openroadIntegrations";
 
 describe("OpenRoad integration status client", () => {
@@ -35,6 +42,14 @@ describe("OpenRoad integration status client", () => {
               webhooks: true
             },
             connection: "connected",
+            disconnectedAccounts: [
+              {
+                createdAt: "2026-07-03T00:00:00Z",
+                id: "old-install",
+                providerAccountName: "Old token-secret",
+                status: "disconnected"
+              }
+            ],
             encryptedSecret: "server-must-not-send-this",
             label: "GitHub",
             linkedIssueMappings: 2,
@@ -78,6 +93,11 @@ describe("OpenRoad integration status client", () => {
       linkedIssueMappings: 2,
       provider: "github"
     });
+    expect(status.providers[0]?.disconnectedAccounts[0]?.providerAccountName).toBe("Old [redacted]");
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "/api/openroad/workspaces/acme/integrations/status",
+      expect.objectContaining({ credentials: "same-origin" })
+    );
     expect(serialized).not.toContain("raw-token-should-not-render");
     expect(serialized).not.toContain("raw-secret");
     expect(serialized).not.toContain("encryptedSecret");
@@ -250,6 +270,252 @@ describe("OpenRoad integration status client", () => {
       message: "A GitHub sync job is already queued. The private runner is unavailable in this session.",
       status: "deduped"
     });
+  });
+
+  it("manages provider setup metadata with same-origin credentials and redacted results", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          installations: [
+            {
+              createdAt: "2026-07-04T00:00:00Z",
+              id: "linear-install",
+              permissions: ["read:external", "read:openroad", "write:openroad"],
+              provider: "linear",
+              providerAccountId: "linear-team",
+              providerAccountName: "Linear Team",
+              status: "active",
+              workspaceId: "acme"
+            }
+          ],
+          status: "listed"
+        })
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            installation: {
+              createdAt: "2026-07-04T00:00:00Z",
+              id: "manual-linear",
+              permissions: ["read:external", "read:openroad", "write:openroad"],
+              provider: "linear",
+              providerAccountId: "manual-team",
+              providerAccountName: "Manual Linear",
+              status: "active",
+              workspaceId: "acme"
+            },
+            status: "connected"
+          },
+          201
+        )
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          credentials: [
+            {
+              createdAt: "2026-07-04T00:00:00Z",
+              encryptedSecret: "ciphertext-must-not-enter-client-state",
+              id: "credential-linear",
+              installationId: "manual-linear",
+              label: "Production token",
+              permissions: ["read:external"],
+              provider: "linear",
+              providerScopes: ["read:issues"],
+              secretTypes: ["access-token"],
+              status: "active",
+              updatedAt: "2026-07-04T00:00:00Z",
+              workspaceId: "acme"
+            }
+          ],
+          status: "listed"
+        })
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            credential: {
+              createdAt: "2026-07-04T00:00:00Z",
+              encryptedSecret: "ciphertext-must-not-enter-client-state",
+              id: "credential-linear",
+              installationId: "manual-linear",
+              label: "Production token",
+              permissions: ["read:external"],
+              provider: "linear",
+              providerScopes: ["read:issues"],
+              secretTypes: ["access-token", "refresh-token"],
+              status: "active",
+              updatedAt: "2026-07-04T00:00:00Z",
+              workspaceId: "acme"
+            },
+            status: "stored"
+          },
+          201
+        )
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          changed: true,
+          installation: {
+            createdAt: "2026-07-04T00:00:00Z",
+            id: "manual-linear",
+            permissions: ["read:external"],
+            provider: "linear",
+            providerAccountId: "manual-team",
+            providerAccountName: "Manual Linear",
+            status: "disconnected",
+            workspaceId: "acme"
+          },
+          revokedCredentials: 1,
+          status: "disconnected"
+        })
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          credential: {
+            createdAt: "2026-07-04T00:00:00Z",
+            id: "credential-linear",
+            installationId: "manual-linear",
+            permissions: ["read:external"],
+            provider: "linear",
+            providerScopes: ["read:issues"],
+            secretTypes: ["access-token"],
+            status: "revoked",
+            updatedAt: "2026-07-04T00:00:00Z",
+            workspaceId: "acme"
+          },
+          status: "revoked"
+        })
+      );
+
+    const listed = await listProviderInstallations("linear", "acme", fetchImpl as typeof fetch);
+    const created = await createProviderInstallation(
+      "linear",
+      "acme",
+      {
+        installationId: "manual-linear",
+        providerAccountId: "manual-team",
+        providerAccountName: "Manual Linear"
+      },
+      fetchImpl as typeof fetch
+    );
+    const credentials = await listProviderCredentials("linear", "acme", fetchImpl as typeof fetch);
+    const stored = await storeProviderCredential(
+      "linear",
+      "acme",
+      {
+        accessToken: "linear-access-secret",
+        installationId: "manual-linear",
+        label: "Production token",
+        providerScopes: ["read:issues"],
+        refreshToken: "linear-refresh-secret"
+      },
+      fetchImpl as typeof fetch
+    );
+    const disconnected = await disconnectProviderInstallation(
+      "linear",
+      "acme",
+      "manual-linear",
+      fetchImpl as typeof fetch
+    );
+    const revoked = await revokeProviderCredential(
+      "linear",
+      "acme",
+      "credential-linear",
+      fetchImpl as typeof fetch
+    );
+    const serialized = JSON.stringify([listed, created, credentials, stored, disconnected, revoked]);
+
+    expect(listed.installations).toHaveLength(1);
+    expect(created.installation).toMatchObject({ id: "manual-linear", provider: "linear" });
+    expect(credentials.credentials?.[0]).toMatchObject({ id: "credential-linear", status: "active" });
+    expect(stored.credential).toMatchObject({
+      id: "credential-linear",
+      secretTypes: ["access-token", "refresh-token"]
+    });
+    expect(disconnected).toMatchObject({
+      changed: true,
+      revokedCredentials: 1,
+      status: "disconnected"
+    });
+    expect(revoked.credential).toMatchObject({ id: "credential-linear", status: "revoked" });
+    expect(fetchImpl).toHaveBeenNthCalledWith(
+      1,
+      "/api/openroad/workspaces/acme/integrations/linear/installations",
+      expect.objectContaining({ credentials: "same-origin" })
+    );
+    expect(fetchImpl).toHaveBeenNthCalledWith(
+      4,
+      "/api/openroad/workspaces/acme/integrations/linear/credentials",
+      expect.objectContaining({
+        body: JSON.stringify({
+          accessToken: "linear-access-secret",
+          installationId: "manual-linear",
+          label: "Production token",
+          providerScopes: ["read:issues"],
+          refreshToken: "linear-refresh-secret"
+        }),
+        credentials: "same-origin",
+        method: "POST"
+      })
+    );
+    expect(serialized).not.toContain("linear-access-secret");
+    expect(serialized).not.toContain("linear-refresh-secret");
+    expect(serialized).not.toContain("ciphertext");
+  });
+
+  it("verifies GitHub App installations and redacts action errors", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          installation: {
+            createdAt: "2026-07-04T00:00:00Z",
+            id: "github-install",
+            permissions: ["read:external", "read:openroad", "write:openroad"],
+            provider: "github",
+            providerAccountId: "123",
+            providerAccountName: "AkhilTrivediX",
+            status: "active",
+            workspaceId: "acme"
+          },
+          status: "verified"
+        })
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            error: {
+              code: "forbidden",
+              message: "Forbidden with access_token=raw-secret"
+            }
+          },
+          403
+        )
+      );
+
+    const verified = await verifyGitHubAppInstallation("acme", "98765", fetchImpl as typeof fetch);
+    const forbidden = await verifyGitHubAppInstallation("acme", "98765", fetchImpl as typeof fetch);
+
+    expect(verified).toMatchObject({
+      installation: { id: "github-install", provider: "github" },
+      status: "verified"
+    });
+    expect(forbidden).toEqual({
+      message: "This integration action requires workspace owner access.",
+      provider: "github",
+      status: "forbidden"
+    });
+    expect(fetchImpl).toHaveBeenNthCalledWith(
+      1,
+      "/api/openroad/workspaces/acme/integrations/github/app/installations/verify",
+      expect.objectContaining({
+        body: JSON.stringify({ installationId: "98765" }),
+        credentials: "same-origin",
+        method: "POST"
+      })
+    );
+    expect(JSON.stringify(forbidden)).not.toContain("raw-secret");
   });
 });
 

@@ -10,7 +10,7 @@ Each feature must also satisfy `docs/PRODUCTION_READINESS.md` before merging to 
 
 Current stage: Stage 2 Team Beta foundation in progress.
 
-The standalone loop now covers workspaces, requests, triage, internal work, roadmap planning, changelog drafts, public portal preview, local durability, production APIs, basic tenancy boundaries, file-backed team metadata, audit events, self-host operations, owner browser sessions and owner sign-in for admin-token deployments, team invitation/account-access APIs, scoped member browser sessions from invitation tokens, server-side JSONL invitation delivery handoff, server-side HTTP invitation provider delivery, durable account password login for existing team users, JSONL account recovery handoff with reset-token confirmation, owner member-management UI/APIs with stale-session revocation, app-level crash recovery, a first app-module boundary, hardened public portal write APIs with persisted visitor vote identity, the provider-neutral integration adapter contract, a payload-backed GitHub issue import/link API, server-only GitHub App installation verification, live GitHub issue fetch through verified installations, signed GitHub webhooks, safe disconnect handling, encrypted server-only provider credential storage, provider-neutral background sync job foundations, GitHub/Linear/Jira workers for already-linked issue mappings, progressive Settings visibility with GitHub/Linear/Jira manual sync controls, Linear issue import/link, Jira issue import/link with explicit field mapping, requester notification preferences/outbox events plus JSONL delivery handoff, deterministic local assistant triage, and release candidate manifest tooling. The next production work should make provider connect/disconnect usable from Settings, while Linear/Jira webhooks, provider write-back, conflict UI, and real model-backed AI adapters remain separate hardening slices.
+The standalone loop now covers workspaces, requests, triage, internal work, roadmap planning, changelog drafts, public portal preview, local durability, production APIs, basic tenancy boundaries, file-backed team metadata, audit events, self-host operations, owner browser sessions and owner sign-in for admin-token deployments, team invitation/account-access APIs, scoped member browser sessions from invitation tokens, server-side JSONL invitation delivery handoff, server-side HTTP invitation provider delivery, durable account password login for existing team users, JSONL account recovery handoff with reset-token confirmation, owner member-management UI/APIs with stale-session revocation, app-level crash recovery, a first app-module boundary, hardened public portal write APIs with persisted visitor vote identity, the provider-neutral integration adapter contract, a payload-backed GitHub issue import/link API, server-only GitHub App installation verification, live GitHub issue fetch through verified installations, signed GitHub webhooks, safe disconnect handling, encrypted server-only provider credential storage, provider-neutral background sync job foundations, GitHub/Linear/Jira workers for already-linked issue mappings, progressive Settings visibility with GitHub/Linear/Jira connect, credential, disconnect, and manual sync controls, Linear issue import/link, Jira issue import/link with explicit field mapping, requester notification preferences/outbox events plus JSONL delivery handoff, deterministic local assistant triage, and release candidate manifest tooling. The next production work should target Linear/Jira webhooks, provider write-back, conflict UI, hosted OAuth callback exchange, and real model-backed AI adapters as separate hardening slices.
 
 ## Feature 1: Workspace Shell
 
@@ -815,6 +815,28 @@ Acceptance:
 - Private runner processes Jira jobs when encrypted credentials are ready and stays `503 not_configured` when no provider worker is available.
 - Linked Jira-backed requests refresh without persisting or returning Atlassian access tokens.
 - GitHub and Linear worker behavior, standalone mode, backup/restore, and release checks continue to pass.
+
+## Feature 11G: Provider Connect/Disconnect UI
+
+Branch: `feat/provider-connect-disconnect-ui`
+
+Status: implemented and production-checked.
+
+Build:
+
+- Provider-neutral manual installation create/list/disconnect APIs for GitHub, Linear, and Jira.
+- Settings-managed GitHub App verification, manual provider connection bootstrap, credential metadata list/store/revoke, provider disconnect, and status refresh.
+- Generic browser integration helpers that use same-origin credentials and parse only sanitized installation/credential metadata.
+- Integration status summaries that keep active accounts separate from bounded disconnected account metadata.
+- Compact Dark Map Room provider management drawer with advanced fields behind native disclosure.
+
+Acceptance:
+
+- Standalone mode remains useful with no provider connection.
+- Workspace owners can create manual GitHub/Linear/Jira installation metadata without API scripting.
+- Provider credentials are submitted only to the same-origin server, encrypted there, and never returned to browser-visible state.
+- Disconnect revokes active credentials, disconnects mappings, preserves OpenRoad data, and keeps legacy GitHub App disconnect behavior compatible.
+- Desktop and mobile Settings QA shows no body-level scroll, no horizontal overflow, and no nested-card clutter.
 
 ## Feature 12: Requester Notifications
 

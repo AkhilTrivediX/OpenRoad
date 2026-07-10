@@ -902,6 +902,45 @@ async function handleApiRequest(
     return;
   }
 
+  const integrationInstallationsMatch = requestUrl.pathname.match(
+    /^\/api\/openroad\/workspaces\/([^/]+)\/integrations\/([^/]+)\/installations$/
+  );
+
+  if (integrationInstallationsMatch) {
+    await handleIntegrationInstallationCollectionRequest(
+      request,
+      response,
+      store,
+      access,
+      teamStore,
+      integrationStore,
+      runIntegrationMutationExclusive,
+      integrationInstallationsMatch[1],
+      integrationInstallationsMatch[2]
+    );
+    return;
+  }
+
+  const integrationInstallationDisconnectMatch = requestUrl.pathname.match(
+    /^\/api\/openroad\/workspaces\/([^/]+)\/integrations\/([^/]+)\/installations\/([^/]+)\/disconnect$/
+  );
+
+  if (integrationInstallationDisconnectMatch) {
+    await handleIntegrationInstallationDisconnectRequest(
+      request,
+      response,
+      store,
+      access,
+      teamStore,
+      integrationStore,
+      runIntegrationMutationExclusive,
+      integrationInstallationDisconnectMatch[1],
+      integrationInstallationDisconnectMatch[2],
+      integrationInstallationDisconnectMatch[3]
+    );
+    return;
+  }
+
   const integrationCredentialsMatch = requestUrl.pathname.match(
     /^\/api\/openroad\/workspaces\/([^/]+)\/integrations\/([^/]+)\/credentials$/
   );
@@ -3333,6 +3372,196 @@ function upsertById<T extends { id: string }>(items: T[], nextItem: T) {
   return [nextItem, ...items.filter((item) => item.id !== nextItem.id)];
 }
 
+async function handleIntegrationInstallationCollectionRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  store: OpenRoadStore,
+  access: AccessContext,
+  teamStore: TeamStore | undefined,
+  integrationStore: IntegrationStore | undefined,
+  runIntegrationMutationExclusive: NotificationDeliveryRunner,
+  encodedWorkspaceId: string,
+  encodedProvider: string
+) {
+  if (request.method !== "GET" && request.method !== "POST") {
+    writeApiError(response, 405, "invalid_method", "This endpoint supports GET and POST.", access);
+    return;
+  }
+
+  const workspaceId = decodeURIComponent(encodedWorkspaceId);
+
+  try {
+    const provider = parseIntegrationProviderPath(encodedProvider);
+    requirePermission(access, "integration:manage", workspaceId);
+
+    if (!integrationStore) {
+      throw new ApiRequestError(
+        "not_configured",
+        503,
+        "OpenRoad integration metadata store is not configured."
+      );
+    }
+
+    const current = await store.load();
+    const workspace = current.state.workspaces.find((item) => item.id === workspaceId);
+
+    if (!workspace) {
+      throw new ApiRequestError("not_found", 404, "Workspace was not found.");
+    }
+
+    if (request.method === "GET") {
+      const integrationResult = await integrationStore.load();
+      const installations = integrationResult.state.installations
+        .filter((installation) => installation.provider === provider && installation.workspaceId === workspaceId)
+        .map(sanitizeInstallation);
+
+      writeJson(
+        response,
+        200,
+        {
+          installations,
+          provider,
+          status: "listed",
+          workspace: {
+            id: workspace.id,
+            name: workspace.name
+          }
+        },
+        access
+      );
+      return;
+    }
+
+    const payload = await readJsonBody(request, 50_000);
+    const { auditEvent, installation, integrationState } = await runIntegrationMutationExclusive(async () => {
+      const integrationResult = await integrationStore.load();
+      const installation = createManualIntegrationInstallationFromPayload({
+        payload,
+        provider,
+        workspaceId
+      });
+      const nextIntegrationState = parseIntegrationState({
+        ...integrationResult.state,
+        installations: upsertInstallationByScope(integrationResult.state.installations, installation)
+      });
+      const integrationState = await integrationStore.replaceState(nextIntegrationState);
+      const auditEvent = await recordAuditEvent(teamStore, current.state, access, {
+        summary: `Connected ${provider} installation ${installation.providerAccountName}.`,
+        type: "integration.installation.connect",
+        workspaceId
+      });
+
+      return { auditEvent, installation, integrationState };
+    });
+
+    writeJson(
+      response,
+      201,
+      {
+        installation: sanitizeInstallation(installation),
+        provider,
+        revision: auditEvent?.id ?? `integration-installation-${Date.now()}`,
+        status: "connected",
+        totals: {
+          credentials: integrationState.credentials.length,
+          installations: integrationState.installations.length,
+          mappings: integrationState.mappings.length,
+          syncEvents: integrationState.syncEvents.length
+        }
+      },
+      access
+    );
+  } catch (error) {
+    writeKnownApiError(response, error, access);
+  }
+}
+
+async function handleIntegrationInstallationDisconnectRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  store: OpenRoadStore,
+  access: AccessContext,
+  teamStore: TeamStore | undefined,
+  integrationStore: IntegrationStore | undefined,
+  runIntegrationMutationExclusive: NotificationDeliveryRunner,
+  encodedWorkspaceId: string,
+  encodedProvider: string,
+  encodedInstallationId: string
+) {
+  if (request.method !== "POST") {
+    writeApiError(response, 405, "invalid_method", "This endpoint only supports POST.", access);
+    return;
+  }
+
+  const workspaceId = decodeURIComponent(encodedWorkspaceId);
+  const installationId = decodeURIComponent(encodedInstallationId);
+
+  try {
+    const provider = parseIntegrationProviderPath(encodedProvider);
+    requirePermission(access, "integration:manage", workspaceId);
+
+    if (!integrationStore) {
+      throw new ApiRequestError(
+        "not_configured",
+        503,
+        "OpenRoad integration metadata store is not configured."
+      );
+    }
+
+    const current = await store.load();
+    const workspace = current.state.workspaces.find((item) => item.id === workspaceId);
+
+    if (!workspace) {
+      throw new ApiRequestError("not_found", 404, "Workspace was not found.");
+    }
+
+    const { auditEvent, disconnected, integrationState } = await runIntegrationMutationExclusive(async () => {
+      const integrationResult = await integrationStore.load();
+      const disconnected = disconnectProviderInstallationState({
+        integrationState: integrationResult.state,
+        installationId,
+        now: new Date().toISOString(),
+        provider,
+        workspaceId
+      });
+      const integrationState = await integrationStore.replaceState(disconnected.integrationState);
+      const auditEvent =
+        disconnected.changed
+          ? await recordAuditEvent(teamStore, current.state, access, {
+              summary: `Disconnected ${provider} installation ${disconnected.installation.providerAccountName}.`,
+              type: "integration.installation.disconnect",
+              workspaceId
+            })
+          : undefined;
+
+      return { auditEvent, disconnected, integrationState };
+    });
+
+    writeJson(
+      response,
+      200,
+      {
+        changed: disconnected.changed,
+        disconnectedMappings: disconnected.disconnectedMappings,
+        installation: sanitizeInstallation(disconnected.installation),
+        provider,
+        revision: auditEvent?.id ?? `integration-disconnect-${Date.now()}`,
+        revokedCredentials: disconnected.revokedCredentials,
+        status: "disconnected",
+        totals: {
+          credentials: integrationState.credentials.length,
+          installations: integrationState.installations.length,
+          mappings: integrationState.mappings.length,
+          syncEvents: integrationState.syncEvents.length
+        }
+      },
+      access
+    );
+  } catch (error) {
+    writeKnownApiError(response, error, access);
+  }
+}
+
 async function handleIntegrationCredentialCollectionRequest(
   request: IncomingMessage,
   response: ServerResponse,
@@ -3606,6 +3835,9 @@ function createIntegrationStatusProviderSummary({
     (installation) => installation.workspaceId === workspaceId && installation.provider === provider
   );
   const activeInstallations = installations.filter((installation) => installation.status === "active");
+  const disconnectedInstallations = installations.filter(
+    (installation) => installation.status === "disconnected"
+  );
   const mappings = integrationState.mappings.filter(
     (mapping) => mapping.openRoad.workspaceId === workspaceId && mapping.external.provider === provider
   );
@@ -3664,6 +3896,9 @@ function createIntegrationStatusProviderSummary({
       webhooks: provider === "github" && activeInstallations.length > 0
     },
     connection,
+    disconnectedAccounts: disconnectedInstallations
+      .slice(0, 5)
+      .map(sanitizeIntegrationStatusAccount),
     label: integrationProviderLabels[provider],
     lastJobStatus: jobs[0]?.status,
     lastJobUpdatedAt: jobs[0]?.updatedAt,
@@ -4195,6 +4430,125 @@ function createIntegrationCredentialFromPayload({
   );
 
   return { credential, installation };
+}
+
+function createManualIntegrationInstallationFromPayload({
+  payload,
+  provider,
+  workspaceId
+}: {
+  payload: unknown;
+  provider: IntegrationProvider;
+  workspaceId: string;
+}) {
+  if (!isRecord(payload)) {
+    throw new ApiRequestError("invalid_request", 400, "Integration installation payload must be an object.");
+  }
+
+  const installationId =
+    getBoundedIdentifier(payload.installationId, 160) ?? getBoundedIdentifier(payload.id, 160);
+  const accountId =
+    getBoundedText(payload.providerAccountId, 160) ?? getBoundedText(payload.accountId, 160);
+  const accountName =
+    getBoundedText(payload.providerAccountName, 160) ??
+    getBoundedText(payload.accountName, 160) ??
+    getBoundedText(payload.name, 160);
+
+  if (!installationId) {
+    throw new ApiRequestError("invalid_request", 400, "Integration installation id is required.");
+  }
+
+  if (!accountId) {
+    throw new ApiRequestError("invalid_request", 400, "Integration provider account id is required.");
+  }
+
+  if (!accountName) {
+    throw new ApiRequestError("invalid_request", 400, "Integration provider account name is required.");
+  }
+
+  const installationInput = {
+    accountId,
+    accountName,
+    id: installationId,
+    permissions: parseManualIntegrationInstallationPermissions(payload.permissions, provider),
+    status: parseManualIntegrationInstallationStatus(payload.status),
+    workspaceId
+  };
+
+  try {
+    if (provider === "github") {
+      return sanitizeInstallation(createGitHubInstallation(installationInput as GitHubInstallationInput));
+    }
+
+    if (provider === "linear") {
+      return sanitizeInstallation(createLinearInstallation(installationInput as LinearInstallationInput));
+    }
+
+    return sanitizeInstallation(createJiraInstallation(installationInput as JiraInstallationInput));
+  } catch (error) {
+    throw new ApiRequestError(
+      "invalid_request",
+      400,
+      error instanceof Error ? error.message : "Integration installation payload is invalid."
+    );
+  }
+}
+
+function parseManualIntegrationInstallationStatus(value: unknown): IntegrationInstallation["status"] {
+  if (value === undefined) return "active";
+  if (value === "active") return "active";
+  throw new ApiRequestError("invalid_request", 400, "Manual integration installation status must be active.");
+}
+
+function parseManualIntegrationInstallationPermissions(
+  value: unknown,
+  provider: IntegrationProvider
+): IntegrationPermission[] {
+  const required =
+    provider === "github"
+      ? githubRequiredInstallationPermissions
+      : provider === "linear"
+        ? linearRequiredInstallationPermissions
+        : jiraRequiredInstallationPermissions;
+
+  if (value === undefined) return [...required];
+
+  if (!Array.isArray(value)) {
+    throw new ApiRequestError("invalid_request", 400, "Integration installation permissions must be an array.");
+  }
+
+  const optional: IntegrationPermission[] =
+    provider === "jira" ? [] : ["write:external", "webhook:receive"];
+  const allowed = new Set<IntegrationPermission>([...required, ...optional]);
+  const permissions = value.map((item) => {
+    const permission = getBoundedText(item, 80);
+    if (!permission || !integrationPermissions.includes(permission as IntegrationPermission)) {
+      throw new ApiRequestError("invalid_request", 400, "Integration installation permission is not supported.");
+    }
+
+    if (!allowed.has(permission as IntegrationPermission)) {
+      throw new ApiRequestError(
+        "invalid_request",
+        400,
+        "Integration installation permission is not supported for this provider."
+      );
+    }
+
+    return permission as IntegrationPermission;
+  });
+  const uniquePermissions = [...new Set(permissions)];
+
+  for (const permission of required) {
+    if (!uniquePermissions.includes(permission)) {
+      throw new ApiRequestError(
+        "invalid_request",
+        400,
+        "Integration installation permissions must include required provider permissions."
+      );
+    }
+  }
+
+  return uniquePermissions;
 }
 
 function parseIntegrationSyncJobPayload(
@@ -5327,21 +5681,47 @@ function disconnectGitHubInstallationState(
   installationId: string,
   now: string
 ) {
+  return disconnectProviderInstallationState({
+    integrationState,
+    installationId,
+    now,
+    provider: "github",
+    workspaceId
+  });
+}
+
+function disconnectProviderInstallationState({
+  integrationState,
+  installationId,
+  now,
+  provider,
+  workspaceId
+}: {
+  integrationState: IntegrationState;
+  installationId: string;
+  now: string;
+  provider: IntegrationProvider;
+  workspaceId: string;
+}) {
   const installation = integrationState.installations.find(
     (item) =>
-      item.provider === "github" &&
+      item.provider === provider &&
       item.workspaceId === workspaceId &&
-      doesGitHubInstallationIdMatch(item.id, installationId)
+      doesProviderInstallationIdMatch(provider, item.id, installationId)
   );
 
   if (!installation) {
-    throw new ApiRequestError("not_found", 404, "GitHub installation was not found.");
+    throw new ApiRequestError("not_found", 404, "Integration installation was not found.");
   }
 
-  const nextInstallation = { ...installation, status: "disconnected" as const };
+  const nextInstallation =
+    installation.status === "disconnected"
+      ? installation
+      : { ...installation, status: "disconnected" as const };
   let disconnectedMappings = 0;
   const mappings = integrationState.mappings.map((mapping) => {
     if (
+      mapping.external.provider === provider &&
       mapping.installationId === installation.id &&
       mapping.openRoad.workspaceId === workspaceId &&
       mapping.status !== "disconnected"
@@ -5352,14 +5732,18 @@ function disconnectGitHubInstallationState(
 
     return mapping;
   });
-
   const credentialRevocation = revokeIntegrationCredentialsForInstallation(
     integrationState.credentials,
     installation,
     now
   );
+  const changed =
+    installation.status !== "disconnected" ||
+    disconnectedMappings > 0 ||
+    credentialRevocation.revokedCredentials.length > 0;
 
   return {
+    changed,
     disconnectedMappings,
     installation: nextInstallation,
     integrationState: parseIntegrationState({

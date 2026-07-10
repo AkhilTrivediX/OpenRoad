@@ -25,7 +25,7 @@ External providers attach through external links and sync state. Provider-specif
 
 OpenRoad now has a working standalone product loop, production server foundation, and first self-host operations path:
 
-- React app shell for requests, work, roadmap, changelog, portal, and settings, including progressive integration status and GitHub/Linear/Jira manual sync controls.
+- React app shell for requests, work, roadmap, changelog, portal, and settings, including progressive GitHub/Linear/Jira connection, credential, disconnect, and manual sync controls.
 - Versioned OpenRoad domain state with local persistence, import/export, and recovery.
 - Public/private visibility for requests, comments, roadmap items, and changelog entries.
 - Production Node server that serves the built app and same-origin OpenRoad APIs.
@@ -43,6 +43,7 @@ OpenRoad now has a working standalone product loop, production server foundation
 - Signed GitHub App webhook ingestion, idempotent linked issue sync, and safe disconnect handling.
 - Encrypted server-only provider credential storage primitives for GitHub, Linear, and Jira.
 - Provider-neutral background sync job foundation with private runner boundary and GitHub/Linear/Jira linked-issue workers.
+- Settings-managed provider installation bootstrap, credential metadata listing/storage/revoke, and provider-neutral disconnect for GitHub, Linear, and Jira.
 - Safe Linear OAuth setup plus payload-backed Linear issue import/link.
 - Safe Jira OAuth setup plus payload-backed Jira issue import/link with explicit field mapping and live linked-issue sync.
 - Requester notification preferences plus an internal outbox for status and changelog updates.
@@ -164,6 +165,9 @@ The server exposes:
 - `GET /api/openroad/workspaces/:workspaceId/integrations/linear/oauth/setup`
 - `POST /api/openroad/workspaces/:workspaceId/integrations/jira/issues/import`
 - `GET /api/openroad/workspaces/:workspaceId/integrations/jira/oauth/setup`
+- `GET /api/openroad/workspaces/:workspaceId/integrations/:provider/installations`
+- `POST /api/openroad/workspaces/:workspaceId/integrations/:provider/installations`
+- `POST /api/openroad/workspaces/:workspaceId/integrations/:provider/installations/:installationId/disconnect`
 - `GET /api/openroad/workspaces/:workspaceId/integrations/:provider/credentials`
 - `POST /api/openroad/workspaces/:workspaceId/integrations/:provider/credentials`
 - `POST /api/openroad/workspaces/:workspaceId/integrations/:provider/credentials/:credentialId/revoke`

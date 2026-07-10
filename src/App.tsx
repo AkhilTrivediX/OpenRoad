@@ -117,9 +117,11 @@ import {
   acceptOpenRoadInvitationSession,
   isServerPersistenceEnabled,
   isOpenRoadServerAuthRequiredError,
+  loginOpenRoadAccount,
   loginOpenRoadOwner,
   loadServerOpenRoadState,
   saveServerOpenRoadState,
+  setOpenRoadAccountPassword,
   type ServerOpenRoadScope
 } from "./persistence/openroadServer";
 import {
@@ -192,6 +194,20 @@ export function App() {
   const [memberLoginDraft, setMemberLoginDraft] = useState({ name: "", token: "" });
   const [memberLoginState, setMemberLoginState] = useState<"idle" | "submitting">("idle");
   const [memberLoginMessage, setMemberLoginMessage] = useState("");
+  const [memberAuthMode, setMemberAuthMode] = useState<"account" | "invite">("account");
+  const [accountLoginDraft, setAccountLoginDraft] = useState({
+    email: "",
+    password: "",
+    workspaceId: ""
+  });
+  const [accountLoginState, setAccountLoginState] = useState<"idle" | "submitting">("idle");
+  const [accountLoginMessage, setAccountLoginMessage] = useState("");
+  const [accountPasswordDraft, setAccountPasswordDraft] = useState({
+    currentPassword: "",
+    password: ""
+  });
+  const [accountPasswordState, setAccountPasswordState] = useState<"idle" | "submitting">("idle");
+  const [accountPasswordMessage, setAccountPasswordMessage] = useState("");
   const [integrationStatus, setIntegrationStatus] = useState<WorkspaceIntegrationStatus>(() =>
     createStandaloneIntegrationStatus(resolveInitialWorkspaceId(loadResult.state, loadSelectedWorkspaceId()))
   );
@@ -272,6 +288,7 @@ export function App() {
       ...draft,
       token: draft.token || invitationToken
     }));
+    setMemberAuthMode("invite");
   }, []);
 
   function applyServerLoadResult(result: Awaited<ReturnType<typeof loadServerOpenRoadState>>) {
@@ -288,6 +305,7 @@ export function App() {
     setOwnerLoginState("idle");
     setOwnerLoginMessage("");
     setMemberLoginMessage("");
+    setAccountLoginMessage("");
     setPersistenceMessage(
       result.serverScope === "workspace-member"
         ? "Member workspace connected."
@@ -329,6 +347,7 @@ export function App() {
 
     setMemberLoginState("submitting");
     setMemberLoginMessage("");
+    setAccountLoginMessage("");
     setOwnerLoginMessage("");
 
     try {
@@ -344,6 +363,60 @@ export function App() {
       );
     } finally {
       setMemberLoginState("idle");
+    }
+  }
+
+  async function signInWithAccount(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    const email = accountLoginDraft.email.trim();
+    const password = accountLoginDraft.password;
+    const workspaceId = accountLoginDraft.workspaceId.trim();
+    if (!email || !password || accountLoginState === "submitting") return;
+
+    setAccountLoginState("submitting");
+    setAccountLoginMessage("");
+    setMemberLoginMessage("");
+    setOwnerLoginMessage("");
+
+    try {
+      await loginOpenRoadAccount(email, password, workspaceId);
+      const result = await loadServerOpenRoadState();
+      applyServerLoadResult(result);
+      setAccountLoginDraft({ email: "", password: "", workspaceId: "" });
+    } catch (error) {
+      setAccountLoginMessage(
+        error instanceof Error
+          ? error.message
+          : "OpenRoad could not complete account sign-in. Check the email and password."
+      );
+    } finally {
+      setAccountLoginState("idle");
+    }
+  }
+
+  async function updateAccountPassword(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    const password = accountPasswordDraft.password;
+    const currentPassword = accountPasswordDraft.currentPassword;
+    if (!password || accountPasswordState === "submitting") return;
+
+    setAccountPasswordState("submitting");
+    setAccountPasswordMessage("");
+
+    try {
+      await setOpenRoadAccountPassword(password, currentPassword);
+      setAccountPasswordDraft({ currentPassword: "", password: "" });
+      setAccountPasswordMessage("Account password updated.");
+    } catch (error) {
+      setAccountPasswordMessage(
+        error instanceof Error
+          ? error.message
+          : "OpenRoad could not update this account password."
+      );
+    } finally {
+      setAccountPasswordState("idle");
     }
   }
 
@@ -1563,6 +1636,7 @@ export function App() {
   if (serverPersistenceEnabled && ownerLoginState !== "idle") {
     const isSigningIn = ownerLoginState === "submitting";
     const isJoiningWorkspace = memberLoginState === "submitting";
+    const isAccountSigningIn = accountLoginState === "submitting";
 
     return (
       <main className="app-shell owner-auth-shell" aria-label="OpenRoad owner sign-in">
@@ -1631,67 +1705,150 @@ export function App() {
           </form>
 
           <form
-            aria-label="Join invited workspace"
+            aria-label={memberAuthMode === "account" ? "Sign in with account" : "Join invited workspace"}
             className="owner-auth-panel member-auth-panel"
-            onSubmit={signInWithInvitation}
+            onSubmit={memberAuthMode === "account" ? signInWithAccount : signInWithInvitation}
           >
             <div className="owner-auth-heading">
               <span className="owner-auth-icon" aria-hidden="true">
                 <UserPlus size={18} strokeWidth={1.8} />
               </span>
               <div>
-                <span className="section-label">Workspace invite</span>
-                <h2>Join as a member</h2>
+                <span className="section-label">Member access</span>
+                <h2>{memberAuthMode === "account" ? "Sign in as a member" : "Join as a member"}</h2>
               </div>
             </div>
 
-            <p>
-              Paste the invitation token from the workspace owner. OpenRoad will create a
-              scoped member session for the invited workspace only.
-            </p>
-
-            <label className="owner-token-field">
-              <span>Invitation token</span>
-              <input
-                autoComplete="one-time-code"
-                disabled={isJoiningWorkspace}
-                onChange={(event) =>
-                  setMemberLoginDraft((draft) => ({ ...draft, token: event.target.value }))
-                }
-                type="password"
-                value={memberLoginDraft.token}
-              />
-            </label>
-
-            <label className="owner-token-field">
-              <span>Name</span>
-              <input
-                autoComplete="name"
-                disabled={isJoiningWorkspace}
-                onChange={(event) =>
-                  setMemberLoginDraft((draft) => ({ ...draft, name: event.target.value }))
-                }
-                placeholder="Optional"
-                value={memberLoginDraft.name}
-              />
-            </label>
-
-            {memberLoginMessage ? (
-              <p className="owner-auth-message" role="alert">
-                {memberLoginMessage}
-              </p>
-            ) : null}
-
-            <div className="owner-auth-actions">
+            <div className="auth-mode-switch" aria-label="Member sign-in mode">
               <button
-                className="secondary-action"
-                disabled={!memberLoginDraft.token.trim() || isJoiningWorkspace}
-                type="submit"
+                aria-pressed={memberAuthMode === "account"}
+                className={memberAuthMode === "account" ? "active" : ""}
+                onClick={() => setMemberAuthMode("account")}
+                type="button"
               >
-                <UserPlus aria-hidden="true" size={15} />
-                {isJoiningWorkspace ? "Joining..." : "Join workspace"}
+                Account
+              </button>
+              <button
+                aria-pressed={memberAuthMode === "invite"}
+                className={memberAuthMode === "invite" ? "active" : ""}
+                onClick={() => setMemberAuthMode("invite")}
+                type="button"
+              >
+                Invite
               </button>
             </div>
+
+            {memberAuthMode === "account" ? (
+              <>
+                <label className="owner-token-field">
+                  <span>Email</span>
+                  <input
+                    autoComplete="email"
+                    disabled={isAccountSigningIn}
+                    onChange={(event) =>
+                      setAccountLoginDraft((draft) => ({ ...draft, email: event.target.value }))
+                    }
+                    type="email"
+                    value={accountLoginDraft.email}
+                  />
+                </label>
+
+                <label className="owner-token-field">
+                  <span>Password</span>
+                  <input
+                    autoComplete="current-password"
+                    disabled={isAccountSigningIn}
+                    onChange={(event) =>
+                      setAccountLoginDraft((draft) => ({ ...draft, password: event.target.value }))
+                    }
+                    type="password"
+                    value={accountLoginDraft.password}
+                  />
+                </label>
+
+                <label className="owner-token-field">
+                  <span>Workspace id</span>
+                  <input
+                    autoComplete="off"
+                    disabled={isAccountSigningIn}
+                    onChange={(event) =>
+                      setAccountLoginDraft((draft) => ({
+                        ...draft,
+                        workspaceId: event.target.value
+                      }))
+                    }
+                    placeholder="Optional"
+                    value={accountLoginDraft.workspaceId}
+                  />
+                </label>
+
+                {accountLoginMessage ? (
+                  <p className="owner-auth-message" role="alert">
+                    {accountLoginMessage}
+                  </p>
+                ) : null}
+
+                <div className="owner-auth-actions">
+                  <button
+                    className="secondary-action"
+                    disabled={
+                      !accountLoginDraft.email.trim() ||
+                      !accountLoginDraft.password ||
+                      isAccountSigningIn
+                    }
+                    type="submit"
+                  >
+                    <KeyRound aria-hidden="true" size={15} />
+                    {isAccountSigningIn ? "Signing in..." : "Sign in"}
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <label className="owner-token-field">
+                  <span>Invitation token</span>
+                  <input
+                    autoComplete="one-time-code"
+                    disabled={isJoiningWorkspace}
+                    onChange={(event) =>
+                      setMemberLoginDraft((draft) => ({ ...draft, token: event.target.value }))
+                    }
+                    type="password"
+                    value={memberLoginDraft.token}
+                  />
+                </label>
+
+                <label className="owner-token-field">
+                  <span>Name</span>
+                  <input
+                    autoComplete="name"
+                    disabled={isJoiningWorkspace}
+                    onChange={(event) =>
+                      setMemberLoginDraft((draft) => ({ ...draft, name: event.target.value }))
+                    }
+                    placeholder="Optional"
+                    value={memberLoginDraft.name}
+                  />
+                </label>
+
+                {memberLoginMessage ? (
+                  <p className="owner-auth-message" role="alert">
+                    {memberLoginMessage}
+                  </p>
+                ) : null}
+
+                <div className="owner-auth-actions">
+                  <button
+                    className="secondary-action"
+                    disabled={!memberLoginDraft.token.trim() || isJoiningWorkspace}
+                    type="submit"
+                  >
+                    <UserPlus aria-hidden="true" size={15} />
+                    {isJoiningWorkspace ? "Joining..." : "Join workspace"}
+                  </button>
+                </div>
+              </>
+            )}
           </form>
         </section>
       </main>
@@ -4112,6 +4269,59 @@ export function App() {
                   <p className="invitation-message error" role="alert">
                     {invitationErrorMessage}
                   </p>
+                ) : null}
+
+                {serverPersistenceEnabled && ownerLoginState === "idle" && serverAccessScope !== "local" ? (
+                  <form
+                    className="account-password-form"
+                    aria-label="Update account password"
+                    onSubmit={updateAccountPassword}
+                  >
+                    <label>
+                      <span>Current password if set</span>
+                      <input
+                        autoComplete="current-password"
+                        onChange={(event) =>
+                          setAccountPasswordDraft((draft) => ({
+                            ...draft,
+                            currentPassword: event.target.value
+                          }))
+                        }
+                        type="password"
+                        value={accountPasswordDraft.currentPassword}
+                      />
+                    </label>
+                    <label>
+                      <span>New password</span>
+                      <input
+                        autoComplete="new-password"
+                        onChange={(event) =>
+                          setAccountPasswordDraft((draft) => ({
+                            ...draft,
+                            password: event.target.value
+                          }))
+                        }
+                        type="password"
+                        value={accountPasswordDraft.password}
+                      />
+                    </label>
+                    <button
+                      className="secondary-action compact"
+                      disabled={
+                        accountPasswordState === "submitting" ||
+                        accountPasswordDraft.password.length < 12
+                      }
+                      type="submit"
+                    >
+                      <KeyRound aria-hidden="true" size={14} />
+                      {accountPasswordState === "submitting" ? "Updating..." : "Update password"}
+                    </button>
+                    {accountPasswordMessage ? (
+                      <p className="invitation-message" role="status">
+                        {accountPasswordMessage}
+                      </p>
+                    ) : null}
+                  </form>
                 ) : null}
 
                 {invitationAccess.status === "ready" ? (

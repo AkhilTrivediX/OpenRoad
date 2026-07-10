@@ -162,6 +162,7 @@ describe("OpenRoad workspace shell", () => {
 
     render(<App />);
 
+    await user.click(await screen.findByRole("button", { name: "Invite" }));
     await user.type(await screen.findByLabelText("Invitation token"), "oinv_member-secret");
     await user.type(screen.getByLabelText("Name"), "Member User");
     await user.click(screen.getByRole("button", { name: "Join workspace" }));
@@ -187,6 +188,64 @@ describe("OpenRoad workspace shell", () => {
       })
     );
     expect(document.body.textContent).not.toContain("oinv_member-secret");
+  });
+
+  it("creates a member session from account password login", async () => {
+    vi.stubEnv("VITE_OPENROAD_SERVER_SYNC", "on");
+    const fetchMock = createMemberInvitationLoginFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await user.type(await screen.findByLabelText("Email"), "member@example.com");
+    await user.type(screen.getByLabelText("Password"), "member password value");
+    await user.click(screen.getByRole("button", { name: "Sign in" }));
+
+    expect(await screen.findByRole("combobox", { name: "Workspace" })).toHaveDisplayValue(
+      "Member Workspace"
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/openroad/auth/password/login",
+      expect.objectContaining({
+        body: JSON.stringify({
+          email: "member@example.com",
+          password: "member password value"
+        }),
+        credentials: "same-origin",
+        method: "POST"
+      })
+    );
+    expect(document.body.textContent).not.toContain("member password value");
+  });
+
+  it("updates an account password from Settings without rendering password text", async () => {
+    vi.stubEnv("VITE_OPENROAD_SERVER_SYNC", "on");
+    const fetchMock = createMemberInvitationLoginFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await user.type(await screen.findByLabelText("Email"), "member@example.com");
+    await user.type(screen.getByLabelText("Password"), "member password value");
+    await user.click(screen.getByRole("button", { name: "Sign in" }));
+    await screen.findByText("Member workspace connected.");
+    await user.click(screen.getByRole("link", { name: /Settings/ }));
+    const access = await screen.findByLabelText("Team access");
+    await user.type(within(access).getByLabelText("New password"), "member password value next");
+    await user.click(within(access).getByRole("button", { name: "Update password" }));
+
+    expect(await within(access).findByText("Account password updated.")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/openroad/account/password",
+      expect.objectContaining({
+        body: JSON.stringify({ password: "member password value next" }),
+        credentials: "same-origin",
+        method: "POST"
+      })
+    );
+    expect(document.body.textContent).not.toContain("member password value next");
   });
 
   it("prefills invitation links from the URL and removes the token from history", async () => {
@@ -1631,6 +1690,15 @@ function createMemberInvitationLoginFetchMock() {
     if (url === "/api/openroad/invitations/session" && method === "POST") {
       isMemberAuthenticated = true;
       return jsonResponse({ authenticated: true, status: "authenticated" });
+    }
+
+    if (url === "/api/openroad/auth/password/login" && method === "POST") {
+      isMemberAuthenticated = true;
+      return jsonResponse({ authenticated: true, status: "authenticated" });
+    }
+
+    if (url === "/api/openroad/account/password" && method === "POST") {
+      return jsonResponse({ status: "password_set" });
     }
 
     if (url === "/api/openroad/workspaces") {

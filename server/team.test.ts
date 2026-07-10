@@ -128,6 +128,7 @@ describe("FileTeamStore", () => {
 
     const result = await new FileTeamStore(teamFile).load(openRoadState);
     const persisted = JSON.parse(await readFile(teamFile, "utf8")) as {
+      credentials: unknown[];
       invitations: Array<{ id: string }>;
       schemaVersion: number;
     };
@@ -138,8 +139,32 @@ describe("FileTeamStore", () => {
       email: "teammate@example.com",
       id: "invitation-1"
     });
+    expect(result.state.credentials).toEqual([]);
     expect(persisted.schemaVersion).toBe(openRoadTeamSchemaVersion);
+    expect(persisted.credentials).toEqual([]);
     expect(persisted.invitations[0].id).toBe("invitation-1");
+  });
+
+  it("migrates schema v3 team metadata with empty account credentials", async () => {
+    const teamFile = await createTempTeamFile();
+    const openRoadState = createInitialOpenRoadState();
+    await writeFile(
+      teamFile,
+      JSON.stringify({
+        auditEvents: [],
+        invitations: [],
+        memberships: [],
+        schemaVersion: 3,
+        users: []
+      }),
+      "utf8"
+    );
+
+    const result = await new FileTeamStore(teamFile).load(openRoadState);
+
+    expect(result.status).toBe("migrated");
+    expect(result.state.schemaVersion).toBe(openRoadTeamSchemaVersion);
+    expect(result.state.credentials).toEqual([]);
   });
 
   it("creates invitations without persisting or listing raw accept tokens", async () => {
@@ -250,6 +275,127 @@ describe("FileTeamStore", () => {
             workspaceId: "acme"
           }
         ],
+        memberships: [],
+        schemaVersion: openRoadTeamSchemaVersion,
+        users: []
+      })
+    ).toThrow(TeamStoreError);
+  });
+
+  it("sets account passwords with salted hashes and authenticates memberships", async () => {
+    const teamFile = await createTempTeamFile();
+    const openRoadState = createInitialOpenRoadState();
+    const store = new FileTeamStore(teamFile);
+    await store.load(openRoadState);
+    const created = await store.createInvitation(openRoadState, {
+      createdByActorId: "local-owner",
+      email: "login@example.com",
+      role: "Contributor",
+      workspaceId: "acme"
+    });
+    const accepted = await store.acceptInvitation(openRoadState, {
+      acceptedName: "Login User",
+      token: created.acceptToken
+    });
+
+    const first = await store.setAccountPassword(openRoadState, {
+      password: "correct horse battery staple",
+      userId: accepted.user.id
+    });
+    await expect(
+      store.setAccountPassword(openRoadState, {
+        password: "correct horse battery staple again",
+        userId: accepted.user.id
+      })
+    ).rejects.toMatchObject({
+      code: "invalid_request",
+      message: "Current password is invalid."
+    });
+    const second = await store.setAccountPassword(openRoadState, {
+      currentPassword: "correct horse battery staple",
+      password: "correct horse battery staple again",
+      userId: accepted.user.id
+    });
+    const authenticated = await store.authenticateAccountPassword(openRoadState, {
+      email: "LOGIN@example.com",
+      password: "correct horse battery staple again"
+    });
+    const persistedText = await readFile(teamFile, "utf8");
+    const persisted = JSON.parse(persistedText) as {
+      credentials: Array<{ passwordHash: string; salt: string }>;
+    };
+
+    expect(first.credential).toMatchObject({ userId: accepted.user.id });
+    expect(second.credential.updatedAt).toBeTruthy();
+    expect(authenticated).toMatchObject({
+      membership: {
+        role: "Contributor",
+        workspaceId: "acme"
+      },
+      user: {
+        email: "login@example.com"
+      }
+    });
+    expect(persisted.credentials).toHaveLength(1);
+    expect(persisted.credentials[0].passwordHash).not.toContain("correct horse");
+    expect(persisted.credentials[0].salt).not.toBe(persisted.credentials[0].passwordHash);
+    expect(persistedText).not.toContain("correct horse battery staple");
+    await expect(
+      store.authenticateAccountPassword(openRoadState, {
+        email: "login@example.com",
+        password: "wrong horse battery staple"
+      })
+    ).rejects.toMatchObject({ code: "invalid_request" });
+  });
+
+  it("requires workspace id for account passwords with multiple memberships", async () => {
+    const teamFile = await createTempTeamFile();
+    const openRoadState = createInitialOpenRoadState();
+    const store = new FileTeamStore(teamFile);
+    await store.load(openRoadState);
+    await store.setAccountPassword(openRoadState, {
+      password: "owner password for workspace",
+      requireCurrentPassword: false,
+      userId: "local-owner"
+    });
+
+    await expect(
+      store.authenticateAccountPassword(openRoadState, {
+        email: "owner@openroad.local",
+        password: "owner password for workspace"
+      })
+    ).rejects.toMatchObject({ code: "invalid_request" });
+
+    await expect(
+      store.authenticateAccountPassword(openRoadState, {
+        email: "owner@openroad.local",
+        password: "owner password for workspace",
+        workspaceId: "acme"
+      })
+    ).resolves.toMatchObject({
+      membership: {
+        role: "Owner",
+        workspaceId: "acme"
+      }
+    });
+  });
+
+  it("rejects malformed account credentials", () => {
+    expect(() =>
+      parseTeamState({
+        auditEvents: [],
+        credentials: [
+          {
+            algorithm: "plain-text",
+            createdAt: "2026-07-10T00:00:00.000Z",
+            id: "credential-1",
+            passwordHash: "password",
+            salt: "salt",
+            updatedAt: "2026-07-10T00:00:00.000Z",
+            userId: "local-owner"
+          }
+        ],
+        invitations: [],
         memberships: [],
         schemaVersion: openRoadTeamSchemaVersion,
         users: []

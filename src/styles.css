@@ -512,6 +512,31 @@ h3 {
   max-width: 62ch;
 }
 
+.auth-mode-switch {
+  border: 1px solid var(--line);
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.auth-mode-switch button {
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  cursor: pointer;
+  font-family: var(--label-font);
+  font-size: 12px;
+  padding: 9px 10px;
+}
+
+.auth-mode-switch button + button {
+  border-left: 1px solid var(--line);
+}
+
+.auth-mode-switch button.active {
+  background: var(--route);
+  color: var(--route-ink);
+}
+
 .member-auth-panel {
   background: var(--plate);
   border-color: var(--line);
@@ -687,6 +712,7 @@ h3 {
 .portal-settings label span,
 .portal-comment-form label span,
 .portal-search span,
+.account-password-form label span,
 .invitation-form label span,
 .invitation-token label span,
 .invitation-accept-form label span {
@@ -717,6 +743,7 @@ h3 {
 .comment-form textarea,
 .work-comment-form textarea,
 .data-tools textarea,
+.account-password-form input,
 .invitation-form input,
 .invitation-form select,
 .invitation-token input,
@@ -1611,6 +1638,7 @@ dd {
   color: var(--coral);
 }
 
+.account-password-form,
 .invitation-form,
 .invitation-accept-form {
   display: grid;
@@ -1618,6 +1646,7 @@ dd {
   grid-template-columns: minmax(0, 1fr) minmax(0, 0.82fr);
 }
 
+.account-password-form label,
 .invitation-form label,
 .invitation-token label,
 .invitation-accept-form label {
@@ -1626,12 +1655,14 @@ dd {
   min-width: 0;
 }
 
+.account-password-form label:first-child,
 .invitation-form label:first-child,
 .invitation-token,
 .invitation-accept-form label:first-child {
   grid-column: 1 / -1;
 }
 
+.account-password-form .secondary-action,
 .invitation-form .primary-action,
 .invitation-accept-form .secondary-action {
   align-self: end;
@@ -2892,11 +2923,13 @@ dd {
     grid-column: auto;
   }
 
+  .account-password-form,
   .invitation-form,
   .invitation-accept-form {
     grid-template-columns: 1fr;
   }
 
+  .account-password-form label:first-child,
   .invitation-form label:first-child,
   .invitation-token,
   .invitation-accept-form label:first-child {

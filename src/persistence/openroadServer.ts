@@ -5,6 +5,7 @@ import {
   type OpenRoadState,
   type Workspace
 } from "../domain/openroad";
+import type { AssistantTriageSuggestion } from "../domain/openroadAssistant";
 
 type ServerStateResponse = {
   backupPath?: string;
@@ -67,6 +68,36 @@ type ServerWorkspaceListResponse = {
 
 type ServerWorkspaceResponse = {
   workspace?: Workspace;
+};
+
+export type ServerAssistantConsent = {
+  shareRequesterIdentity: boolean;
+  shareWorkspaceContext: boolean;
+};
+
+export type ServerAssistantFallbackReason =
+  | "consent_required"
+  | "external_not_requested"
+  | "invalid_model_output"
+  | "provider_failed"
+  | "provider_not_configured";
+
+export type ServerAssistantTriageResult = {
+  model: {
+    context: {
+      includedSections: string[];
+      promptCharacters?: number;
+      redactionCount: number;
+    };
+    externalUsed: boolean;
+    fallbackReason?: ServerAssistantFallbackReason;
+    mode: "deterministic" | "fallback" | "model";
+    provider: "deterministic" | "openai";
+  };
+  requestId: string;
+  status: "suggested";
+  suggestion: AssistantTriageSuggestion;
+  workspaceId: string;
 };
 
 export type ServerOpenRoadScope = "owner" | "workspace-member";
@@ -281,6 +312,35 @@ export async function saveServerOpenRoadState(state: OpenRoadState) {
     schemaVersion: openRoadSchemaVersion,
     workspaces: [workspacePayload.workspace]
   });
+}
+
+export async function requestOpenRoadAssistantTriage({
+  consent,
+  requestId,
+  workspaceId
+}: {
+  consent: ServerAssistantConsent;
+  requestId: string;
+  workspaceId: string;
+}) {
+  const response = await fetch(
+    `/api/openroad/workspaces/${encodeURIComponent(workspaceId)}/assistant/triage`,
+    {
+      body: JSON.stringify({
+        allowExternalModel: true,
+        consent,
+        requestId
+      }),
+      credentials: "same-origin",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    }
+  );
+
+  return (await readJsonResponse(response)) as ServerAssistantTriageResult;
 }
 
 async function readJsonResponse(response: Response) {

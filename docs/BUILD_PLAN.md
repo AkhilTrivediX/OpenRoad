@@ -1003,7 +1003,7 @@ Acceptance:
 
 Branch: `feat/assistant-consent-ui`
 
-Status: planned.
+Status: implemented; production verification in progress.
 
 Build:
 
@@ -1024,6 +1024,28 @@ Acceptance:
 - Model/fallback status is understandable to users without exposing provider internals.
 - Model-backed output stays advisory and cannot mutate OpenRoad source-of-truth data.
 - Existing assistant duplicate suggestions, private changelog draft approval, public portal, integrations, notifications, team access, release, and self-host checks remain green.
+
+## Feature 13C: Workspace AI Policy Settings
+
+Branch: `feat/workspace-ai-policy-settings`
+
+Status: planned.
+
+Build:
+
+- Workspace-level policy for whether model-assisted triage is allowed.
+- Owner/maintainer-facing policy controls that stay out of first-use Inbox complexity.
+- Deterministic assistant fallback when policy disables model use.
+- Request-level consent remains required even when workspace policy allows model use.
+- Audit/operational evidence for policy changes and blocked model requests.
+- Docs, focused tests, browser QA if UI changes, smoke evidence, and rollback notes.
+
+Acceptance:
+
+- Workspace policy cannot enable model use without server-side provider configuration and request-level consent.
+- Workspace members get clear disabled-state copy when policy blocks model assist.
+- Standalone/local OpenRoad behavior is unchanged.
+- No provider config, raw prompts, raw responses, secrets, private notes, hidden/internal comments, notification bodies, or provider payloads are exposed through policy UI.
 
 ## Feature 14: Public Release Operations
 

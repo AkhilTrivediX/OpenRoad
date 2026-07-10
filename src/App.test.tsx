@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createInitialOpenRoadState } from "./domain/openroad";
@@ -1459,6 +1459,7 @@ describe("OpenRoad workspace shell", () => {
 
     const assistant = screen.getByLabelText("Assistant triage");
     expect(within(assistant).getByText("Triage assist")).toBeInTheDocument();
+    expect(within(assistant).queryByLabelText("Model assist consent")).not.toBeInTheDocument();
     const assistantToggle = within(assistant).getByRole("checkbox", {
       name: "Assistant suggestions"
     });
@@ -1484,6 +1485,127 @@ describe("OpenRoad workspace shell", () => {
     expect(within(changelogDetail).getByLabelText("Public wording for Review roadmap item for changelog")).toHaveValue(
       "A roadmap update may be ready. Review this private draft and write approved public wording before publishing."
     );
+  });
+
+  it("requires explicit consent before requesting model-assisted triage", async () => {
+    vi.stubEnv("VITE_OPENROAD_SERVER_SYNC", "on");
+    const fetchMock = createSettingsIntegrationFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    const assistant = screen.getByLabelText("Assistant triage");
+    const consentPanel = await within(assistant).findByLabelText("Model assist consent");
+    expect(within(consentPanel).getByText("Local suggestions shown. Model assist needs consent for this request.")).toBeInTheDocument();
+
+    const refreshButton = within(consentPanel).getByRole("button", { name: "Use model assist" });
+    const contextConsent = within(consentPanel).getByRole("checkbox", {
+      name: /Share workspace context/
+    });
+    const identityConsent = within(consentPanel).getByRole("checkbox", {
+      name: /Include requester identity/
+    });
+
+    expect(refreshButton).toBeDisabled();
+    expect(identityConsent).toBeDisabled();
+
+    await user.click(contextConsent);
+    expect(refreshButton).toBeEnabled();
+    expect(identityConsent).toBeEnabled();
+
+    await user.click(identityConsent);
+    await user.click(refreshButton);
+
+    expect(await within(assistant).findByText("Model refined login friction.")).toBeInTheDocument();
+    expect(within(assistant).getByText("Ask maintainers to review the auth setup path.")).toBeInTheDocument();
+    expect(
+      within(assistant).getByText(
+        "Model refined the summary. Duplicates and draft suggestions stay approval-only."
+      )
+    ).toBeInTheDocument();
+
+    const assistantCall = fetchMock.mock.calls.find(
+      ([input]) => input === "/api/openroad/workspaces/acme/assistant/triage"
+    );
+    expect(assistantCall).toBeTruthy();
+    const [, init] = assistantCall ?? [];
+    expect(init).toEqual(
+      expect.objectContaining({
+        credentials: "same-origin",
+        method: "POST"
+      })
+    );
+    const body = JSON.parse(String(init?.body ?? "{}"));
+    expect(body).toEqual({
+      allowExternalModel: true,
+      consent: {
+        shareRequesterIdentity: true,
+        shareWorkspaceContext: true
+      },
+      requestId: "api-rate-limit-visibility"
+    });
+    expect(String(init?.body)).not.toContain("sk-test");
+    expect(String(init?.body)).not.toContain("OPENROAD_OPENAI");
+    expect(String(init?.body)).not.toContain("api.openai");
+
+    const inboxRegion = screen.getByRole("region", { name: /Requests needing attention/ });
+    await user.click(within(inboxRegion).getByRole("button", { name: /Dark mode for docs site/ }));
+
+    await waitFor(() =>
+      expect(within(assistant).queryByText("Model refined login friction.")).not.toBeInTheDocument()
+    );
+    await waitFor(() => expect(contextConsent).not.toBeChecked());
+    expect(refreshButton).toBeDisabled();
+  });
+
+  it("keeps local assistant output visible when model assist falls back safely", async () => {
+    vi.stubEnv("VITE_OPENROAD_SERVER_SYNC", "on");
+    const fetchMock = createSettingsIntegrationFetchMock({
+      assistantFallbackReason: "provider_not_configured"
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    const assistant = screen.getByLabelText("Assistant triage");
+    const consentPanel = await within(assistant).findByLabelText("Model assist consent");
+    await user.click(
+      within(consentPanel).getByRole("checkbox", { name: /Share workspace context/ })
+    );
+    await user.click(within(consentPanel).getByRole("button", { name: "Use model assist" }));
+
+    expect(
+      await within(assistant).findByText(
+        "Local suggestions shown. Model assist is not configured for this server."
+      )
+    ).toBeInTheDocument();
+    expect(within(assistant).getByText("Local assistant summary is still available.")).toBeInTheDocument();
+    expect(within(assistant).getByText("Create private draft")).toBeInTheDocument();
+  });
+
+  it("shows a generic assistant failure without leaking provider errors", async () => {
+    vi.stubEnv("VITE_OPENROAD_SERVER_SYNC", "on");
+    const fetchMock = createSettingsIntegrationFetchMock({ assistantFailureStatus: 500 });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    const assistant = screen.getByLabelText("Assistant triage");
+    const consentPanel = await within(assistant).findByLabelText("Model assist consent");
+    await user.click(
+      within(consentPanel).getByRole("checkbox", { name: /Share workspace context/ })
+    );
+    await user.click(within(consentPanel).getByRole("button", { name: "Use model assist" }));
+
+    expect(
+      await within(assistant).findByText("Model assist is unavailable. Local suggestions are still shown.")
+    ).toBeInTheDocument();
+    expect(within(assistant).queryByText(/sk-test-secret/)).not.toBeInTheDocument();
+    expect(within(assistant).queryByText(/raw response/)).not.toBeInTheDocument();
+    expect(within(assistant).getByText("Create private draft")).toBeInTheDocument();
   });
 
   it("archives requests and shows archived requests through the queue filter", async () => {
@@ -2057,6 +2179,12 @@ function createMemberInvitationLoginFetchMock() {
 
 function createSettingsIntegrationFetchMock(
   options: {
+    assistantFailureStatus?: number;
+    assistantFallbackReason?:
+      | "consent_required"
+      | "invalid_model_output"
+      | "provider_failed"
+      | "provider_not_configured";
     githubConflict?: boolean;
     githubWebhookReady?: boolean;
     githubWebhookRegistered?: boolean;
@@ -2327,6 +2455,61 @@ function createSettingsIntegrationFetchMock(
         requestId: body.requestId,
         status: "written",
         writtenAt: "2026-07-04T01:00:00.000Z"
+      });
+    }
+
+    if (url === "/api/openroad/workspaces/acme/assistant/triage" && method === "POST") {
+      const body = JSON.parse(String(init?.body ?? "{}")) as {
+        requestId: string;
+      };
+
+      if (options.assistantFailureStatus) {
+        return jsonResponse(
+          { error: { message: "Provider failed with sk-test-secret raw response." } },
+          options.assistantFailureStatus
+        );
+      }
+
+      const fallbackReason = options.assistantFallbackReason;
+      return jsonResponse({
+        model: {
+          context: {
+            includedSections: ["selectedRequest", "duplicates"],
+            redactionCount: 1
+          },
+          externalUsed: !fallbackReason,
+          fallbackReason,
+          mode: fallbackReason ? "fallback" : "model",
+          provider: fallbackReason ? "deterministic" : "openai"
+        },
+        requestId: body.requestId,
+        status: "suggested",
+        suggestion: {
+          changelogSuggestion: {
+            privateNotes: "Assistant draft; review before publishing.",
+            publicSummary:
+              "A product update is ready. Review this private draft and write approved public wording before publishing.",
+            reasons: ["Request signal: 18 votes"],
+            requestIds: [body.requestId],
+            roadmapItemIds: [],
+            sourceKey: "manual",
+            sourceType: "Manual",
+            title: "Review request for changelog",
+            workItemIds: []
+          },
+          duplicates: [],
+          summary: {
+            nextAction: fallbackReason
+              ? "Review the local assistant next step."
+              : "Ask maintainers to review the auth setup path.",
+            problem: fallbackReason
+              ? "Local assistant summary is still available."
+              : "Model refined login friction.",
+            signal: "18 votes, 2 comments, 0 merged sources. Tags: auth.",
+            state: "Needs decision / Unassigned / Public"
+          }
+        },
+        workspaceId: "acme"
       });
     }
 

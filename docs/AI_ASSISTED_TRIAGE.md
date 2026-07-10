@@ -10,6 +10,7 @@ OpenRoad's first assistant slice is deterministic, local-first, and review-first
 - Keeps every suggestion inspectable in the selected request inspector.
 - Lets the maintainer pause assistant suggestions for the current browser session.
 - Exposes a private server-side assistant triage endpoint for production deployments.
+- In server-backed deployments, offers compact request-level consent controls for optional model-assisted summary refinement.
 
 ## Production Boundary
 
@@ -21,6 +22,7 @@ OpenRoad's first assistant slice is deterministic, local-first, and review-first
 - Changelog suggestion titles and public wording stay generic until a maintainer writes approved copy.
 - Source request, work, and roadmap descriptions are not copied into changelog public fields.
 - External model calls can happen only through the server-side adapter and only when explicitly requested with context-sharing consent.
+- The browser consent UI sends only the selected request id, `allowExternalModel: true`, and explicit consent booleans to OpenRoad.
 - Model provider API keys, model names, base URLs, raw prompts, raw responses, and provider errors are never returned to browser responses.
 
 ## Human Approval Rule
@@ -59,10 +61,12 @@ A candidate needs a real text signal or multiple non-text signals. A single broa
 
 If `allowExternalModel` is absent or false, OpenRoad returns deterministic suggestions. If external use is requested but consent or provider configuration is missing, OpenRoad still returns deterministic suggestions and records sanitized operational evidence.
 
+The browser assistant panel remains local by default. In server-backed mode, the model action stays disabled until the maintainer checks workspace-context consent. Requester identity is a separate optional checkbox; when it is not checked, requester email/name context remains redacted. Model success and fallback states are shown as short user-facing status text without provider names, raw prompts, raw responses, or raw errors.
+
 When `OPENROAD_AI_PROVIDER=openai`, `OPENROAD_OPENAI_API_KEY`, and `OPENROAD_OPENAI_MODEL` are configured, the server can call the OpenAI Responses API after explicit consent. The code-managed prompt includes bounded selected-request context, duplicate metadata, and linked roadmap/work/changelog relationship signals. It excludes internal and hidden comment bodies, notification outbox bodies, private changelog notes, provider credential material, webhook payloads, and secret-shaped text.
 
 In this foundation slice, model-backed output may refine only `summary.problem` and `summary.nextAction`. Deterministic signal/state, duplicate suggestions, and changelog draft suggestions remain unchanged.
 
 ## Remaining Model Work
 
-Future AI slices still need UI consent controls, per-workspace AI policy settings, hosted account-level AI controls, provider-specific policy review for GitHub/Jira/Linear/support data, model evals, usage dashboards, and optional background jobs.
+Future AI slices still need per-workspace AI policy settings, hosted account-level AI controls, provider-specific policy review for GitHub/Jira/Linear/support data, model evals, usage dashboards, and optional background jobs.

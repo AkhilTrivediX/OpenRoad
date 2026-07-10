@@ -1333,15 +1333,21 @@ dd {
 }
 
 .assistant-summary div {
-  border-left: 2px solid var(--line-strong);
+  border-top: 1px solid var(--line);
   display: grid;
   gap: 3px;
-  padding-left: 8px;
+  padding-top: 8px;
+}
+
+.assistant-summary div:first-child {
+  border-top: 0;
+  padding-top: 0;
 }
 
 .assistant-summary span,
 .assistant-suggestions > strong,
-.assistant-changelog strong {
+.assistant-changelog strong,
+.assistant-consent-field strong {
   font-family: var(--label-font);
 }
 
@@ -1368,10 +1374,15 @@ dd {
 }
 
 .assistant-suggestion {
-  border-left: 2px solid var(--route);
+  border-top: 1px solid var(--line);
   display: grid;
   gap: 4px;
-  padding-left: 8px;
+  padding-top: 8px;
+}
+
+.assistant-suggestion:first-of-type {
+  border-top: 0;
+  padding-top: 0;
 }
 
 .assistant-suggestion span,
@@ -1399,6 +1410,69 @@ dd {
   justify-self: start;
 }
 
+.assistant-model-controls {
+  border-bottom: 1px solid var(--line);
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 8px;
+  padding: 9px 0;
+}
+
+.assistant-model-status {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  margin: 0;
+}
+
+.assistant-model-status.ready {
+  color: var(--signal);
+}
+
+.assistant-model-status.error,
+.assistant-model-status.fallback {
+  color: var(--amber);
+}
+
+.assistant-consent-grid {
+  display: grid;
+  gap: 7px;
+}
+
+.assistant-consent-field {
+  align-items: flex-start;
+  border: 0;
+  margin: 0;
+  min-height: 0;
+  padding: 0;
+}
+
+.assistant-consent-field + .assistant-consent-field {
+  border-top: 1px solid var(--line);
+  padding-top: 7px;
+}
+
+.assistant-consent-field input {
+  margin-top: 2px;
+}
+
+.assistant-consent-field span {
+  display: grid;
+  gap: 2px;
+}
+
+.assistant-consent-field small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.assistant-model-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .assistant-toggle {
   align-items: center;
   color: var(--muted);
@@ -1418,11 +1492,11 @@ dd {
 }
 
 .assistant-paused {
-  border-left: 2px solid var(--line-strong);
+  border-top: 1px solid var(--line);
   color: var(--muted);
   font-size: 12px;
   line-height: 1.45;
-  padding-left: 8px;
+  padding-top: 8px;
 }
 
 .notification-panel .source-history-header small {

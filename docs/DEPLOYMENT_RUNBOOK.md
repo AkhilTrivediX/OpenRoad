@@ -9,6 +9,7 @@ This runbook covers the current production path: one Node process serving the bu
 - Docker Compose stores those files in the `openroad-data` volume at `/data`.
 - `OPENROAD_ADMIN_TOKEN` protects private APIs when configured and can be exchanged for an httpOnly owner browser session.
 - Valid invitation tokens can be exchanged for httpOnly member browser sessions scoped to the invited workspace and role.
+- Existing team users can set an account password and return through an httpOnly member browser session scoped to one workspace membership.
 - Invitation delivery is disabled by default; file mode appends raw-token invite handoff records to an operator-controlled JSONL file.
 - The public portal API remains unauthenticated and returns only public data.
 - Backups contain product, requester, integration, team, membership, and audit data; store them like production data.
@@ -99,7 +100,7 @@ $env:OPENROAD_TRUST_PROXY_HEADERS="false"
 $env:PORT="4173"
 ```
 
-Do not expose `OPENROAD_ADMIN_TOKEN` to browser JavaScript beyond the one-time owner login request. In admin-token mode the browser app shows an owner/member sign-in surface: owners submit the admin token to the same-origin server, and invited members submit their invitation token for a scoped session. OpenRoad stores only hashed session-token material in `OPENROAD_SESSION_FILE`; deleting that file signs out owner and member browser sessions without touching product data.
+Do not expose `OPENROAD_ADMIN_TOKEN` to browser JavaScript beyond the one-time owner login request. In admin-token mode the browser app shows an owner/member sign-in surface: owners submit the admin token to the same-origin server, invited members submit invitation tokens for first access, and existing team users can sign in with email/password after setting an account password. OpenRoad stores only hashed session-token material in `OPENROAD_SESSION_FILE`; deleting that file signs out owner and member browser sessions without touching product data.
 
 Treat `OPENROAD_INVITATION_DELIVERY_FILE` as sensitive when invitation delivery file mode is enabled. The file contains raw invitation accept tokens and links for external mail/helpdesk workers. It is not included in OpenRoad backups and should be rotated, shipped, or deleted according to your operations policy.
 
@@ -139,7 +140,7 @@ The first local owner is seeded from:
 - `OPENROAD_OWNER_EMAIL`
 - `OPENROAD_OWNER_NAME`
 
-Changing these values later does not rewrite existing team metadata. To change the owner after metadata exists, use the invitation APIs to add durable workspace members, update the team metadata through a future admin UI, or intentionally restore edited metadata from backup. Until browser account login exists, treat the first bootstrap as an operator decision.
+Changing these values later does not rewrite existing team metadata. To change the owner after metadata exists, use the invitation APIs to add durable workspace members, update the team metadata through a future admin UI, or intentionally restore edited metadata from backup. Account password login applies to existing team users; it does not rewrite the seeded owner identity.
 
 ## Operational Commands
 
@@ -184,7 +185,7 @@ The backup directory contains:
 - `openroad-team.json`
 - `manifest.json`
 
-The manifest records creation time, app package version, source paths, file sizes, and schema versions. Backups are not encrypted by OpenRoad tooling; use your host, storage, or secret-management system to protect them. When provider credentials exist, `openroad-integrations.json` contains encrypted token material and must be treated as sensitive. `openroad-sessions.json` stores session and admin-token hashes, not raw tokens, but should still be treated as operationally sensitive. `openroad-team.json` stores invitation token hashes, membership data, and audit events.
+The manifest records creation time, app package version, source paths, file sizes, and schema versions. Backups are not encrypted by OpenRoad tooling; use your host, storage, or secret-management system to protect them. When provider credentials exist, `openroad-integrations.json` contains encrypted token material and must be treated as sensitive. `openroad-sessions.json` stores session and admin-token hashes, not raw tokens, but should still be treated as operationally sensitive. `openroad-team.json` stores invitation token hashes, account password hashes/salts, membership data, and audit events.
 
 ## Data Schema Notes
 
@@ -194,7 +195,7 @@ Integration metadata schema `3` stores server-only encrypted provider credential
 
 Session metadata schema `2` stores actor-aware owner and workspace-member browser session records in `openroad-sessions.json`. Owner records remain bound to the active admin-token hash; member records store the workspace-member actor and do not store admin-token material. Records contain hashes, ids, timestamps, and bounded client metadata only. Schema `1` owner-session files migrate automatically on load. Deleting this file signs out browsers without changing OpenRoad product data.
 
-Team metadata schema `3` stores users, memberships, audit events, invitations, and bounded invitation delivery status metadata in `openroad-team.json`. Invitation records store hashed accept tokens only. Restoring a pre-schema-2 team file automatically migrates invitations to an empty list; restoring a schema `2` team file automatically adds the schema `3` boundary with no delivery metadata until a delivery attempt occurs. Rolling back across this schema should preserve a backup first; reverting to a build that only understands schema `1` or `2` requires restoring the previous team metadata backup or intentionally discarding newer invitation delivery metadata.
+Team metadata schema `4` stores users, memberships, audit events, invitations, bounded invitation delivery status metadata, and account password credential records in `openroad-team.json`. Invitation records store hashed accept tokens only. Account credential records store algorithm, salt, hash, user id, and timestamps only; raw passwords are not stored. Restoring a pre-schema-2 team file automatically migrates invitations to an empty list; restoring schema `2` or `3` team files automatically adds missing delivery/credential collections. Rolling back across this schema should preserve a backup first; reverting to a build that only understands schema `1`, `2`, or `3` requires restoring the previous team metadata backup or intentionally discarding newer invitation delivery metadata and account credentials.
 
 ## Provider Token Storage
 
@@ -244,6 +245,34 @@ Invoke-RestMethod `
 The file adapter appends one JSONL record with the invitee email/name, role, workspace id/name, expiration, subject/body, raw accept token, and accept URL. OpenRoad stores only delivery status metadata in `openroad-team.json`; raw invitation tokens stay out of team metadata, list APIs, audit events, and backups. The app reads `?invite=<token>` links and pre-fills the member join form, then removes the token from browser history.
 
 The JSONL handoff does not send SMTP, SES, SendGrid, Mailgun, Slack, or provider messages by itself.
+
+## Account Password Login
+
+Account passwords are available only for existing team users. A teammate first joins by invitation or already exists in team metadata, then sets a password from the authenticated Settings access panel. The server stores only salted password hashes in `openroad-team.json`.
+
+API clients can use the same boundary:
+
+```powershell
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://127.0.0.1:4173/api/openroad/account/password" `
+  -WebSession $session `
+  -ContentType "application/json" `
+  -Body '{"password":"replace-with-long-user-password"}'
+```
+
+After a password exists, the user can create a scoped member session:
+
+```powershell
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://127.0.0.1:4173/api/openroad/auth/password/login" `
+  -SessionVariable session `
+  -ContentType "application/json" `
+  -Body '{"email":"teammate@example.com","password":"replace-with-long-user-password","workspaceId":"acme"}'
+```
+
+`workspaceId` is optional for users with exactly one active membership and required when the same account belongs to multiple workspaces. Account passwords do not create users, verify email ownership, reset forgotten passwords, or grant access beyond the user's persisted workspace memberships.
 
 ## Requester Notification Delivery
 
@@ -335,6 +364,8 @@ For local single-user mode without `OPENROAD_ADMIN_TOKEN`, omit `--admin-token`;
 - `POST /api/openroad/workspaces/acme/invitations` should require owner/admin permission and return a one-time accept token only on creation.
 - With `OPENROAD_INVITATION_DELIVERY_MODE=file`, invitation creation should append one sensitive JSONL delivery record and return delivery status metadata.
 - `POST /api/openroad/invitations/accept` should accept a valid pending invitation token without returning private workspace state.
+- `POST /api/openroad/account/password` should require an authenticated owner/member session and store only hashed credential metadata.
+- `POST /api/openroad/auth/password/login` should create a scoped member session for a valid existing team user and reject wrong passwords without echoing submitted values.
 
 ## Security Notes
 
@@ -349,7 +380,7 @@ For local single-user mode without `OPENROAD_ADMIN_TOKEN`, omit `--admin-token`;
 
 ## Current Limits
 
-- Owner browser sessions for admin-token self-hosting, backend invitation APIs, invitation UI, member invite sessions, and JSONL invitation delivery handoff are implemented; direct SMTP/provider invitation sending, password auth, OAuth account login, account recovery, and hosted account management are not implemented.
+- Owner browser sessions for admin-token self-hosting, backend invitation APIs, invitation UI, member invite sessions, JSONL invitation delivery handoff, and account password login for existing team users are implemented; direct SMTP/provider invitation sending, OAuth login, email verification, account recovery, MFA/passkeys, SSO, and hosted account management are not implemented.
 - Team metadata is file-backed, not managed SQL.
 - Trusted proxy headers are disabled by default.
 - Payload-backed GitHub issue import, GitHub App installation verification, live issue fetch, signed webhooks, safe disconnect APIs, encrypted server-only provider credential storage, provider-neutral background sync job metadata, GitHub/Linear/Jira workers for already-linked issue mappings, payload-backed Linear issue import, payload-backed Jira issue import, requester notification outbox/preferences, and a server-side JSONL notification delivery handoff exist; OAuth callback exchange, Linear/Jira webhooks, provider write-back, direct email/provider notification delivery, conflict UI, and billing are not implemented.

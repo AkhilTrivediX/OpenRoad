@@ -42,6 +42,15 @@ type InvitationSessionResponse = {
   status: string;
 };
 
+type AccountPasswordLoginResponse = {
+  authenticated: boolean;
+  status: string;
+};
+
+type AccountPasswordSetResponse = {
+  status: string;
+};
+
 type ServerWorkspaceListResponse = {
   workspaces?: Array<{ id?: string }>;
 };
@@ -165,6 +174,32 @@ export async function acceptOpenRoadInvitationSession(token: string, name = "") 
     method: "POST"
   });
   return (await readJsonResponse(response)) as InvitationSessionResponse;
+}
+
+export async function loginOpenRoadAccount(email: string, password: string, workspaceId = "") {
+  const response = await fetch("/api/openroad/auth/password/login", {
+    body: JSON.stringify({ email, password, ...(workspaceId ? { workspaceId } : {}) }),
+    credentials: "same-origin",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json"
+    },
+    method: "POST"
+  });
+  return (await readJsonResponse(response)) as AccountPasswordLoginResponse;
+}
+
+export async function setOpenRoadAccountPassword(password: string, currentPassword = "") {
+  const response = await fetch("/api/openroad/account/password", {
+    body: JSON.stringify({ password, ...(currentPassword ? { currentPassword } : {}) }),
+    credentials: "same-origin",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json"
+    },
+    method: "POST"
+  });
+  return (await readJsonResponse(response)) as AccountPasswordSetResponse;
 }
 
 export async function saveServerOpenRoadState(state: OpenRoadState) {

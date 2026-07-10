@@ -797,6 +797,139 @@ describe("OpenRoad production server", () => {
     expect(persistedTeam).not.toContain(contributorToken);
   });
 
+  it("sets account passwords and creates scoped member sessions from password login", async () => {
+    const { sessionFile, teamFile, url } = await startTestServer({
+      auth: { adminToken: "secret", singleUserMode: false, trustProxyHeaders: true }
+    });
+    const invite = await fetchJson(`${url}/api/openroad/workspaces/acme/invitations`, {
+      body: JSON.stringify({ email: "account@example.com", name: "Account User", role: "Contributor" }),
+      headers: {
+        ...workspaceActorHeaders("acme", "Owner"),
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    const invitationSession = await fetchJson(`${url}/api/openroad/invitations/session`, {
+      body: JSON.stringify({ name: "Account User", token: invite.body.acceptToken }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const invitationCookie = cookiePair(invitationSession.headers.get("set-cookie") ?? "");
+
+    const deniedSet = await fetchJson(`${url}/api/openroad/account/password`, {
+      body: JSON.stringify({ password: "member password value" }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const passwordSet = await fetchJson(`${url}/api/openroad/account/password`, {
+      body: JSON.stringify({ password: "member password value" }),
+      headers: { Cookie: invitationCookie, "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const wrongPassword = await fetchJson(`${url}/api/openroad/auth/password/login`, {
+      body: JSON.stringify({ email: "account@example.com", password: "wrong password value" }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const passwordLogin = await fetchJson(`${url}/api/openroad/auth/password/login`, {
+      body: JSON.stringify({ email: "ACCOUNT@example.com", password: "member password value" }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const passwordCookie = cookiePair(passwordLogin.headers.get("set-cookie") ?? "");
+    const fullState = await fetchJson(`${url}/api/openroad/state`, {
+      headers: { Cookie: passwordCookie }
+    });
+    const ownWorkspace = await fetchJson(`${url}/api/openroad/workspaces/acme`, {
+      headers: { Cookie: passwordCookie }
+    });
+    const createdRequest = await fetchJson(`${url}/api/openroad/workspaces/acme/actions`, {
+      body: JSON.stringify({
+        action: {
+          request: {
+            ...createInitialOpenRoadState().workspaces[0].requests[0],
+            id: "password-login-request",
+            title: "Password login request"
+          },
+          type: "create-request",
+          workspaceId: "acme"
+        }
+      }),
+      headers: { Cookie: passwordCookie, "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const persistedTeam = await readFile(teamFile, "utf8");
+    const persistedSessions = await readFile(sessionFile, "utf8");
+
+    expect(deniedSet.status).toBe(403);
+    expect(passwordSet.status).toBe(200);
+    expect(passwordSet.body).toMatchObject({
+      credential: { userId: "user-account@example.com" },
+      status: "password_set",
+      user: { email: "account@example.com" }
+    });
+    expect(JSON.stringify(passwordSet.body)).not.toContain("passwordHash");
+    expect(wrongPassword.status).toBe(400);
+    expect(wrongPassword.body.error.message).toBe("Email or password is invalid.");
+    expect(passwordLogin.status).toBe(200);
+    expect(passwordLogin.headers.get("set-cookie")).toContain("HttpOnly");
+    expect(passwordLogin.body).toMatchObject({
+      actor: {
+        role: "Contributor",
+        type: "workspace-member",
+        workspaceId: "acme"
+      },
+      authenticated: true,
+      status: "authenticated",
+      user: { email: "account@example.com" }
+    });
+    expect(fullState.status).toBe(403);
+    expect(ownWorkspace.status).toBe(200);
+    expect(createdRequest.status).toBe(200);
+    expect(persistedTeam).toContain('"credentials"');
+    expect(persistedTeam).not.toContain("member password value");
+    expect(persistedSessions).not.toContain("member password value");
+  });
+
+  it("requires a workspace for password login when the account has multiple memberships", async () => {
+    const { url } = await startTestServer({
+      auth: { adminToken: "secret", singleUserMode: false }
+    });
+
+    const setOwnerPassword = await fetchJson(`${url}/api/openroad/account/password`, {
+      body: JSON.stringify({ password: "owner password value" }),
+      headers: {
+        Authorization: "Bearer secret",
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    const ambiguous = await fetchJson(`${url}/api/openroad/auth/password/login`, {
+      body: JSON.stringify({ email: "owner@openroad.local", password: "owner password value" }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const scoped = await fetchJson(`${url}/api/openroad/auth/password/login`, {
+      body: JSON.stringify({
+        email: "owner@openroad.local",
+        password: "owner password value",
+        workspaceId: "maintainer"
+      }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+
+    expect(setOwnerPassword.status).toBe(200);
+    expect(ambiguous.status).toBe(400);
+    expect(ambiguous.body.error.message).toBe("Workspace id is required for this account.");
+    expect(scoped.status).toBe(200);
+    expect(scoped.body.actor).toMatchObject({
+      role: "Owner",
+      type: "workspace-member",
+      workspaceId: "maintainer"
+    });
+  });
+
   it("prevents viewer member sessions from writing workspace data", async () => {
     const { url } = await startTestServer({
       auth: { adminToken: "secret", singleUserMode: false, trustProxyHeaders: true }

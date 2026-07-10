@@ -6,8 +6,10 @@ import {
   acceptOpenRoadInvitationSession,
   loadServerOpenRoadSession,
   loadServerOpenRoadState,
+  loginOpenRoadAccount,
   loginOpenRoadOwner,
-  saveServerOpenRoadState
+  saveServerOpenRoadState,
+  setOpenRoadAccountPassword
 } from "./openroadServer";
 
 describe("server OpenRoad persistence", () => {
@@ -185,6 +187,50 @@ describe("server OpenRoad persistence", () => {
         method: "POST"
       })
     );
+  });
+
+  it("logs in account passwords and sets account passwords with same-origin credentials", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ authenticated: true, status: "authenticated" }))
+      .mockResolvedValueOnce(jsonResponse({ status: "password_set" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const login = await loginOpenRoadAccount("member@example.com", "member password value", "acme");
+    const passwordSet = await setOpenRoadAccountPassword(
+      "member password value next",
+      "member password value"
+    );
+
+    expect(login.authenticated).toBe(true);
+    expect(passwordSet.status).toBe("password_set");
+    const loginInit = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    const passwordSetInit = fetchMock.mock.calls[1]?.[1] as RequestInit;
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/openroad/auth/password/login",
+      expect.objectContaining({
+        credentials: "same-origin",
+        method: "POST"
+      })
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/openroad/account/password",
+      expect.objectContaining({
+        credentials: "same-origin",
+        method: "POST"
+      })
+    );
+    expect(JSON.parse(String(loginInit.body))).toEqual({
+      email: "member@example.com",
+      password: "member password value",
+      workspaceId: "acme"
+    });
+    expect(JSON.parse(String(passwordSetInit.body))).toEqual({
+      currentPassword: "member password value",
+      password: "member password value next"
+    });
   });
 
   it("saves server state with same-origin credentials", async () => {

@@ -51,6 +51,7 @@ When `OPENROAD_ADMIN_TOKEN` is configured:
 - `POST /api/openroad/auth/login` can exchange the admin token for an httpOnly owner session cookie.
 - Browser calls may use the owner session cookie instead of an `Authorization` header.
 - `POST /api/openroad/invitations/session` can exchange a valid pending invitation token for an httpOnly member session cookie scoped to the invited workspace and role.
+- `POST /api/openroad/auth/password/login` can exchange an existing team user's email/password credential for an httpOnly member session cookie scoped to one of that user's persisted workspace memberships.
 - Owner/admin actions such as `replace-state`, `replace-workspace`, and `create-workspace` require owner/admin permission.
 - Workspace-member sessions can use workspace-scoped read/write APIs according to role, but cannot use full-state APIs.
 - Public portal endpoints remain public.
@@ -68,6 +69,10 @@ Owner sessions are stored outside core product state in `OPENROAD_SESSION_FILE`,
 Invitation session acceptance is public only because the invitation token is the bearer secret. `POST /api/openroad/invitations/session` accepts a valid pending token, creates or reuses the invited team user and workspace membership, marks the invitation accepted, creates an httpOnly session cookie, and returns only sanitized actor, membership, invitation, and user metadata. It must not return the raw invitation token, session cookie value, session token hash, admin token, private workspace state, or cross-workspace membership data.
 
 Member sessions resolve as `workspace-member` actors. They can read `GET /api/openroad/workspaces`, read `GET /api/openroad/workspaces/:workspaceId` for allowed workspaces, and write workspace-scoped actions or `PUT /api/openroad/workspaces/:workspaceId` when their role grants `workspace:write`. They cannot read or write `/api/openroad/state`, create global workspaces, manage provider credentials, manage invitations unless their role grants owner-level integration management, or access another workspace.
+
+### Account Password Sessions
+
+Account passwords are credentials for existing team users only. `POST /api/openroad/account/password` requires an authenticated local-owner or workspace-member session and stores a per-user salted password hash in `OPENROAD_TEAM_FILE`; it must not store or return raw passwords. `POST /api/openroad/auth/password/login` is public because the email/password pair is the bearer secret; successful login creates the same httpOnly workspace-member session type used by invitation sessions. If a user belongs to multiple workspaces, the login request must include a workspace id and can only select an existing membership for that user.
 
 ### Trusted Proxy Headers
 
@@ -91,6 +96,7 @@ These headers are for future auth proxy/session integration and tests. Do not en
 - `GET /api/openroad/session`
 - `POST /api/openroad/auth/login`
 - `POST /api/openroad/auth/logout`
+- `POST /api/openroad/auth/password/login`
 - `POST /api/openroad/invitations/accept`
 - `POST /api/openroad/invitations/session`
 - `GET /api/openroad/workspaces/:workspaceId/portal`
@@ -101,6 +107,8 @@ Public portal responses use the OpenRoad public projection and must not include 
 
 Session/auth routes return only current actor, login-required flags, safe auth capability metadata, and bounded session status. They must not return admin tokens, bearer tokens, session cookie values, session token hashes, provider tokens, encrypted credentials, or private OpenRoad state.
 
+Password login must reject malformed input, unknown users, wrong passwords, and invalid workspace selection with bounded errors that do not echo submitted secrets. It returns only sanitized session status and never returns password hashes, salts, raw passwords, full team metadata, or private multi-workspace state.
+
 API-only invitation acceptance remains available at `POST /api/openroad/invitations/accept`. It accepts a valid pending token and creates or reuses the invited team user and workspace membership without creating a browser session. Browser invitation acceptance uses `POST /api/openroad/invitations/session` and creates the scoped member session described above. Both endpoints must reject accepted, revoked, expired, malformed, or wrong tokens with generic invalid request errors and must not expose token hashes.
 
 ## Private Routes
@@ -108,6 +116,7 @@ API-only invitation acceptance remains available at `POST /api/openroad/invitati
 - `GET /api/openroad/state`
 - `PUT /api/openroad/state`
 - `POST /api/openroad/actions`
+- `POST /api/openroad/account/password`
 - `GET /api/openroad/workspaces`
 - `GET /api/openroad/workspaces/:workspaceId`
 - `PUT /api/openroad/workspaces/:workspaceId`
@@ -160,7 +169,9 @@ Provider credential create/list/revoke routes require `integration:manage`, whic
 
 Integration sync job enqueue routes require `integration:manage`, which is reserved for local owners/admins and workspace owners. Jobs must be scoped to an active installation in the same workspace and provider. Responses return sanitized job metadata and never return provider tokens, encrypted credentials, raw provider payloads, webhook signatures, request headers, or request bodies. Concurrent integration metadata writes are serialized inside one Node process while OpenRoad uses file-backed stores.
 
-Invitation management routes require `integration:manage`, which is reserved for local owners/admins and workspace owners. Creating an invitation returns the raw accept token exactly once and stores only a hash in `OPENROAD_TEAM_FILE` team metadata schema `3`. When `OPENROAD_INVITATION_DELIVERY_MODE=file` is configured, creation also writes a server-side JSONL delivery handoff record containing the raw accept token and accept URL for an external mail/helpdesk worker. List, revoke, accept, session, audit, backup, and ops responses must not return invitation token hashes or raw accept tokens after creation. Direct SMTP/provider invitation sending, password login, OAuth login, account recovery, and deeper member-management UI remain out of scope for this slice.
+Invitation management routes require `integration:manage`, which is reserved for local owners/admins and workspace owners. Creating an invitation returns the raw accept token exactly once and stores only a hash in `OPENROAD_TEAM_FILE`; invitation records were introduced in team metadata schema `2`, delivery metadata in schema `3`, and account credentials in schema `4`. When `OPENROAD_INVITATION_DELIVERY_MODE=file` is configured, creation also writes a server-side JSONL delivery handoff record containing the raw accept token and accept URL for an external mail/helpdesk worker. List, revoke, accept, session, audit, and ops API responses must not return invitation token hashes or raw accept tokens after creation. Team backups are sensitive restorable snapshots and may contain token hashes, but never raw accept tokens. Direct SMTP/provider invitation sending, OAuth login, account recovery, and deeper member-management UI remain out of scope for this slice.
+
+Account password routes require an existing team identity. `POST /api/openroad/account/password` can set an initial password for the authenticated actor's team user and requires the current password for subsequent member changes. Local owners may bootstrap their own credential from an owner session without a previous password. Credential records in team metadata schema `4` store only algorithm, salt, hash, user id, and timestamps; they must not contain raw passwords, invitation tokens, session tokens, admin tokens, provider tokens, or external authorization material.
 
 ## Provider-Signature Routes
 

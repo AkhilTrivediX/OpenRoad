@@ -531,8 +531,18 @@ async function handleApiRequest(
     return;
   }
 
+  if (requestUrl.pathname === "/api/openroad/auth/password/login") {
+    await handlePasswordLoginRequest(request, response, store, access, auth, sessionStore, teamStore);
+    return;
+  }
+
   if (requestUrl.pathname === "/api/openroad/auth/logout") {
     await handleLogoutRequest(request, response, store, access, auth, sessionStore, teamStore);
+    return;
+  }
+
+  if (requestUrl.pathname === "/api/openroad/account/password") {
+    await handleAccountPasswordRequest(request, response, store, access, teamStore);
     return;
   }
 
@@ -1130,6 +1140,145 @@ async function handleLoginRequest(
           auth
         )
       }
+    );
+  } catch (error) {
+    writeKnownApiError(response, error, access);
+  }
+}
+
+async function handlePasswordLoginRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  store: OpenRoadStore,
+  access: AccessContext,
+  auth: AuthOptions | undefined,
+  sessionStore: SessionStore | undefined,
+  teamStore: TeamStore | undefined
+) {
+  if (request.method !== "POST") {
+    writeApiError(response, 405, "invalid_method", "This endpoint only supports POST.", access);
+    return;
+  }
+
+  if (!teamStore) {
+    writeKnownApiError(
+      response,
+      new ApiRequestError("not_configured", 503, "OpenRoad team metadata store is not configured."),
+      access
+    );
+    return;
+  }
+
+  if (!sessionStore) {
+    writeKnownApiError(
+      response,
+      new ApiRequestError("not_configured", 503, "OpenRoad session storage is not configured."),
+      access
+    );
+    return;
+  }
+
+  try {
+    const payload = await readJsonBody(request, 8192);
+    const loginPayload = getPasswordLoginPayload(payload);
+    const current = await store.load();
+    const result = await teamStore.authenticateAccountPassword(current.state, loginPayload);
+    const memberActor: AccessContext["actor"] = {
+      id: result.user.id,
+      role: result.membership.role,
+      type: "workspace-member",
+      workspaceId: result.membership.workspaceId
+    };
+    const session = await sessionStore.createMemberSession({
+      actor: memberActor,
+      ipAddress: request.socket.remoteAddress,
+      userAgent: getSingleHeader(request.headers, "user-agent")
+    });
+    const memberAccess: AccessContext = {
+      ...access,
+      actor: memberActor
+    };
+
+    await recordAuditEvent(teamStore, current.state, memberAccess, {
+      summary: `Created an account password session for ${result.user.email}.`,
+      type: "auth.password.login",
+      workspaceId: result.membership.workspaceId
+    });
+
+    writeJson(
+      response,
+      200,
+      {
+        actor: sanitizeActor(session.session.actor),
+        authenticated: true,
+        expiresAt: session.session.expiresAt,
+        membership: sanitizeMembership(result.membership),
+        status: "authenticated",
+        user: sanitizeTeamUser(result.user)
+      },
+      memberAccess,
+      {
+        "Set-Cookie": createSessionCookie(
+          session.cookieValue,
+          session.maxAgeSeconds,
+          request,
+          auth
+        )
+      }
+    );
+  } catch (error) {
+    writeKnownApiError(response, error, access);
+  }
+}
+
+async function handleAccountPasswordRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  store: OpenRoadStore,
+  access: AccessContext,
+  teamStore: TeamStore | undefined
+) {
+  if (request.method !== "POST") {
+    writeApiError(response, 405, "invalid_method", "This endpoint only supports POST.", access);
+    return;
+  }
+
+  if (!teamStore) {
+    writeKnownApiError(
+      response,
+      new ApiRequestError("not_configured", 503, "OpenRoad team metadata store is not configured."),
+      access
+    );
+    return;
+  }
+
+  try {
+    const userId = getAccountPasswordActorUserId(access);
+    const payload = await readJsonBody(request, 8192);
+    const passwordPayload = getAccountPasswordPayload(payload);
+    const current = await store.load();
+    const result = await teamStore.setAccountPassword(current.state, {
+      currentPassword: passwordPayload.currentPassword,
+      password: passwordPayload.password,
+      requireCurrentPassword: access.actor.type === "local-owner" ? false : undefined,
+      userId
+    });
+
+    await recordAuditEvent(teamStore, current.state, access, {
+      summary: `Updated account password for ${result.user.email}.`,
+      type: "auth.password.set",
+      workspaceId: access.actor.type === "workspace-member" ? access.actor.workspaceId : undefined
+    });
+
+    writeJson(
+      response,
+      200,
+      {
+        credential: result.credential,
+        status: "password_set",
+        user: sanitizeTeamUser(result.user)
+      },
+      access
     );
   } catch (error) {
     writeKnownApiError(response, error, access);
@@ -5763,6 +5912,46 @@ function getAdminTokenLoginPayload(payload: unknown) {
   return adminToken;
 }
 
+function getPasswordLoginPayload(payload: unknown) {
+  if (!isRecord(payload)) {
+    throw new ApiRequestError("invalid_request", 400, "Password login payload must be an object.");
+  }
+
+  const email = getBoundedText(payload.email, 254);
+  const password = getPasswordText(payload.password);
+  if (!email || !password) {
+    throw new ApiRequestError("invalid_request", 400, "Email and password are required.");
+  }
+
+  return {
+    email,
+    password,
+    workspaceId: getBoundedText(payload.workspaceId, 160)
+  };
+}
+
+function getAccountPasswordPayload(payload: unknown) {
+  if (!isRecord(payload)) {
+    throw new ApiRequestError("invalid_request", 400, "Account password payload must be an object.");
+  }
+
+  const password = getPasswordText(payload.password);
+  if (!password) {
+    throw new ApiRequestError("invalid_request", 400, "Password is required.");
+  }
+
+  return {
+    currentPassword: getPasswordText(payload.currentPassword),
+    password
+  };
+}
+
+function getAccountPasswordActorUserId(access: AccessContext) {
+  if (access.actor.type === "local-owner") return "local-owner";
+  if (access.actor.type === "workspace-member") return access.actor.id;
+  throw new AccessDeniedError("Account password updates require an authenticated OpenRoad user.");
+}
+
 function getInvitationCreatePayload(payload: unknown) {
   if (!isRecord(payload)) {
     throw new ApiRequestError("invalid_request", 400, "Invitation payload must be an object.");
@@ -5917,6 +6106,11 @@ function getBoundedText(value: unknown, maxLength: number) {
   const normalized = value.trim();
   if (!normalized) return undefined;
   return normalized.slice(0, maxLength);
+}
+
+function getPasswordText(value: unknown) {
+  if (typeof value !== "string" || value.length === 0) return undefined;
+  return value.slice(0, 256);
 }
 
 function safeExternalErrorMessage(error: unknown, fallback: string) {

@@ -1,15 +1,19 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, randomUUID, scrypt as scryptCallback, timingSafeEqual } from "node:crypto";
 import { dirname, resolve } from "node:path";
+import { promisify } from "node:util";
 
 import type { OpenRoadState } from "../src/domain/openroad.js";
 import type { OpenRoadActor, WorkspaceRole } from "./access.js";
 
-export const openRoadTeamSchemaVersion = 3;
+export const openRoadTeamSchemaVersion = 4;
 
+const teamSchemaVersionWithInvitationDelivery = 3;
 const teamSchemaVersionWithInvitations = 2;
 const teamSchemaVersionWithoutInvitations = 1;
 const defaultInvitationTtlMs = 1000 * 60 * 60 * 24 * 14;
+const accountPasswordAlgorithm = "scrypt-v1";
+const scryptAsync = promisify(scryptCallback);
 
 export type TeamUser = {
   createdAt: string;
@@ -24,6 +28,22 @@ export type WorkspaceMembership = {
   role: WorkspaceRole;
   userId: string;
   workspaceId: string;
+};
+
+export type TeamAccountCredential = {
+  algorithm: typeof accountPasswordAlgorithm;
+  createdAt: string;
+  id: string;
+  passwordHash: string;
+  salt: string;
+  updatedAt: string;
+  userId: string;
+};
+
+export type TeamAccountCredentialSummary = {
+  createdAt: string;
+  updatedAt: string;
+  userId: string;
 };
 
 export type TeamInvitationStatus = "accepted" | "expired" | "pending" | "revoked";
@@ -67,6 +87,7 @@ export type AuditEvent = {
 
 export type TeamState = {
   auditEvents: AuditEvent[];
+  credentials: TeamAccountCredential[];
   invitations: TeamInvitation[];
   memberships: WorkspaceMembership[];
   schemaVersion: typeof openRoadTeamSchemaVersion;
@@ -117,6 +138,19 @@ export type RecordTeamInvitationDeliveryInput = {
   workspaceId: string;
 };
 
+export type SetAccountPasswordInput = {
+  currentPassword?: string;
+  password: string;
+  requireCurrentPassword?: boolean;
+  userId: string;
+};
+
+export type AuthenticateAccountPasswordInput = {
+  email: string;
+  password: string;
+  workspaceId?: string;
+};
+
 export type CreateTeamInvitationResult = {
   acceptToken: string;
   invitation: TeamInvitationSummary;
@@ -130,11 +164,25 @@ export type AcceptTeamInvitationResult = {
   user: TeamUser;
 };
 
+export type SetAccountPasswordResult = {
+  credential: TeamAccountCredentialSummary;
+  user: TeamUser;
+};
+
+export type AuthenticateAccountPasswordResult = {
+  membership: WorkspaceMembership;
+  user: TeamUser;
+};
+
 export type TeamStore = {
   acceptInvitation(
     openRoadState: OpenRoadState,
     input: AcceptTeamInvitationInput
   ): Promise<AcceptTeamInvitationResult>;
+  authenticateAccountPassword(
+    openRoadState: OpenRoadState,
+    input: AuthenticateAccountPasswordInput
+  ): Promise<AuthenticateAccountPasswordResult>;
   createInvitation(
     openRoadState: OpenRoadState,
     input: CreateTeamInvitationInput
@@ -156,6 +204,10 @@ export type TeamStore = {
     openRoadState: OpenRoadState,
     input: RevokeTeamInvitationInput
   ): Promise<TeamInvitationSummary>;
+  setAccountPassword(
+    openRoadState: OpenRoadState,
+    input: SetAccountPasswordInput
+  ): Promise<SetAccountPasswordResult>;
 };
 
 export class TeamStoreError extends Error {
@@ -271,6 +323,101 @@ export class FileTeamStore implements TeamStore {
       acceptToken,
       invitation: summarizeInvitation(invitation, now)
     };
+  }
+
+  async setAccountPassword(
+    openRoadState: OpenRoadState,
+    input: SetAccountPasswordInput
+  ): Promise<SetAccountPasswordResult> {
+    const result = await this.load(openRoadState);
+    const now = new Date().toISOString();
+    const user = result.state.users.find((item) => item.id === input.userId);
+    if (!user) {
+      throw new TeamStoreError("not_found", "OpenRoad user was not found.");
+    }
+
+    const password = normalizeAccountPassword(input.password);
+    const existingCredential = result.state.credentials.find(
+      (credential) => credential.userId === user.id
+    );
+
+    const shouldRequireCurrentPassword =
+      Boolean(existingCredential) && input.requireCurrentPassword !== false;
+
+    if (shouldRequireCurrentPassword) {
+      let currentPassword: string;
+      try {
+        currentPassword = normalizeAccountPassword(input.currentPassword);
+      } catch {
+        throw new TeamStoreError("invalid_request", "Current password is invalid.");
+      }
+
+      if (!existingCredential) {
+        throw new TeamStoreError("invalid_request", "Current password is invalid.");
+      }
+
+      if (!(await verifyAccountPassword(currentPassword, existingCredential))) {
+        throw new TeamStoreError("invalid_request", "Current password is invalid.");
+      }
+    }
+
+    const hashed = await createAccountCredential({
+      createdAt: existingCredential?.createdAt ?? now,
+      id: existingCredential?.id ?? `credential-${randomUUID()}`,
+      password,
+      updatedAt: now,
+      userId: user.id
+    });
+    const credentials = existingCredential
+      ? result.state.credentials.map((credential) =>
+          credential.id === existingCredential.id ? hashed : credential
+        )
+      : [hashed, ...result.state.credentials];
+
+    await this.writeState({ ...result.state, credentials });
+    return {
+      credential: summarizeAccountCredential(hashed),
+      user
+    };
+  }
+
+  async authenticateAccountPassword(
+    openRoadState: OpenRoadState,
+    input: AuthenticateAccountPasswordInput
+  ): Promise<AuthenticateAccountPasswordResult> {
+    const result = await this.load(openRoadState);
+    const email = normalizeEmail(input.email);
+    const password = normalizeAccountPassword(input.password);
+    const user = result.state.users.find((item) => item.email.toLowerCase() === email);
+    const credential = user
+      ? result.state.credentials.find((item) => item.userId === user.id)
+      : undefined;
+
+    if (!user || !credential || !(await verifyAccountPassword(password, credential))) {
+      throw new TeamStoreError("invalid_request", "Email or password is invalid.");
+    }
+
+    const activeMemberships = result.state.memberships.filter(
+      (membership) =>
+        membership.userId === user.id &&
+        openRoadState.workspaces.some((workspace) => workspace.id === membership.workspaceId)
+    );
+    const membership = input.workspaceId
+      ? activeMemberships.find((item) => item.workspaceId === input.workspaceId)
+      : activeMemberships.length === 1
+        ? activeMemberships[0]
+        : undefined;
+
+    if (!membership) {
+      throw new TeamStoreError(
+        "invalid_request",
+        activeMemberships.length > 1
+          ? "Workspace id is required for this account."
+          : "Email or password is invalid."
+      );
+    }
+
+    return { membership, user };
   }
 
   async listInvitations(openRoadState: OpenRoadState, workspaceId: string) {
@@ -455,6 +602,7 @@ export function createInitialTeamState(
 
   return {
     auditEvents: [],
+    credentials: [],
     invitations: [],
     memberships: openRoadState.workspaces.map((workspace) => ({
       createdAt: "seed",
@@ -488,8 +636,13 @@ export function parseTeamState(value: unknown): TeamState {
     return migrateTeamStateV2(value);
   }
 
+  if (value.schemaVersion === teamSchemaVersionWithInvitationDelivery) {
+    return migrateTeamStateV3(value);
+  }
+
   if (
     value.schemaVersion !== openRoadTeamSchemaVersion ||
+    !Array.isArray(value.credentials) ||
     !Array.isArray(value.users) ||
     !Array.isArray(value.memberships) ||
     !Array.isArray(value.auditEvents) ||
@@ -499,6 +652,7 @@ export function parseTeamState(value: unknown): TeamState {
   }
 
   if (
+    !value.credentials.every(isTeamAccountCredential) ||
     !value.users.every(isTeamUser) ||
     !value.memberships.every(isWorkspaceMembership) ||
     !value.auditEvents.every(isAuditEvent) ||
@@ -509,6 +663,7 @@ export function parseTeamState(value: unknown): TeamState {
 
   return cloneValue({
     auditEvents: value.auditEvents,
+    credentials: value.credentials,
     invitations: value.invitations,
     memberships: value.memberships,
     schemaVersion: openRoadTeamSchemaVersion,
@@ -582,6 +737,7 @@ function migrateTeamStateV1(value: Record<string, unknown>): TeamState {
 
   return cloneValue({
     auditEvents: value.auditEvents,
+    credentials: [],
     invitations: [],
     memberships: value.memberships,
     schemaVersion: openRoadTeamSchemaVersion,
@@ -610,6 +766,36 @@ function migrateTeamStateV2(value: Record<string, unknown>): TeamState {
 
   return cloneValue({
     auditEvents: value.auditEvents,
+    credentials: [],
+    invitations: value.invitations,
+    memberships: value.memberships,
+    schemaVersion: openRoadTeamSchemaVersion,
+    users: value.users
+  });
+}
+
+function migrateTeamStateV3(value: Record<string, unknown>): TeamState {
+  if (
+    !Array.isArray(value.users) ||
+    !Array.isArray(value.memberships) ||
+    !Array.isArray(value.auditEvents) ||
+    !Array.isArray(value.invitations)
+  ) {
+    throw new TeamStoreError("invalid_state", "OpenRoad team metadata is invalid.");
+  }
+
+  if (
+    !value.users.every(isTeamUser) ||
+    !value.memberships.every(isWorkspaceMembership) ||
+    !value.auditEvents.every(isAuditEvent) ||
+    !value.invitations.every(isTeamInvitation)
+  ) {
+    throw new TeamStoreError("invalid_state", "OpenRoad team metadata is invalid.");
+  }
+
+  return cloneValue({
+    auditEvents: value.auditEvents,
+    credentials: [],
     invitations: value.invitations,
     memberships: value.memberships,
     schemaVersion: openRoadTeamSchemaVersion,
@@ -692,6 +878,67 @@ function normalizeInvitationDeliveryStatus(status: TeamInvitationDeliveryStatus)
   return status;
 }
 
+function normalizeAccountPassword(value: unknown) {
+  if (typeof value !== "string") {
+    throw new TeamStoreError("invalid_request", "Password is required.");
+  }
+
+  if (value.length < 12 || value.length > 256) {
+    throw new TeamStoreError(
+      "invalid_request",
+      "Password must be between 12 and 256 characters."
+    );
+  }
+
+  return value;
+}
+
+async function createAccountCredential({
+  createdAt,
+  id,
+  password,
+  updatedAt,
+  userId
+}: {
+  createdAt: string;
+  id: string;
+  password: string;
+  updatedAt: string;
+  userId: string;
+}): Promise<TeamAccountCredential> {
+  const salt = randomBytes(16).toString("base64url");
+  return {
+    algorithm: accountPasswordAlgorithm,
+    createdAt,
+    id,
+    passwordHash: await deriveAccountPasswordHash(password, salt),
+    salt,
+    updatedAt,
+    userId
+  };
+}
+
+async function verifyAccountPassword(password: string, credential: TeamAccountCredential) {
+  if (credential.algorithm !== accountPasswordAlgorithm) return false;
+  const passwordHash = await deriveAccountPasswordHash(password, credential.salt);
+  return safeHashEqual(passwordHash, credential.passwordHash);
+}
+
+async function deriveAccountPasswordHash(password: string, salt: string) {
+  const key = (await scryptAsync(password, salt, 64)) as Buffer;
+  return key.toString("base64url");
+}
+
+function summarizeAccountCredential(
+  credential: TeamAccountCredential
+): TeamAccountCredentialSummary {
+  return {
+    createdAt: credential.createdAt,
+    updatedAt: credential.updatedAt,
+    userId: credential.userId
+  };
+}
+
 function normalizeDeliveryError(value: unknown) {
   const text = boundText(value, 500);
   if (!text) return undefined;
@@ -750,6 +997,19 @@ function isTeamUser(value: unknown): value is TeamUser {
     typeof value.email === "string" &&
     typeof value.id === "string" &&
     typeof value.name === "string"
+  );
+}
+
+function isTeamAccountCredential(value: unknown): value is TeamAccountCredential {
+  return (
+    isRecord(value) &&
+    value.algorithm === accountPasswordAlgorithm &&
+    typeof value.createdAt === "string" &&
+    typeof value.id === "string" &&
+    typeof value.passwordHash === "string" &&
+    typeof value.salt === "string" &&
+    typeof value.updatedAt === "string" &&
+    typeof value.userId === "string"
   );
 }
 

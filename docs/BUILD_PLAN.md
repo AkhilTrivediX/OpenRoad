@@ -10,7 +10,7 @@ Each feature must also satisfy `docs/PRODUCTION_READINESS.md` before merging to 
 
 Current stage: Stage 3 Integration Beta hardening. `main` is production-checked for the shipped self-host and integration scopes, while Stage 4 public/hosted hardening remains explicit.
 
-The standalone loop now covers workspaces, requests, triage, internal work, roadmap planning, changelog drafts, public portal preview, local durability, production APIs, basic tenancy boundaries, file-backed team metadata, audit events, self-host operations, owner browser sessions and owner sign-in for admin-token deployments, team invitation/account-access APIs, scoped member browser sessions from invitation tokens, server-side JSONL invitation delivery handoff, server-side HTTP invitation provider delivery, durable account password login for existing team users, JSONL account recovery handoff with reset-token confirmation, owner member-management UI/APIs with stale-session revocation, app-level crash recovery, a first app-module boundary, hardened public portal write APIs with persisted visitor vote identity, the provider-neutral integration adapter contract, a payload-backed GitHub issue import/link API, server-only GitHub App installation verification, live GitHub issue fetch through verified installations, signed GitHub/Linear/Jira webhooks for already-linked issue mappings, hosted GitHub App webhook registration with safe Linear/Jira blocked states, safe disconnect handling, encrypted server-only provider credential storage, provider-neutral background sync job foundations, GitHub/Linear/Jira workers for already-linked issue mappings, Linear/Jira OAuth callback exchange and refresh-token rotation, progressive Settings visibility with GitHub/Linear/Jira connect, credential, disconnect, manual sync, conflict resolution, and hosted webhook registration controls, explicit provider write-back for linked GitHub/Linear/Jira issues, Linear issue import/link, Jira issue import/link with explicit field mapping, requester notification preferences/outbox events plus JSONL delivery handoff, deterministic local assistant triage, and release candidate manifest tooling. The next production work should target direct provider notification delivery, real model-backed AI adapters, and hosted SaaS hardening as separate slices.
+The standalone loop now covers workspaces, requests, triage, internal work, roadmap planning, changelog drafts, public portal preview, local durability, production APIs, basic tenancy boundaries, file-backed team metadata, audit events, self-host operations, owner browser sessions and owner sign-in for admin-token deployments, team invitation/account-access APIs, scoped member browser sessions from invitation tokens, server-side JSONL invitation delivery handoff, server-side HTTP invitation provider delivery, durable account password login for existing team users, JSONL account recovery handoff with reset-token confirmation, owner member-management UI/APIs with stale-session revocation, app-level crash recovery, a first app-module boundary, hardened public portal write APIs with persisted visitor vote identity, the provider-neutral integration adapter contract, a payload-backed GitHub issue import/link API, server-only GitHub App installation verification, live GitHub issue fetch through verified installations, signed GitHub/Linear/Jira webhooks for already-linked issue mappings, hosted GitHub App webhook registration with safe Linear/Jira blocked states, safe disconnect handling, encrypted server-only provider credential storage, provider-neutral background sync job foundations, GitHub/Linear/Jira workers for already-linked issue mappings, Linear/Jira OAuth callback exchange and refresh-token rotation, progressive Settings visibility with GitHub/Linear/Jira connect, credential, disconnect, manual sync, conflict resolution, and hosted webhook registration controls, explicit provider write-back for linked GitHub/Linear/Jira issues, Linear issue import/link, Jira issue import/link with explicit field mapping, requester notification preferences/outbox events plus JSONL delivery handoff, deterministic local assistant triage, and release candidate manifest tooling. The active production work targets direct requester notification provider delivery; real model-backed AI adapters and hosted SaaS hardening remain separate later slices.
 
 ## Feature 1: Workspace Shell
 
@@ -903,6 +903,28 @@ Acceptance:
 - Requesters can be notified when relevant work ships.
 - Notifications are useful and controllable.
 - Public portal and changelog previews do not leak private notification state.
+
+## Feature 12A: Requester Notification Provider Delivery
+
+Branch: `feat/requester-notification-provider-delivery`
+
+Status: planned.
+
+Build:
+
+- HTTP requester notification provider delivery adapter.
+- Server-only provider endpoint and optional bearer-token configuration.
+- HTTPS/loopback URL validation, redirect blocking, timeout handling, bounded provider response parsing, and redacted provider errors/message ids.
+- Provider payloads derived only from public-safe queued notification summaries and workspace context.
+- Operator docs, focused tests, smoke evidence, and rollback notes.
+
+Acceptance:
+
+- OpenRoad can deliver queued requester notifications to an operator-controlled HTTP provider without exposing provider secrets to the browser.
+- File delivery mode remains unchanged.
+- Failed provider calls leave events queued for retry with bounded redacted errors.
+- Re-running delivery does not duplicate already delivered provider messages.
+- Public portal, workspace APIs, notification preferences, release verification, and standalone mode remain green.
 
 ## Feature 13: AI Assistance
 

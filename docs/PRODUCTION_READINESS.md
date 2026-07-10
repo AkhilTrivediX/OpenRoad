@@ -168,7 +168,7 @@ OpenRoad releases must eventually include:
 
 ## Current Readiness Debt
 
-These are known production gaps after provider conflict resolution and release operations.
+These are known production gaps after hosted webhook registration and release operations.
 
 - Some UI orchestration still lives inside `App.tsx`; the first helper/module extraction is complete, but component-level splitting remains future work.
 - Product, integration, and team persistence are file-backed with schema migration and backup/restore tooling, not managed SQL with online migrations.
@@ -183,13 +183,13 @@ These are known production gaps after provider conflict resolution and release o
 
 ## Next Production Move
 
-Next branch: `feat/hosted-webhook-registration`
+Next branch: `feat/requester-notification-provider-delivery`
 
 Purpose:
 
-- Add provider-neutral webhook registration planning, storage, and execution boundaries for hosted deployments.
-- Keep self-host/manual webhook setup working while giving hosted operators an auditable registration path.
-- Reuse server-only provider credentials and sanitized integration status without exposing webhook secrets or provider tokens.
+- Add direct HTTP provider delivery for queued requester notifications.
+- Keep JSONL/self-host notification handoff working while giving hosted operators a server-only delivery path.
+- Reuse the existing private notification delivery endpoint and retry metadata without exposing provider URLs or bearer tokens to browser code.
 - Preserve the existing production gate: feature branch, test plan first, focused tests, `pnpm check`, browser QA when UI changes, smoke test, audit, merge, then push.
 
-Direct provider notification delivery, Linear/Jira hosted webhook creation, real model-backed AI, SSO/MFA, bulk member operations, and hosted account management remain hardening work that should stay behind server-only secret management, background job controls, explicit delivery infrastructure, and/or user consent controls.
+Linear/Jira hosted webhook creation, real model-backed AI, SSO/MFA, bulk member operations, and hosted account management remain hardening work that should stay behind server-only secret management, background job controls, explicit delivery infrastructure, and/or user consent controls.

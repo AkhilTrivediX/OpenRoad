@@ -973,6 +973,32 @@ Acceptance:
 - No assistant suggestion is persisted or sent to external model APIs in this slice.
 - Assistant-generated changelog public fields do not copy private request, work, or roadmap source text.
 
+## Feature 13A: Model Adapter Foundation
+
+Branch: `feat/model-adapter-foundation`
+
+Status: implemented and production-checked.
+
+Build:
+
+- Shared deterministic assistant core for browser and server fallback.
+- Private server assistant endpoint for selected-request triage.
+- Server-side model adapter contract with deterministic fallback and OpenAI Responses API provider.
+- Explicit request-level consent before external model use.
+- Bounded, redacted, code-managed prompt context.
+- Defensive model output parsing and validation.
+- Audit and structured operational events for model use, fallbacks, and failures.
+- Operator docs, focused tests, smoke evidence, and rollback notes.
+
+Acceptance:
+
+- OpenRoad remains useful with no AI provider configured.
+- External model calls never happen from browser code and never happen without explicit consent.
+- Model-backed output can refine only selected-request summary and next action in this foundation slice.
+- Deterministic duplicate suggestions and changelog draft suggestions remain bounded, generic, and approval-only.
+- API responses, audit events, operational events, logs, backups, and release evidence never expose API keys, raw prompts, raw model responses, private notes, internal comments, hidden comments, notification bodies, provider secrets, or raw provider payloads.
+- Existing standalone, portal, integration, notification, team, release, and self-host checks remain green.
+
 ## Feature 14: Public Release Operations
 
 Branch: `feat/public-release-ops`

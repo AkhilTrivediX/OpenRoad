@@ -5,7 +5,7 @@ import { createHmac } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Server } from "node:http";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -31,7 +31,10 @@ import type { JiraApiClient } from "./jira-api";
 import type { LinearApiClient } from "./linear-api";
 import type { LinearOAuthConfig } from "./linear";
 import type { JiraOAuthConfig } from "./jira";
-import type { InvitationDeliveryAdapter } from "./invitation-delivery";
+import {
+  HttpInvitationDeliveryAdapter,
+  type InvitationDeliveryAdapter
+} from "./invitation-delivery";
 import type { NotificationDeliveryAdapter } from "./notifications";
 import { createIntegrationTokenVault, type IntegrationTokenVault } from "./token-vault";
 import type { IntegrationSyncWorker } from "./sync-jobs";
@@ -603,7 +606,6 @@ describe("OpenRoad production server", () => {
     expect(created.status).toBe(201);
     expect(created.body).toMatchObject({
       delivery: {
-        acceptUrl: `https://openroad.example.com/join?invite=${acceptToken}`,
         channel: "test-invite",
         messageId: expect.stringContaining("test:"),
         status: "sent"
@@ -630,7 +632,146 @@ describe("OpenRoad production server", () => {
     });
     expect(teamStateAfterCreate).not.toContain(acceptToken);
     expect(JSON.stringify(created.body)).not.toContain("tokenHash");
+    expect(JSON.stringify(created.body.delivery)).not.toContain(acceptToken);
     expect(JSON.stringify(listed.body)).not.toContain("tokenHash");
+  });
+
+  it("delivers invitations through the HTTP provider adapter without exposing provider secrets", async () => {
+    const providerRequests: Array<{ body: Record<string, unknown>; headers: IncomingMessage["headers"] }> = [];
+    const provider = await createProviderServer(async (request, response) => {
+      providerRequests.push({
+        body: await readRequestJson(request),
+        headers: request.headers
+      });
+      response.writeHead(202, { "Content-Type": "application/json" });
+      response.end(JSON.stringify({ messageId: "http-provider-message-1" }));
+    });
+    const adapter = new HttpInvitationDeliveryAdapter(provider.url, {
+      bearerToken: "provider-secret-token",
+      timeoutMs: 2_500
+    });
+    const { teamFile, url } = await startTestServer({
+      auth: { singleUserMode: false, trustProxyHeaders: true },
+      invitationDeliveryAdapter: adapter,
+      invitationDeliveryPublicBaseUrl: "https://openroad.example.com/join"
+    });
+
+    try {
+      const created = await fetchJson(`${url}/api/openroad/workspaces/acme/invitations`, {
+        body: JSON.stringify({
+          email: "Provider@Example.COM",
+          name: "Provider User",
+          role: "Contributor"
+        }),
+        headers: {
+          ...workspaceActorHeaders("acme", "Owner"),
+          "Content-Type": "application/json"
+        },
+        method: "POST"
+      });
+      const acceptToken = created.body.acceptToken as string;
+      const teamStateAfterCreate = await readFile(teamFile, "utf8");
+      const listed = await fetchJson(`${url}/api/openroad/workspaces/acme/invitations`, {
+        headers: workspaceActorHeaders("acme", "Owner")
+      });
+      const audit = await fetchJson(`${url}/api/openroad/audit-events`, {
+        headers: workspaceActorHeaders("acme", "Owner")
+      });
+
+      expect(created.status).toBe(201);
+      expect(created.body).toMatchObject({
+        delivery: {
+          channel: "http-provider",
+          messageId: "http-provider-message-1",
+          status: "sent"
+        },
+        invitation: {
+          deliveryChannel: "http-provider",
+          deliveryMessageId: "http-provider-message-1",
+          deliveryStatus: "sent",
+          email: "provider@example.com",
+          status: "pending"
+        }
+      });
+      expect(providerRequests).toHaveLength(1);
+      expect(providerRequests[0].headers.authorization).toBe("Bearer provider-secret-token");
+      expect(providerRequests[0].body).toMatchObject({
+        acceptUrl: `https://openroad.example.com/join?invite=${acceptToken}`,
+        email: "provider@example.com",
+        role: "Contributor",
+        workspaceId: "acme",
+        workspaceName: "Acme OSS"
+      });
+      expect(JSON.stringify(providerRequests[0].body)).not.toContain("acceptToken");
+      expect(teamStateAfterCreate).not.toContain(acceptToken);
+      expect(teamStateAfterCreate).not.toContain("provider-secret-token");
+      expect(JSON.stringify(created.body.delivery)).not.toContain(acceptToken);
+      expect(JSON.stringify(created.body)).not.toContain("provider-secret-token");
+      expect(JSON.stringify(listed.body)).not.toContain(acceptToken);
+      expect(JSON.stringify(audit.body)).not.toContain(acceptToken);
+    } finally {
+      await provider.close();
+    }
+  });
+
+  it("keeps HTTP provider invitations pending and unsent when the public app URL is missing", async () => {
+    let providerRequests = 0;
+    const provider = await createProviderServer((_request, response) => {
+      providerRequests += 1;
+      response.writeHead(202, { "Content-Type": "application/json" });
+      response.end(JSON.stringify({ messageId: "should-not-send" }));
+    });
+    const adapter = new HttpInvitationDeliveryAdapter(provider.url, {
+      bearerToken: "provider-secret-token",
+      timeoutMs: 2_500
+    });
+    const { teamFile, url } = await startTestServer({
+      auth: { singleUserMode: false, trustProxyHeaders: true },
+      invitationDeliveryAdapter: adapter
+    });
+
+    try {
+      const created = await fetchJson(`${url}/api/openroad/workspaces/acme/invitations`, {
+        body: JSON.stringify({ email: "missing-base@example.com", role: "Viewer" }),
+        headers: {
+          ...workspaceActorHeaders("acme", "Owner"),
+          "Content-Type": "application/json"
+        },
+        method: "POST"
+      });
+      const acceptToken = created.body.acceptToken as string;
+      const accepted = await fetchJson(`${url}/api/openroad/invitations/accept`, {
+        body: JSON.stringify({ token: acceptToken }),
+        headers: { "Content-Type": "application/json" },
+        method: "POST"
+      });
+      const teamStateAfterCreate = await readFile(teamFile, "utf8");
+
+      expect(created.status).toBe(201);
+      expect(providerRequests).toBe(0);
+      expect(created.body).toMatchObject({
+        delivery: {
+          channel: "http-provider",
+          status: "failed"
+        },
+        invitation: {
+          deliveryChannel: "http-provider",
+          deliveryStatus: "failed",
+          email: "missing-base@example.com",
+          status: "pending"
+        }
+      });
+      expect(created.body.delivery.error).toContain("OPENROAD_PUBLIC_APP_URL");
+      expect(teamStateAfterCreate).not.toContain(acceptToken);
+      expect(teamStateAfterCreate).not.toContain("provider-secret-token");
+      expect(accepted.status).toBe(200);
+      expect(accepted.body.invitation).toMatchObject({
+        email: "missing-base@example.com",
+        status: "accepted"
+      });
+    } finally {
+      await provider.close();
+    }
   });
 
   it("keeps invitations usable when configured invitation delivery fails", async () => {
@@ -4785,6 +4926,36 @@ function listen(server: Server) {
       resolve(`http://127.0.0.1:${address.port}`);
     });
   });
+}
+
+async function createProviderServer(
+  handler: (
+    request: IncomingMessage,
+    response: ServerResponse
+  ) => Promise<void> | void
+) {
+  const server = createServer((request, response) => {
+    void Promise.resolve(handler(request, response)).catch((error) => {
+      response.writeHead(500, { "Content-Type": "text/plain" });
+      response.end(error instanceof Error ? error.message : String(error));
+    });
+  });
+  const url = await listen(server);
+
+  return {
+    close: () => closeServer(server),
+    url
+  };
+}
+
+async function readRequestJson(request: IncomingMessage) {
+  const chunks: Buffer[] = [];
+
+  for await (const chunk of request) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+
+  return JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
 }
 
 function closeServer(server: Server) {

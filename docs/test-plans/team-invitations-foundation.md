@@ -109,5 +109,5 @@ As an OpenRoad workspace owner, I need to invite a teammate to a workspace with 
 - Browser/viewports tested: No visual UI changes in this slice.
 - Accessibility checks: No visual UI changes in this slice.
 - Reviewer notes: Backend/API slice only. Invitation data remains in team metadata, separate from core OpenRoad state, sessions, and integration metadata. Acceptance creates durable user and membership records but intentionally does not authenticate the accepted user into a browser session.
-- Known unresolved risks: Password auth, OAuth account login, direct SMTP/provider invitation sending, account recovery, and deeper member management remain future production slices. Invitation management UI, invite-token member sessions, and JSONL invitation delivery handoff were completed in later slices.
+- Known unresolved risks: OAuth account login, built-in SMTP delivery, provider-specific invitation templates, account recovery, and hosted account administration remain future production slices. Password auth, invitation management UI, invite-token member sessions, JSONL invitation delivery handoff, member management, and HTTP invitation provider delivery were completed in later slices.
 - Rollback notes: Revert branch; team metadata schema v2 invitation records can be discarded after backup while core OpenRoad state, sessions, and integrations remain separate.

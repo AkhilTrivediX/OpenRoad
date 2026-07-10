@@ -110,7 +110,6 @@ import {
   type NotificationDeliveryAdapter
 } from "./notifications.js";
 import {
-  buildInvitationAcceptUrl,
   createInvitationDeliveryAdapterFromEnv,
   resolveInvitationDeliveryPublicBaseUrl,
   type InvitationDeliveryAdapter,
@@ -1610,12 +1609,15 @@ async function deliverInvitationAfterCreate({
   }
 
   const attemptedAt = new Date().toISOString();
-  const baseUrl = configuredPublicBaseUrl ?? resolveRequestOrigin(request, auth);
-  const acceptUrl = buildInvitationAcceptUrl(baseUrl, acceptToken);
   const workspaceName =
     currentState.workspaces.find((workspace) => workspace.id === workspaceId)?.name ?? workspaceId;
+  const baseUrl = configuredPublicBaseUrl ?? resolveRequestOrigin(request, auth);
 
   try {
+    if (adapter.channel === "http-provider" && !configuredPublicBaseUrl) {
+      throw new Error("Invitation HTTP provider delivery requires OPENROAD_PUBLIC_APP_URL.");
+    }
+
     const result = await adapter.deliver(invitation, {
       acceptToken,
       baseUrl,
@@ -1626,18 +1628,17 @@ async function deliverInvitationAfterCreate({
     const recorded = await teamStore.recordInvitationDelivery(currentState, {
       deliveryAttemptedAt: attemptedAt,
       deliveryChannel: adapter.channel,
-      deliveryMessageId: result.messageId,
+      deliveryMessageId: sanitizeDeliveryMessageId(result.messageId),
       deliveryStatus: "sent",
       invitationId: invitation.id,
       workspaceId
     });
 
     return {
-      acceptUrl,
       attemptedAt,
       channel: adapter.channel,
       invitation: recorded,
-      messageId: getBoundedText(result.messageId, 240),
+      messageId: sanitizeDeliveryMessageId(result.messageId),
       status: "sent"
     };
   } catch (error) {
@@ -1652,7 +1653,6 @@ async function deliverInvitationAfterCreate({
     });
 
     return {
-      acceptUrl,
       attemptedAt,
       channel: adapter.channel,
       error: message,
@@ -4039,11 +4039,11 @@ function redactSensitiveText(value: string) {
   return value
     .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [redacted]")
     .replace(
-      /([?&](?:access_token|refresh_token|token|jwt|secret|client_secret|authorization)=)[^&\s]+/gi,
+      /([?&](?:accept_token|access_token|refresh_token|invite|token|jwt|secret|client_secret|authorization)=)[^&\s]+/gi,
       "$1[redacted]"
     )
     .replace(
-      /((?:access[_-]?token|refresh[_-]?token|token|secret|client[_-]?secret|password|authorization)\s*[:=]\s*)[^\s,;]+/gi,
+      /((?:accept[_-]?token|access[_-]?token|refresh[_-]?token|invite|token|secret|client[_-]?secret|password|authorization)\s*[:=]\s*)[^\s,;]+/gi,
       "$1[redacted]"
     )
     .replace(/\b[\w.-]*(?:token|secret|password|credential|authorization)[\w.-]*\b/gi, "[redacted]")
@@ -6347,6 +6347,14 @@ function getPasswordText(value: unknown) {
 function safeExternalErrorMessage(error: unknown, fallback: string) {
   const text = error instanceof Error ? error.message : String(error);
   return getBoundedText(redactSensitiveText(text), 240) ?? fallback;
+}
+
+function sanitizeDeliveryMessageId(value: unknown) {
+  const bounded = getBoundedText(value, 500);
+  if (!bounded) return undefined;
+  const redacted = redactSensitiveText(bounded);
+  if (redacted !== bounded) return "[redacted]";
+  return getBoundedText(redacted, 240);
 }
 
 function getBoundedIdentifier(value: unknown, maxLength: number) {

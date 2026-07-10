@@ -11,7 +11,7 @@ This runbook covers the current production path: one Node process serving the bu
 - Valid invitation tokens can be exchanged for httpOnly member browser sessions scoped to the invited workspace and role.
 - Existing team users can set an account password and return through an httpOnly member browser session scoped to one workspace membership.
 - Workspace owners can list members, change roles, and deactivate memberships; affected member sessions are revoked on role change or deactivation.
-- Invitation delivery is disabled by default; file mode appends raw-token invite handoff records to an operator-controlled JSONL file.
+- Invitation delivery is disabled by default; file mode appends raw-token invite handoff records to an operator-controlled JSONL file, and HTTP provider mode posts bounded invite payloads to an operator-configured HTTPS endpoint.
 - The public portal API remains unauthenticated and returns only public data.
 - Backups contain product, requester, integration, team, membership, and audit data; store them like production data.
 
@@ -38,6 +38,9 @@ $env:OPENROAD_ADMIN_TOKEN="replace-with-long-random-token"
 $env:OPENROAD_PUBLIC_APP_URL="http://127.0.0.1:4173/"
 $env:OPENROAD_INVITATION_DELIVERY_MODE="disabled"
 $env:OPENROAD_INVITATION_DELIVERY_FILE="C:\openroad\openroad-invitation-deliveries.jsonl"
+$env:OPENROAD_INVITATION_DELIVERY_HTTP_URL=""
+$env:OPENROAD_INVITATION_DELIVERY_HTTP_BEARER_TOKEN=""
+$env:OPENROAD_INVITATION_DELIVERY_HTTP_TIMEOUT_MS="10000"
 $env:OPENROAD_NOTIFICATION_DELIVERY_MODE="disabled"
 $env:OPENROAD_NOTIFICATION_DELIVERY_FILE="C:\openroad\openroad-notification-deliveries.jsonl"
 $env:OPENROAD_TOKEN_ENCRYPTION_KEY=""
@@ -77,6 +80,9 @@ $env:OPENROAD_ADMIN_TOKEN="replace-with-long-random-token"
 $env:OPENROAD_PUBLIC_APP_URL="http://127.0.0.1:4173/"
 $env:OPENROAD_INVITATION_DELIVERY_MODE="disabled"
 $env:OPENROAD_INVITATION_DELIVERY_FILE="C:\openroad\openroad-invitation-deliveries.jsonl"
+$env:OPENROAD_INVITATION_DELIVERY_HTTP_URL=""
+$env:OPENROAD_INVITATION_DELIVERY_HTTP_BEARER_TOKEN=""
+$env:OPENROAD_INVITATION_DELIVERY_HTTP_TIMEOUT_MS="10000"
 $env:OPENROAD_NOTIFICATION_DELIVERY_MODE="disabled"
 $env:OPENROAD_NOTIFICATION_DELIVERY_FILE="C:\openroad\openroad-notification-deliveries.jsonl"
 $env:OPENROAD_TOKEN_ENCRYPTION_KEY=""
@@ -103,7 +109,7 @@ $env:PORT="4173"
 
 Do not expose `OPENROAD_ADMIN_TOKEN` to browser JavaScript beyond the one-time owner login request. In admin-token mode the browser app shows an owner/member sign-in surface: owners submit the admin token to the same-origin server, invited members submit invitation tokens for first access, and existing team users can sign in with email/password after setting an account password. OpenRoad stores only hashed session-token material in `OPENROAD_SESSION_FILE`; deleting that file signs out owner and member browser sessions without touching product data.
 
-Treat `OPENROAD_INVITATION_DELIVERY_FILE` as sensitive when invitation delivery file mode is enabled. The file contains raw invitation accept tokens and links for external mail/helpdesk workers. It is not included in OpenRoad backups and should be rotated, shipped, or deleted according to your operations policy.
+Treat `OPENROAD_INVITATION_DELIVERY_FILE` as sensitive when invitation delivery file mode is enabled. The file contains raw invitation accept tokens and links for external mail/helpdesk workers. It is not included in OpenRoad backups and should be rotated, shipped, or deleted according to your operations policy. Treat `OPENROAD_INVITATION_DELIVERY_HTTP_BEARER_TOKEN` as a server secret when HTTP provider mode is enabled; OpenRoad sends it only as an outbound authorization header.
 
 Do not expose GitHub App private keys, GitHub webhook secrets, Linear client secrets, Jira client secrets, or `OPENROAD_TOKEN_ENCRYPTION_KEY` to browser JavaScript. Prefer `OPENROAD_GITHUB_APP_PRIVATE_KEY_FILE` for self-host installs.
 
@@ -129,7 +135,7 @@ The Compose service:
 - Stores product, integration, session, and team data in the `openroad-data` volume.
 - Runs with `OPENROAD_SINGLE_USER_MODE=false`.
 - Requires `OPENROAD_ADMIN_TOKEN` before startup.
-- Keeps invitation delivery disabled unless `OPENROAD_INVITATION_DELIVERY_MODE=file` is configured.
+- Keeps invitation delivery disabled unless `OPENROAD_INVITATION_DELIVERY_MODE=file` or `OPENROAD_INVITATION_DELIVERY_MODE=http` is configured.
 - Keeps requester notification delivery disabled unless `OPENROAD_NOTIFICATION_DELIVERY_MODE=file` is configured.
 - Keeps provider credential storage disabled unless `OPENROAD_TOKEN_ENCRYPTION_KEY` is configured.
 - Applies process-local public portal write limits from `OPENROAD_PORTAL_RATE_LIMIT_MAX` and `OPENROAD_PORTAL_RATE_LIMIT_WINDOW_MS`.
@@ -246,6 +252,22 @@ Invoke-RestMethod `
 The file adapter appends one JSONL record with the invitee email/name, role, workspace id/name, expiration, subject/body, raw accept token, and accept URL. OpenRoad stores only delivery status metadata in `openroad-team.json`; raw invitation tokens stay out of team metadata, list APIs, audit events, and backups. The app reads `?invite=<token>` links and pre-fills the member join form, then removes the token from browser history.
 
 The JSONL handoff does not send SMTP, SES, SendGrid, Mailgun, Slack, or provider messages by itself.
+
+To send invitation payloads to an HTTPS mail/webhook provider, configure:
+
+```powershell
+$env:OPENROAD_PUBLIC_APP_URL="https://openroad.example.com/"
+$env:OPENROAD_INVITATION_DELIVERY_MODE="http"
+$env:OPENROAD_INVITATION_DELIVERY_HTTP_URL="https://mail-provider.example.com/openroad/invitations"
+$env:OPENROAD_INVITATION_DELIVERY_HTTP_BEARER_TOKEN="replace-with-provider-token"
+$env:OPENROAD_INVITATION_DELIVERY_HTTP_TIMEOUT_MS="10000"
+```
+
+HTTP provider mode requires `OPENROAD_PUBLIC_APP_URL`; local request headers are not used to form provider invite links. Provider URLs must be HTTPS, except `http://localhost`, `http://127.0.0.1`, and `http://[::1]` for local development and tests. URLs containing usernames or passwords are rejected.
+
+OpenRoad posts one JSON payload with the invitee email/name, role, workspace id/name, expiration, subject/body, invitation id, and accept URL. The optional bearer token is sent only as `Authorization: Bearer ...`; it is not persisted, returned, or exposed to browser code. Provider responses may return a JSON `messageId`, `message_id`, `id`, or `x-message-id` header; OpenRoad stores only bounded, redacted delivery metadata.
+
+Non-2xx responses, malformed success responses, timeouts, aborts, and network errors mark invitation delivery as `failed` while keeping the invitation pending, usable, and revokable. This mode does not include a retry scheduler, bounce handling, suppression lists, verified sender setup, or provider-specific templates.
 
 ## Account Password Login
 
@@ -393,6 +415,8 @@ For local single-user mode without `OPENROAD_ADMIN_TOKEN`, omit `--admin-token`;
 - `POST /api/openroad/notifications/deliver` should require private write permission and return `503` unless a delivery adapter is configured.
 - `POST /api/openroad/workspaces/acme/invitations` should require owner/admin permission and return a one-time accept token only on creation.
 - With `OPENROAD_INVITATION_DELIVERY_MODE=file`, invitation creation should append one sensitive JSONL delivery record and return delivery status metadata.
+- With `OPENROAD_INVITATION_DELIVERY_MODE=http`, `OPENROAD_PUBLIC_APP_URL`, and a local provider endpoint, invitation creation should post one bounded provider payload and return delivery status metadata without exposing the provider bearer token or raw accept token beyond the one-time `acceptToken`.
+- With `OPENROAD_INVITATION_DELIVERY_MODE=http` and no `OPENROAD_PUBLIC_APP_URL`, invitation creation should remain `201`, mark delivery failed, skip the provider call, and keep the invitation usable.
 - `POST /api/openroad/invitations/accept` should accept a valid pending invitation token without returning private workspace state.
 - `POST /api/openroad/account/password` should require an authenticated owner/member session and store only hashed credential metadata.
 - `POST /api/openroad/auth/password/login` should create a scoped member session for a valid existing team user and reject wrong passwords without echoing submitted values.
@@ -407,13 +431,14 @@ For local single-user mode without `OPENROAD_ADMIN_TOKEN`, omit `--admin-token`;
 - Keep `OPENROAD_TRUST_PROXY_HEADERS=false` unless a trusted reverse proxy is enforcing identity headers.
 - Do not publish `/data`, backup directories, or restore-safety directories.
 - Do not publish invitation delivery JSONL files; they contain raw accept tokens.
+- Keep HTTP invitation provider bearer tokens in server environment or secret storage only.
 - Treat backup archives as sensitive because they contain requester, workspace, membership, and audit data.
 - Tune public portal rate limits for the deployment shape. Current limits are process-local and reset on restart.
 - Review release manifests before sharing them; they should contain checksums and release metadata, not secrets or product data.
 
 ## Current Limits
 
-- Owner browser sessions for admin-token self-hosting, backend invitation APIs, invitation UI, member invite sessions, JSONL invitation delivery handoff, account password login for existing team users, and owner member role/deactivation controls are implemented; direct SMTP/provider invitation sending, OAuth login, email verification, account recovery, bulk member operations, MFA/passkeys, SSO, and hosted account management are not implemented.
+- Owner browser sessions for admin-token self-hosting, backend invitation APIs, invitation UI, member invite sessions, JSONL invitation delivery handoff, HTTP invitation provider delivery, account password login for existing team users, and owner member role/deactivation controls are implemented; built-in SMTP delivery, provider-specific invitation templates, OAuth login, email verification, account recovery, bulk member operations, MFA/passkeys, SSO, and hosted account management are not implemented.
 - Team metadata is file-backed, not managed SQL.
 - Trusted proxy headers are disabled by default.
 - Payload-backed GitHub issue import, GitHub App installation verification, live issue fetch, signed webhooks, safe disconnect APIs, encrypted server-only provider credential storage, provider-neutral background sync job metadata, GitHub/Linear/Jira workers for already-linked issue mappings, payload-backed Linear issue import, payload-backed Jira issue import, requester notification outbox/preferences, and a server-side JSONL notification delivery handoff exist; OAuth callback exchange, Linear/Jira webhooks, provider write-back, direct email/provider notification delivery, conflict UI, and billing are not implemented.

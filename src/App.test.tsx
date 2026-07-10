@@ -189,6 +189,38 @@ describe("OpenRoad workspace shell", () => {
     expect(document.body.textContent).not.toContain("oinv_member-secret");
   });
 
+  it("prefills invitation links from the URL and removes the token from history", async () => {
+    vi.stubEnv("VITE_OPENROAD_SERVER_SYNC", "on");
+    window.history.replaceState(null, "", "/?invite=oinv_link-secret&utm=email#join");
+    const fetchMock = createMemberInvitationLoginFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    const tokenInput = await screen.findByLabelText("Invitation token");
+    expect(tokenInput).toHaveValue("oinv_link-secret");
+    expect(window.location.search).toBe("?utm=email");
+    expect(window.location.hash).toBe("#join");
+
+    await user.type(screen.getByLabelText("Name"), "Linked Member");
+    await user.click(screen.getByRole("button", { name: "Join workspace" }));
+
+    expect(await screen.findByRole("combobox", { name: "Workspace" })).toHaveDisplayValue(
+      "Member Workspace"
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/openroad/invitations/session",
+      expect.objectContaining({
+        body: JSON.stringify({ name: "Linked Member", token: "oinv_link-secret" }),
+        credentials: "same-origin",
+        method: "POST"
+      })
+    );
+    expect(window.location.href).not.toContain("oinv_link-secret");
+    expect(document.body.textContent).not.toContain("oinv_link-secret");
+  });
+
   it("refreshes invitation access after owner sign-in", async () => {
     vi.stubEnv("VITE_OPENROAD_SERVER_SYNC", "on");
     const fetchMock = createOwnerLoginFetchMock({ loginSucceeds: true });

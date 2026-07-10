@@ -260,6 +260,20 @@ export function App() {
   const isServerMemberSession =
     serverPersistenceEnabled && serverAccessScope === "workspace-member";
 
+  useEffect(() => {
+    const invitationToken = consumeInvitationTokenFromUrl();
+    if (!invitationToken) return;
+
+    setMemberLoginDraft((draft) => ({
+      ...draft,
+      token: draft.token || invitationToken
+    }));
+    setAcceptTokenDraft((draft) => ({
+      ...draft,
+      token: draft.token || invitationToken
+    }));
+  }, []);
+
   function applyServerLoadResult(result: Awaited<ReturnType<typeof loadServerOpenRoadState>>) {
     hasLoadedServerState.current = true;
     hasServerSaveFailed.current = false;
@@ -4409,6 +4423,20 @@ export function App() {
       </div>
     </main>
   );
+}
+
+function consumeInvitationTokenFromUrl() {
+  if (typeof window === "undefined") return undefined;
+
+  const url = new URL(window.location.href);
+  const token = url.searchParams.get("invite") ?? url.searchParams.get("invitation");
+  const normalizedToken = token?.trim().slice(0, 512);
+  if (!normalizedToken) return undefined;
+
+  url.searchParams.delete("invite");
+  url.searchParams.delete("invitation");
+  window.history.replaceState(null, document.title, `${url.pathname}${url.search}${url.hash}`);
+  return normalizedToken;
 }
 
 function getProviderCode(provider: IntegrationProviderStatus) {

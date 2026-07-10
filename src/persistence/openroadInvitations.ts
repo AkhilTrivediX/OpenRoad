@@ -1,12 +1,18 @@
 export type WorkspaceRole = "Owner" | "Maintainer" | "Contributor" | "Viewer";
 
 export type WorkspaceInvitationStatus = "accepted" | "expired" | "pending" | "revoked";
+export type WorkspaceInvitationDeliveryStatus = "failed" | "sent";
 
 export type WorkspaceInvitationSummary = {
   acceptedAt?: string;
   acceptedByUserId?: string;
   createdAt: string;
   createdByActorId: string;
+  deliveryAttemptedAt?: string;
+  deliveryChannel?: string;
+  deliveryError?: string;
+  deliveryMessageId?: string;
+  deliveryStatus?: WorkspaceInvitationDeliveryStatus;
   email: string;
   expiresAt: string;
   id: string;
@@ -243,6 +249,11 @@ function parseInvitation(value: unknown): WorkspaceInvitationSummary | undefined
     acceptedByUserId: getRecordText(value, "acceptedByUserId", 160),
     createdAt: getRecordText(value, "createdAt", 80) ?? "",
     createdByActorId: getRecordText(value, "createdByActorId", 160) ?? "",
+    deliveryAttemptedAt: getRecordText(value, "deliveryAttemptedAt", 80),
+    deliveryChannel: getRecordText(value, "deliveryChannel", 80),
+    deliveryError: getRecordText(value, "deliveryError", 240),
+    deliveryMessageId: getRecordText(value, "deliveryMessageId", 240),
+    deliveryStatus: getInvitationDeliveryStatus(value.deliveryStatus),
     email,
     expiresAt: getRecordText(value, "expiresAt", 80) ?? "",
     id,
@@ -283,6 +294,10 @@ function getInvitationStatus(value: unknown): WorkspaceInvitationStatus | undefi
     : undefined;
 }
 
+function getInvitationDeliveryStatus(value: unknown): WorkspaceInvitationDeliveryStatus | undefined {
+  return value === "failed" || value === "sent" ? value : undefined;
+}
+
 function getRecordText(value: unknown, key: string, maxLength: number) {
   if (!isRecord(value)) return undefined;
   const next = value[key];
@@ -309,7 +324,7 @@ function redactSensitiveText(value: string) {
       "$1[redacted]"
     )
     .replace(
-      /((?:access[_-]?token|refresh[_-]?token|secret|client[_-]?secret|password|authorization)\s*[:=]\s*)[^\s,;]+/gi,
+      /((?:access[_-]?token|refresh[_-]?token|token|secret|client[_-]?secret|password|authorization)\s*[:=]\s*)[^\s,;]+/gi,
       "$1[redacted]"
     )
     .slice(0, 500);

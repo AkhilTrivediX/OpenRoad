@@ -160,7 +160,7 @@ Provider credential create/list/revoke routes require `integration:manage`, whic
 
 Integration sync job enqueue routes require `integration:manage`, which is reserved for local owners/admins and workspace owners. Jobs must be scoped to an active installation in the same workspace and provider. Responses return sanitized job metadata and never return provider tokens, encrypted credentials, raw provider payloads, webhook signatures, request headers, or request bodies. Concurrent integration metadata writes are serialized inside one Node process while OpenRoad uses file-backed stores.
 
-Invitation management routes require `integration:manage`, which is reserved for local owners/admins and workspace owners. Creating an invitation returns the raw accept token exactly once and stores only a hash in `OPENROAD_TEAM_FILE` team metadata schema `2`. List, revoke, accept, session, audit, backup, and ops responses must not return invitation token hashes or raw accept tokens after creation. Email delivery, password login, OAuth login, account recovery, and deeper member-management UI remain out of scope for this slice.
+Invitation management routes require `integration:manage`, which is reserved for local owners/admins and workspace owners. Creating an invitation returns the raw accept token exactly once and stores only a hash in `OPENROAD_TEAM_FILE` team metadata schema `3`. When `OPENROAD_INVITATION_DELIVERY_MODE=file` is configured, creation also writes a server-side JSONL delivery handoff record containing the raw accept token and accept URL for an external mail/helpdesk worker. List, revoke, accept, session, audit, backup, and ops responses must not return invitation token hashes or raw accept tokens after creation. Direct SMTP/provider invitation sending, password login, OAuth login, account recovery, and deeper member-management UI remain out of scope for this slice.
 
 ## Provider-Signature Routes
 
@@ -183,6 +183,10 @@ $env:OPENROAD_ADMIN_TOKEN="replace-with-long-random-token"
 $env:OPENROAD_SESSION_FILE=".openroad/openroad-sessions.json"
 $env:OPENROAD_SESSION_TTL_MS="604800000"
 $env:OPENROAD_INTEGRATION_FILE=".openroad/openroad-integrations.json"
+$env:OPENROAD_TEAM_FILE=".openroad/openroad-team.json"
+$env:OPENROAD_PUBLIC_APP_URL="https://openroad.example.com/"
+$env:OPENROAD_INVITATION_DELIVERY_MODE="disabled"
+$env:OPENROAD_INVITATION_DELIVERY_FILE=".openroad/openroad-invitation-deliveries.jsonl"
 $env:OPENROAD_TOKEN_ENCRYPTION_KEY="replace-with-at-least-32-random-characters"
 $env:OPENROAD_TOKEN_ENCRYPTION_KEY_ID="primary"
 $env:OPENROAD_GITHUB_APP_SLUG="openroad"

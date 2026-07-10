@@ -31,6 +31,7 @@ OpenRoad now has a working standalone product loop, production server foundation
 - Production Node server that serves the built app and same-origin OpenRoad APIs.
 - File-backed server persistence for a single-tenant self-host or evaluation install.
 - Team metadata, workspace membership, hashed invitation tokens, owner/member browser sessions, audit events, and private ops status APIs.
+- Server-side JSONL invitation delivery handoff with invite links that prefill the member join flow.
 - App-level crash recovery boundary with retry and local browser-data reset actions.
 - Provider-neutral integration mappings plus a payload-backed GitHub issue import/link API.
 - Server-only GitHub App setup and installation verification foundation.
@@ -45,7 +46,7 @@ OpenRoad now has a working standalone product loop, production server foundation
 - Release candidate manifest tooling for version, checksum, support-window, and dry-run publishing verification.
 - Docker Compose, backup/restore, and smoke-check commands for self-host operators.
 
-Current production limits are explicit: email delivery for invitations, password/OAuth account login, account recovery, managed database migrations, hosted release promotion, deeper observability, full integration connect/disconnect Settings flows, OAuth callback exchange, Linear/Jira webhooks, provider write-back, direct email/provider notification delivery, real model-backed AI adapters with consent/prompt redaction/audit logs, and conflict UI are planned next-stage work. Admin-token self-hosting has an httpOnly owner browser session path, and invitation tokens can create scoped member browser sessions without exposing the server admin token.
+Current production limits are explicit: direct SMTP/provider invitation sending, password/OAuth account login, account recovery, managed database migrations, hosted release promotion, deeper observability, full integration connect/disconnect Settings flows, OAuth callback exchange, Linear/Jira webhooks, provider write-back, direct email/provider notification delivery, real model-backed AI adapters with consent/prompt redaction/audit logs, and conflict UI are planned next-stage work. Admin-token self-hosting has an httpOnly owner browser session path, and invitation tokens can create scoped member browser sessions without exposing the server admin token.
 
 Current docs:
 
@@ -94,6 +95,9 @@ $env:OPENROAD_INTEGRATION_FILE="C:\openroad\openroad-integrations.json"
 $env:OPENROAD_SESSION_FILE="C:\openroad\openroad-sessions.json"
 $env:OPENROAD_SESSION_TTL_MS="604800000"
 $env:OPENROAD_TEAM_FILE="C:\openroad\openroad-team.json"
+$env:OPENROAD_PUBLIC_APP_URL="http://127.0.0.1:4173/"
+$env:OPENROAD_INVITATION_DELIVERY_MODE="disabled"
+$env:OPENROAD_INVITATION_DELIVERY_FILE="C:\openroad\openroad-invitation-deliveries.jsonl"
 $env:PORT="4173"
 pnpm start
 ```
@@ -118,7 +122,7 @@ pnpm ops:smoke -- --base-url http://127.0.0.1:4173 --workspace-id acme --admin-t
 pnpm ops:backup -- --output-dir C:\openroad\backups
 ```
 
-Keep `.env.selfhost`, `/data`, backup directories, and restore-safety directories private. Backups contain OpenRoad product data, requester information, integration metadata, team metadata, invitation token hashes, memberships, and audit events.
+Keep `.env.selfhost`, `/data`, backup directories, restore-safety directories, and any configured invitation/notification delivery JSONL files private. Backups contain OpenRoad product data, requester information, integration metadata, team metadata, invitation token hashes, memberships, and audit events. Invitation delivery JSONL files contain raw invitation accept tokens by design so an external delivery worker can send them.
 
 The server exposes:
 

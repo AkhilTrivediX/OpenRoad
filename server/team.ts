@@ -5,9 +5,10 @@ import { dirname, resolve } from "node:path";
 import type { OpenRoadState } from "../src/domain/openroad.js";
 import type { OpenRoadActor, WorkspaceRole } from "./access.js";
 
-export const openRoadTeamSchemaVersion = 2;
+export const openRoadTeamSchemaVersion = 3;
 
-const previousOpenRoadTeamSchemaVersion = 1;
+const teamSchemaVersionWithInvitations = 2;
+const teamSchemaVersionWithoutInvitations = 1;
 const defaultInvitationTtlMs = 1000 * 60 * 60 * 24 * 14;
 
 export type TeamUser = {
@@ -26,12 +27,18 @@ export type WorkspaceMembership = {
 };
 
 export type TeamInvitationStatus = "accepted" | "expired" | "pending" | "revoked";
+export type TeamInvitationDeliveryStatus = "failed" | "sent";
 
 export type TeamInvitation = {
   acceptedAt?: string;
   acceptedByUserId?: string;
   createdAt: string;
   createdByActorId: string;
+  deliveryAttemptedAt?: string;
+  deliveryChannel?: string;
+  deliveryError?: string;
+  deliveryMessageId?: string;
+  deliveryStatus?: TeamInvitationDeliveryStatus;
   email: string;
   expiresAt: string;
   id: string;
@@ -100,6 +107,16 @@ export type AcceptTeamInvitationInput = {
   token: string;
 };
 
+export type RecordTeamInvitationDeliveryInput = {
+  deliveryAttemptedAt: string;
+  deliveryChannel: string;
+  deliveryError?: string;
+  deliveryMessageId?: string;
+  deliveryStatus: TeamInvitationDeliveryStatus;
+  invitationId: string;
+  workspaceId: string;
+};
+
 export type CreateTeamInvitationResult = {
   acceptToken: string;
   invitation: TeamInvitationSummary;
@@ -127,6 +144,10 @@ export type TeamStore = {
     workspaceId: string
   ): Promise<TeamInvitationSummary[]>;
   load(openRoadState: OpenRoadState): Promise<TeamStoreLoadResult>;
+  recordInvitationDelivery(
+    openRoadState: OpenRoadState,
+    input: RecordTeamInvitationDeliveryInput
+  ): Promise<TeamInvitationSummary>;
   recordAuditEvent(
     openRoadState: OpenRoadState,
     event: Omit<AuditEvent, "createdAt" | "id">
@@ -261,6 +282,40 @@ export class FileTeamStore implements TeamStore {
     return result.state.invitations
       .filter((invitation) => invitation.workspaceId === workspaceId)
       .map((invitation) => summarizeInvitation(invitation, now));
+  }
+
+  async recordInvitationDelivery(
+    openRoadState: OpenRoadState,
+    input: RecordTeamInvitationDeliveryInput
+  ): Promise<TeamInvitationSummary> {
+    assertWorkspaceExists(openRoadState, input.workspaceId);
+
+    const result = await this.load(openRoadState);
+    const now = new Date();
+    let recordedInvitation: TeamInvitation | undefined;
+    const invitations = result.state.invitations.map((invitation) => {
+      if (invitation.id !== input.invitationId || invitation.workspaceId !== input.workspaceId) {
+        return invitation;
+      }
+
+      recordedInvitation = {
+        ...invitation,
+        deliveryAttemptedAt: normalizeIsoDate(input.deliveryAttemptedAt, now.toISOString()),
+        deliveryChannel: boundText(input.deliveryChannel, 80) ?? "unknown",
+        deliveryError:
+          input.deliveryStatus === "failed" ? normalizeDeliveryError(input.deliveryError) : undefined,
+        deliveryMessageId: boundText(input.deliveryMessageId, 240),
+        deliveryStatus: normalizeInvitationDeliveryStatus(input.deliveryStatus)
+      };
+      return recordedInvitation;
+    });
+
+    if (!recordedInvitation) {
+      throw new TeamStoreError("not_found", "OpenRoad invitation was not found.");
+    }
+
+    await this.writeState({ ...result.state, invitations });
+    return summarizeInvitation(recordedInvitation, now);
   }
 
   async revokeInvitation(
@@ -425,8 +480,12 @@ export function parseTeamState(value: unknown): TeamState {
     );
   }
 
-  if (value.schemaVersion === previousOpenRoadTeamSchemaVersion) {
+  if (value.schemaVersion === teamSchemaVersionWithoutInvitations) {
     return migrateTeamStateV1(value);
+  }
+
+  if (value.schemaVersion === teamSchemaVersionWithInvitations) {
+    return migrateTeamStateV2(value);
   }
 
   if (
@@ -530,6 +589,34 @@ function migrateTeamStateV1(value: Record<string, unknown>): TeamState {
   });
 }
 
+function migrateTeamStateV2(value: Record<string, unknown>): TeamState {
+  if (
+    !Array.isArray(value.users) ||
+    !Array.isArray(value.memberships) ||
+    !Array.isArray(value.auditEvents) ||
+    !Array.isArray(value.invitations)
+  ) {
+    throw new TeamStoreError("invalid_state", "OpenRoad team metadata is invalid.");
+  }
+
+  if (
+    !value.users.every(isTeamUser) ||
+    !value.memberships.every(isWorkspaceMembership) ||
+    !value.auditEvents.every(isAuditEvent) ||
+    !value.invitations.every(isTeamInvitation)
+  ) {
+    throw new TeamStoreError("invalid_state", "OpenRoad team metadata is invalid.");
+  }
+
+  return cloneValue({
+    auditEvents: value.auditEvents,
+    invitations: value.invitations,
+    memberships: value.memberships,
+    schemaVersion: openRoadTeamSchemaVersion,
+    users: value.users
+  });
+}
+
 function assertWorkspaceExists(openRoadState: OpenRoadState, workspaceId: string) {
   if (!openRoadState.workspaces.some((workspace) => workspace.id === workspaceId)) {
     throw new TeamStoreError("not_found", "Workspace was not found.");
@@ -585,11 +672,45 @@ function normalizeFutureIsoDate(value: string | undefined, fallback: string) {
   return new Date(parsed).toISOString();
 }
 
+function normalizeIsoDate(value: string | undefined, fallback: string) {
+  const candidate = boundText(value, 80) ?? fallback;
+  const parsed = Date.parse(candidate);
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : fallback;
+}
+
 function normalizeWorkspaceRole(role: WorkspaceRole) {
   if (role !== "Owner" && role !== "Maintainer" && role !== "Contributor" && role !== "Viewer") {
     throw new TeamStoreError("invalid_request", "Invitation role is invalid.");
   }
   return role;
+}
+
+function normalizeInvitationDeliveryStatus(status: TeamInvitationDeliveryStatus) {
+  if (status !== "failed" && status !== "sent") {
+    throw new TeamStoreError("invalid_request", "Invitation delivery status is invalid.");
+  }
+  return status;
+}
+
+function normalizeDeliveryError(value: unknown) {
+  const text = boundText(value, 500);
+  if (!text) return undefined;
+  return redactSensitiveText(text).slice(0, 240);
+}
+
+function redactSensitiveText(value: string) {
+  return value
+    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [redacted]")
+    .replace(
+      /([?&](?:access_token|refresh_token|token|jwt|secret|client_secret|authorization)=)[^&\s]+/gi,
+      "$1[redacted]"
+    )
+    .replace(
+      /((?:access[_-]?token|refresh[_-]?token|token|secret|client[_-]?secret|password|authorization)\s*[:=]\s*)[^\s,;]+/gi,
+      "$1[redacted]"
+    )
+    .replace(/\b[\w.-]*(?:token|secret|password|credential|authorization)[\w.-]*\b/gi, "[redacted]")
+    .slice(0, 500);
 }
 
 function createInvitedUser({ email, name }: { email: string; name?: string }) {
@@ -665,6 +786,13 @@ function isTeamInvitation(value: unknown): value is TeamInvitation {
     isRecord(value) &&
     typeof value.createdAt === "string" &&
     typeof value.createdByActorId === "string" &&
+    (value.deliveryAttemptedAt === undefined || typeof value.deliveryAttemptedAt === "string") &&
+    (value.deliveryChannel === undefined || typeof value.deliveryChannel === "string") &&
+    (value.deliveryError === undefined || typeof value.deliveryError === "string") &&
+    (value.deliveryMessageId === undefined || typeof value.deliveryMessageId === "string") &&
+    (value.deliveryStatus === undefined ||
+      value.deliveryStatus === "failed" ||
+      value.deliveryStatus === "sent") &&
     typeof value.email === "string" &&
     typeof value.expiresAt === "string" &&
     typeof value.id === "string" &&

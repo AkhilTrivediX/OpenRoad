@@ -39,13 +39,13 @@ Goal: small teams can collaborate safely.
 Required before calling Stage 2 complete:
 
 - Backend API.
-- Database schema and migrations.
+- Server-backed persistence with schema migration, backup, and rollback notes.
 - Authentication.
 - Workspace membership and roles.
 - Tenant isolation.
 - Server-side validation.
 - Audit events for destructive or externally visible actions.
-- Hosted deployment pipeline.
+- Self-host deployment path; hosted deployment pipeline before hosted SaaS.
 - Backup and restore path.
 
 ### Stage 3: Integration Beta
@@ -58,7 +58,7 @@ Required before calling Stage 3 complete:
 - Installation and permission model.
 - External object mapping.
 - Sync jobs with retries and rate-limit handling.
-- Conflict model.
+- Conflict model and user-facing conflict resolution path.
 - Disconnect behavior that preserves OpenRoad data.
 - Provider-specific test fixtures.
 
@@ -168,28 +168,28 @@ OpenRoad releases must eventually include:
 
 ## Current Readiness Debt
 
-These are known production gaps after the account recovery foundation.
+These are known production gaps after provider write-back and release operations.
 
 - Some UI orchestration still lives inside `App.tsx`; the first helper/module extraction is complete, but component-level splitting remains future work.
-- Product, integration, and team persistence are file-backed, not managed SQL with online migrations.
+- Product, integration, and team persistence are file-backed with schema migration and backup/restore tooling, not managed SQL with online migrations.
 - Full-state APIs are protected by single-user/admin-token mode, and admin-token deployments now have httpOnly owner browser sessions plus invitation-token, account-password, and account-recovery member browser sessions scoped to one workspace and role.
 - Persistent workspace membership, audit events, owner browser sessions, invitation management UI, member invite sessions, JSONL invitation delivery handoff, HTTP invitation provider delivery, account password login, JSONL account recovery handoff, and owner member role/deactivation controls exist, but built-in SMTP delivery, provider-specific invitation/recovery templates, OAuth login, email verification, bulk member operations, MFA/passkeys, SSO, and hosted account administration are not implemented.
-- Backup/restore, local self-host smoke commands, and release candidate manifests exist, but published Docker images and hosted release promotion are not implemented.
+- Backup/restore, local self-host smoke commands, and release candidate manifests exist, but published Docker images, artifact signing infrastructure, and hosted release promotion are not implemented.
 - Observability is limited to process logs; structured operational events and dashboards are pending.
-- Public portal write controls, persisted anonymous visitor vote identity, idempotent vote dedupe, and process-local rate limits exist, but notification preferences, CAPTCHA/external bot checks, and distributed abuse controls are pending.
+- Public portal write controls, persisted anonymous visitor vote identity, idempotent vote dedupe, notification preferences, and process-local rate limits exist, but CAPTCHA/external bot checks, public identity verification, and distributed abuse controls are pending.
 - Payload-backed GitHub issue import/link, GitHub App installation verification, live issue fetch, signed GitHub/Linear/Jira webhook handling, safe disconnect APIs, encrypted server-only provider credential storage, provider-neutral background sync job metadata, GitHub/Linear/Jira workers for already-linked issue mappings, Linear/Jira OAuth callback exchange and refresh-token rotation, progressive browser Settings integration visibility with GitHub/Linear/Jira connect, credential, disconnect, and manual sync controls, explicit provider write-back for linked GitHub/Linear/Jira issues, payload-backed Linear issue import/link, payload-backed Jira issue import/link, requester notification outbox/preferences, and JSONL notification delivery handoff exist, but direct email/provider notification delivery, hosted webhook registration automation, and conflict UI are not implemented yet.
 - Deterministic local assistant triage exists, but real model-backed adapters, prompt redaction, user consent controls, AI audit logs, and external-provider policy review are not implemented yet.
 - Browser QA is manual rather than automated end-to-end CI.
 
 ## Next Production Move
 
-Next branch: `feat/provider-connect-disconnect-ui`
+Next branch: `feat/conflict-resolution-ui`
 
 Purpose:
 
-- Make GitHub, Linear, and Jira connection management usable from Settings without requiring direct API scripting.
-- Keep provider credentials server-only, encrypted, scoped, and revocable while presenting only safe installation/credential metadata in the browser.
-- Keep provider disconnect flows explicit, preserve OpenRoad source-of-truth data, deactivate provider credentials/installations, and keep already-linked requests intelligible.
+- Surface provider mappings that enter a conflicted state without overwhelming normal standalone workflows.
+- Let an owner choose an explicit resolution path, such as keep OpenRoad, accept provider text, or disconnect the mapping.
+- Preserve OpenRoad source-of-truth data unless the owner explicitly accepts a provider-side value.
 - Preserve the existing production gate: feature branch, test plan first, focused tests, `pnpm check`, browser QA when UI changes, smoke test, audit, merge, then push.
 
-Direct provider notification delivery, conflict UI, hosted webhook registration automation, SSO/MFA, bulk member operations, and hosted account management remain hardening work that should stay behind server-only secret management, background job controls, and/or explicit delivery infrastructure.
+Direct provider notification delivery, hosted webhook registration automation, real model-backed AI, SSO/MFA, bulk member operations, and hosted account management remain hardening work that should stay behind server-only secret management, background job controls, explicit delivery infrastructure, and/or user consent controls.

@@ -335,7 +335,7 @@ Why now:
 
 Branch: `feat/roadmap-now-next-later`
 
-Status: active.
+Status: implemented and production-checked.
 
 Build:
 

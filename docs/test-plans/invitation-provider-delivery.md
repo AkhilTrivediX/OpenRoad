@@ -87,11 +87,16 @@ As a workspace owner, I can create an invitation and trust the server to hand th
 ## Evidence
 
 - Branch: `feat/invitation-provider-delivery`
-- Implementation commit SHA: Pending.
-- Date: Pending.
-- Commands run: Pending.
+- Implementation commit SHA: `b344742`
+- Date: 2026-07-10.
+- Commands run:
+  - `pnpm vitest run server/invitation-delivery.test.ts server/http.test.ts` -> 97 passed.
+  - `pnpm check` -> 381 passed, production client build passed, production server build passed.
+  - Built-server HTTP provider smoke with `server-dist/server/index.js`, isolated data files, local provider endpoint, `OPENROAD_INVITATION_DELIVERY_MODE=http`, and `OPENROAD_PUBLIC_APP_URL=http://127.0.0.1:<port>/` -> created invitation returned `delivery.status: "sent"`, provider received one request, and team metadata did not contain the raw accept token or provider bearer token.
+  - `pnpm release:verify` -> passed, dry-run release manifest generated with artifacts and required gates.
+  - `git diff --check` -> passed.
 - Browser/viewports tested: Not applicable unless UI changes are introduced.
 - Accessibility checks: Not applicable unless UI changes are introduced.
-- Reviewer notes: Pending.
+- Reviewer notes: Sidecar security review completed before implementation cleanup. Coverage now blocks redirects, rejects insecure/non-local provider URLs, rejects provider URL credentials, sanitizes provider message ids, bounds provider response text, redacts provider failures, requires `OPENROAD_PUBLIC_APP_URL` for provider mode, and keeps provider delivery failures recoverable.
 - Known unresolved risks: Built-in SMTP, provider-specific templates, retry scheduler, bounce handling, unsubscribe/suppression management, delivery analytics, and hosted provider admin remain future slices.
-- Rollback notes: Pending.
+- Rollback notes: Set `OPENROAD_INVITATION_DELIVERY_MODE=disabled` to stop provider delivery immediately, or revert this branch. No schema bump was introduced; invitations created while HTTP delivery was enabled remain valid and store only schema-4 delivery metadata.

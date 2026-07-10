@@ -6,6 +6,7 @@ import {
   listProviderCredentials,
   listProviderInstallations,
   loadWorkspaceIntegrationStatus,
+  registerProviderWebhook,
   revokeProviderCredential,
   runGitHubManualSync,
   runProviderManualSync,
@@ -21,7 +22,7 @@ describe("OpenRoad integration status client", () => {
       jsonResponse({
         integrationMetadata: {
           recovered: false,
-          schemaVersion: 3,
+          schemaVersion: 4,
           status: "ready"
         },
         providers: [
@@ -40,6 +41,7 @@ describe("OpenRoad integration status client", () => {
               import: true,
               liveSync: true,
               manualSync: true,
+              registerWebhook: true,
               resolveConflicts: true,
               setup: true,
               webhooks: true,
@@ -100,7 +102,26 @@ describe("OpenRoad integration status client", () => {
             setupConfigured: true,
             statusText: "Connected with token=raw-secret",
             syncWorkerConfigured: true,
-            totalInstallations: 1
+            totalInstallations: 1,
+            webhookRegistrations: [
+              {
+                attempt: 1,
+                createdAt: "2026-07-04T00:00:00Z",
+                events: ["issues", "pull_request"],
+                externalId: "github-app-hook",
+                id: "webhook-registration-1",
+                installationId: "github-install",
+                lastAttemptAt: "2026-07-04T00:00:00Z",
+                lastError: "Bearer raw-token-should-not-render",
+                provider: "github",
+                providerAccountName: "GitHub token-secret",
+                status: "active",
+                targetUrl:
+                  "https://openroad.example.com/api/openroad/integrations/github/webhook?access_token=raw-secret",
+                updatedAt: "2026-07-04T00:00:00Z",
+                workspaceId: "acme"
+              }
+            ]
           }
         ],
         status: "ready",
@@ -118,6 +139,7 @@ describe("OpenRoad integration status client", () => {
       linkedIssueMappings: 2,
       provider: "github",
       capabilities: {
+        registerWebhook: true,
         resolveConflicts: true,
         writeBack: true
       },
@@ -128,6 +150,11 @@ describe("OpenRoad integration status client", () => {
       openRoad: { title: "Conflict request" }
     });
     expect(status.providers[0]?.disconnectedAccounts[0]?.providerAccountName).toBe("Old [redacted]");
+    expect(status.providers[0]?.webhookRegistrations[0]).toMatchObject({
+      id: "webhook-registration-1",
+      providerAccountName: "GitHub [redacted]",
+      status: "active"
+    });
     expect(fetchImpl).toHaveBeenCalledWith(
       "/api/openroad/workspaces/acme/integrations/status",
       expect.objectContaining({ credentials: "same-origin" })
@@ -135,6 +162,55 @@ describe("OpenRoad integration status client", () => {
     expect(serialized).not.toContain("raw-token-should-not-render");
     expect(serialized).not.toContain("raw-secret");
     expect(serialized).not.toContain("encryptedSecret");
+  });
+
+  it("registers provider webhook deliveries with a minimal request body", async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({
+        message: "Registered GitHub App webhook delivery for this OpenRoad deployment.",
+        provider: "github",
+        registration: {
+          attempt: 1,
+          createdAt: "2026-07-04T00:00:00Z",
+          events: ["issues"],
+          id: "webhook-registration-1",
+          installationId: "github-install",
+          provider: "github",
+          providerAccountName: "AkhilTrivediX",
+          status: "active",
+          targetUrl:
+            "https://openroad.example.com/api/openroad/integrations/github/webhook?access_token=raw-secret",
+          updatedAt: "2026-07-04T00:00:00Z",
+          workspaceId: "acme"
+        },
+        status: "active"
+      })
+    );
+
+    const result = await registerProviderWebhook(
+      "github",
+      "acme",
+      "github-install",
+      fetchImpl as unknown as typeof fetch
+    );
+
+    expect(result).toMatchObject({
+      provider: "github",
+      registration: {
+        installationId: "github-install",
+        status: "active"
+      },
+      status: "active"
+    });
+    expect(JSON.stringify(result)).not.toContain("raw-secret");
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "/api/openroad/workspaces/acme/integrations/github/webhooks/register",
+      expect.objectContaining({
+        body: JSON.stringify({ installationId: "github-install" }),
+        credentials: "same-origin",
+        method: "POST"
+      })
+    );
   });
 
   it("returns a forbidden fallback without throwing", async () => {

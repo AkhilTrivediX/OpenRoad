@@ -95,7 +95,8 @@ import {
   type IntegrationStore,
   type IntegrationSyncJob,
   type IntegrationSyncJobReason,
-  type IntegrationSyncEvent
+  type IntegrationSyncEvent,
+  type IntegrationWebhookRegistration
 } from "./integrations.js";
 import {
   createIntegrationTokenVaultFromEnv,
@@ -166,6 +167,11 @@ import {
   resolveProviderMappingConflict,
   type ProviderConflictResolution
 } from "./provider-conflicts.js";
+import {
+  ProviderWebhookRegistrationError,
+  registerProviderWebhook,
+  resolveWebhookRegistrationPublicBaseUrl
+} from "./webhook-registration.js";
 import {
   createSafeLinearOAuthSetup,
   decodeLinearOAuthState,
@@ -241,6 +247,7 @@ type CreateOpenRoadServerOptions = {
   store: OpenRoadStore;
   teamStore?: TeamStore;
   tokenVault?: IntegrationTokenVault;
+  webhookRegistrationPublicBaseUrl?: string;
 };
 
 type ApiErrorCode =
@@ -378,7 +385,8 @@ export function createOpenRoadServer({
   sessionStore,
   store,
   teamStore,
-  tokenVault = createIntegrationTokenVaultFromEnv()
+  tokenVault = createIntegrationTokenVaultFromEnv(),
+  webhookRegistrationPublicBaseUrl = resolveWebhookRegistrationPublicBaseUrl()
 }: CreateOpenRoadServerOptions): Server {
   const resolvedDistDir = resolve(distDir);
   const activeGitHubWebhookDeliveries = new Set<string>();
@@ -452,7 +460,8 @@ export function createOpenRoadServer({
           activeGitHubWebhookDeliveries,
           activeJiraWebhookDeliveries,
           activeLinearWebhookDeliveries,
-          tokenVault
+          tokenVault,
+          webhookRegistrationPublicBaseUrl
         );
         return;
       }
@@ -592,7 +601,8 @@ async function handleApiRequest(
   activeGitHubWebhookDeliveries: Set<string>,
   activeJiraWebhookDeliveries: Set<string>,
   activeLinearWebhookDeliveries: Set<string>,
-  tokenVault: IntegrationTokenVault
+  tokenVault: IntegrationTokenVault,
+  webhookRegistrationPublicBaseUrl: string | undefined
 ) {
   if (requestUrl.pathname === "/api/health") {
     if (request.method !== "GET") {
@@ -1050,6 +1060,7 @@ async function handleApiRequest(
       linearOAuthConfig,
       jiraOAuthConfig,
       createConfiguredWebhookProviders({ githubAppConfig, jiraWebhookConfig, linearWebhookConfig }),
+      webhookRegistrationPublicBaseUrl,
       integrationStatusMatch[1]
     );
     return;
@@ -1185,6 +1196,28 @@ async function handleApiRequest(
       tokenVault,
       integrationWriteBackMatch[1],
       integrationWriteBackMatch[2]
+    );
+    return;
+  }
+
+  const integrationWebhookRegistrationMatch = requestUrl.pathname.match(
+    /^\/api\/openroad\/workspaces\/([^/]+)\/integrations\/([^/]+)\/webhooks\/register$/
+  );
+
+  if (integrationWebhookRegistrationMatch) {
+    await handleProviderWebhookRegistrationRequest(
+      request,
+      response,
+      store,
+      access,
+      teamStore,
+      integrationStore,
+      githubAppClient,
+      githubAppConfig,
+      runIntegrationMutationExclusive,
+      webhookRegistrationPublicBaseUrl,
+      integrationWebhookRegistrationMatch[1],
+      integrationWebhookRegistrationMatch[2]
     );
     return;
   }
@@ -4203,6 +4236,7 @@ async function handleIntegrationStatusRequest(
   linearOAuthConfig: LinearOAuthConfig,
   jiraOAuthConfig: JiraOAuthConfig,
   configuredWebhookProviders: Set<IntegrationProvider>,
+  webhookRegistrationPublicBaseUrl: string | undefined,
   encodedWorkspaceId: string
 ) {
   if (request.method !== "GET") {
@@ -4251,6 +4285,7 @@ async function handleIntegrationStatusRequest(
             jiraOAuthConfig,
             linearOAuthConfig,
             provider,
+            webhookRegistrationPublicBaseUrl,
             workspace,
             workspaceId
           })
@@ -4273,6 +4308,7 @@ function createIntegrationStatusProviderSummary({
   jiraOAuthConfig,
   linearOAuthConfig,
   provider,
+  webhookRegistrationPublicBaseUrl,
   workspace,
   workspaceId
 }: {
@@ -4283,6 +4319,7 @@ function createIntegrationStatusProviderSummary({
   jiraOAuthConfig: JiraOAuthConfig;
   linearOAuthConfig: LinearOAuthConfig;
   provider: IntegrationProvider;
+  webhookRegistrationPublicBaseUrl?: string;
   workspace: Workspace;
   workspaceId: string;
 }) {
@@ -4375,6 +4412,13 @@ function createIntegrationStatusProviderSummary({
       webhooks:
         configuredWebhookProviders.has(provider) &&
         activeInstallations.some((installation) => installation.permissions.includes("webhook:receive")),
+      registerWebhook: canRegisterProviderWebhook({
+        activeInstallations,
+        githubAppConfig,
+        provider,
+        setupConfigured,
+        webhookRegistrationPublicBaseUrl
+      }),
       resolveConflicts: conflicts.length > 0,
       writeBack: canProviderWriteBack({
         activeCredentials: activeWritableCredentials.length,
@@ -4412,7 +4456,13 @@ function createIntegrationStatusProviderSummary({
       syncWorkerConfigured
     }),
     syncWorkerConfigured,
-    totalInstallations: installations.length
+    totalInstallations: installations.length,
+    webhookRegistrations: createIntegrationWebhookRegistrationSummaries({
+      installations,
+      registrations: integrationState.webhookRegistrations.filter(
+        (registration) => registration.workspaceId === workspaceId && registration.provider === provider
+      )
+    })
   };
 }
 
@@ -4579,6 +4629,28 @@ function canProviderManualSync({
   }
 
   return syncWorkerConfigured && activeInstallations > 0 && activeCredentials > 0 && linkedIssueMappings > 0;
+}
+
+function canRegisterProviderWebhook({
+  activeInstallations,
+  githubAppConfig,
+  provider,
+  setupConfigured,
+  webhookRegistrationPublicBaseUrl
+}: {
+  activeInstallations: IntegrationInstallation[];
+  githubAppConfig: GitHubAppConfig;
+  provider: IntegrationProvider;
+  setupConfigured: boolean;
+  webhookRegistrationPublicBaseUrl?: string;
+}) {
+  return (
+    provider === "github" &&
+    setupConfigured &&
+    Boolean(webhookRegistrationPublicBaseUrl) &&
+    githubAppConfig.webhookSecretConfigured &&
+    activeInstallations.some((installation) => installation.permissions.includes("webhook:receive"))
+  );
 }
 
 function getIntegrationStatusText({
@@ -5026,6 +5098,124 @@ async function handleProviderConflictResolveRequest(
       {
         ...result,
         revision: auditEvent?.id ?? `integration-conflict-resolution-${Date.now()}`
+      },
+      access
+    );
+  } catch (error) {
+    writeKnownApiError(response, error, access);
+  }
+}
+
+function createIntegrationWebhookRegistrationSummaries({
+  installations,
+  registrations
+}: {
+  installations: IntegrationInstallation[];
+  registrations: IntegrationWebhookRegistration[];
+}) {
+  return registrations
+    .sort((left, right) => timestampMs(right.updatedAt) - timestampMs(left.updatedAt))
+    .slice(0, 5)
+    .map((registration) => {
+      const installation = installations.find((item) => item.id === registration.installationId);
+
+      return {
+        attempt: registration.attempt,
+        createdAt: registration.createdAt,
+        events: registration.events,
+        ...(registration.expiresAt ? { expiresAt: registration.expiresAt } : {}),
+        ...(registration.externalId ? { externalId: registration.externalId } : {}),
+        id: registration.id,
+        installationId: registration.installationId,
+        ...(registration.lastAttemptAt ? { lastAttemptAt: registration.lastAttemptAt } : {}),
+        ...(registration.lastError ? { lastError: registration.lastError } : {}),
+        provider: registration.provider,
+        providerAccountName: redactSensitiveText(installation?.providerAccountName ?? "Unknown account"),
+        status: registration.status,
+        targetUrl: registration.targetUrl,
+        updatedAt: registration.updatedAt,
+        workspaceId: registration.workspaceId
+      };
+    });
+}
+
+async function handleProviderWebhookRegistrationRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  store: OpenRoadStore,
+  access: AccessContext,
+  teamStore: TeamStore | undefined,
+  integrationStore: IntegrationStore | undefined,
+  githubAppClient: GitHubAppClient,
+  githubAppConfig: GitHubAppConfig,
+  runIntegrationMutationExclusive: NotificationDeliveryRunner,
+  webhookRegistrationPublicBaseUrl: string | undefined,
+  encodedWorkspaceId: string,
+  encodedProvider: string
+) {
+  if (request.method !== "POST") {
+    writeApiError(response, 405, "invalid_method", "This endpoint only supports POST.", access);
+    return;
+  }
+
+  const workspaceId = decodeURIComponent(encodedWorkspaceId);
+
+  try {
+    const provider = parseIntegrationProviderPath(encodedProvider);
+    requirePermission(access, "integration:manage", workspaceId);
+
+    if (!integrationStore) {
+      throw new ApiRequestError(
+        "not_configured",
+        503,
+        "OpenRoad integration metadata store is not configured."
+      );
+    }
+
+    const current = await store.load();
+    const workspace = current.state.workspaces.find((item) => item.id === workspaceId);
+
+    if (!workspace) {
+      throw new ApiRequestError("not_found", 404, "Workspace was not found.");
+    }
+
+    const payload = await readJsonBody(request, 4096);
+
+    if (!isRecord(payload)) {
+      throw new ApiRequestError("invalid_request", 400, "Webhook registration payload must be an object.");
+    }
+
+    const installationId = getBoundedIdentifier(payload.installationId, 160);
+    if (!installationId) {
+      throw new ApiRequestError("invalid_request", 400, "Integration installation id is required.");
+    }
+
+    const result = await registerProviderWebhook(
+      {
+        githubAppClient,
+        githubAppConfig,
+        integrationStore,
+        publicBaseUrl: webhookRegistrationPublicBaseUrl,
+        runIntegrationMutationExclusive
+      },
+      {
+        installationId,
+        provider,
+        workspaceId
+      }
+    );
+    const auditEvent = await recordAuditEvent(teamStore, current.state, access, {
+      summary: `Registered ${provider} webhook delivery for installation ${installationId} with status ${result.status}.`,
+      type: "integration.webhook_registration",
+      workspaceId
+    });
+
+    writeJson(
+      response,
+      result.status === "active" ? 200 : 202,
+      {
+        ...result,
+        revision: auditEvent?.id ?? `integration-webhook-registration-${Date.now()}`
       },
       access
     );
@@ -8601,6 +8791,11 @@ function writeKnownApiError(
   }
 
   if (error instanceof ProviderConflictResolutionError) {
+    writeApiError(response, error.status, error.code, error.message, access);
+    return;
+  }
+
+  if (error instanceof ProviderWebhookRegistrationError) {
     writeApiError(response, error.status, error.code, error.message, access);
     return;
   }

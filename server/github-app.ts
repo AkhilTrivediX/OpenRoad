@@ -49,6 +49,7 @@ export type GitHubAppClient = {
   getInstallation(installationId: string): Promise<GitHubAppInstallationApiPayload>;
   getRepositoryIssue(options: GitHubRepositoryIssueGetOptions): Promise<GitHubIssue>;
   listRepositoryIssues(options: GitHubRepositoryIssueListOptions): Promise<GitHubIssue[]>;
+  updateAppWebhookConfig(options: GitHubAppWebhookConfigUpdateOptions): Promise<GitHubAppWebhookConfig>;
   updateRepositoryIssue(options: GitHubRepositoryIssueUpdateOptions): Promise<GitHubIssue>;
 };
 
@@ -75,6 +76,20 @@ export type GitHubRepositoryIssueGetOptions = {
 export type GitHubRepositoryIssueUpdateOptions = GitHubRepositoryIssueGetOptions & {
   body: string;
   title: string;
+};
+
+export type GitHubAppWebhookConfig = {
+  contentType: "json" | "form" | "unknown";
+  insecureSsl: "0" | "1" | "unknown";
+  secretConfigured: boolean;
+  url: string;
+};
+
+export type GitHubAppWebhookConfigUpdateOptions = {
+  contentType: "json";
+  insecureSsl: "0";
+  secret: string;
+  url: string;
 };
 
 export type GitHubAppJwtOptions = {
@@ -270,6 +285,65 @@ export class FetchGitHubAppClient implements GitHubAppClient {
     }
 
     return parseGitHubIssuePayload(body);
+  }
+
+  async updateAppWebhookConfig(options: GitHubAppWebhookConfigUpdateOptions) {
+    const jwt = await this.createJwt();
+    const response = await this.fetchImpl(`${this.config.apiBaseUrl}/app/hook/config`, {
+      body: JSON.stringify({
+        content_type: options.contentType,
+        insecure_ssl: options.insecureSsl,
+        secret: options.secret,
+        url: options.url
+      }),
+      headers: {
+        Accept: "application/vnd.github+json",
+        Authorization: `Bearer ${jwt}`,
+        "Content-Type": "application/json",
+        "X-GitHub-Api-Version": "2022-11-28"
+      },
+      method: "PATCH"
+    });
+
+    if (!response.ok) {
+      throw new GitHubAppClientError(
+        "github_api_error",
+        `GitHub App webhook configuration update failed with status ${response.status}.`,
+        response.status
+      );
+    }
+
+    const body = (await response.json()) as unknown;
+    if (!isRecord(body)) {
+      throw new GitHubAppClientError(
+        "invalid_response",
+        "GitHub App webhook configuration response was invalid."
+      );
+    }
+
+    const url = normalizeEnvValue(body.url);
+    if (!url) {
+      throw new GitHubAppClientError(
+        "invalid_response",
+        "GitHub App webhook configuration response did not include a URL."
+      );
+    }
+
+    const contentType: GitHubAppWebhookConfig["contentType"] =
+      body.content_type === "json" || body.content_type === "form" ? body.content_type : "unknown";
+    const insecureSsl: GitHubAppWebhookConfig["insecureSsl"] =
+      body.insecure_ssl === "0" || body.insecure_ssl === 0
+        ? "0"
+        : body.insecure_ssl === "1" || body.insecure_ssl === 1
+          ? "1"
+          : "unknown";
+
+    return {
+      contentType,
+      insecureSsl,
+      secretConfigured: Boolean(normalizeEnvValue(body.secret)),
+      url
+    };
   }
 
   private async createJwt() {

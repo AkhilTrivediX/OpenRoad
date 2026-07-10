@@ -33,7 +33,7 @@ describe("openroad ops", () => {
     const manifest = JSON.parse(await readFile(join(result.backupDir, "manifest.json"), "utf8"));
     expect(manifest.type).toBe("openroad-file-snapshot");
     expect(manifest.files.data.schemaVersion).toBe(2);
-    expect(manifest.files.integration.schemaVersion).toBe(3);
+    expect(manifest.files.integration.schemaVersion).toBe(4);
     expect(manifest.files.session.schemaVersion).toBe(2);
     expect(manifest.files.team.schemaVersion).toBe(5);
     await expect(readFile(join(result.backupDir, "openroad-state.json"), "utf8")).resolves.toContain("acme");
@@ -117,7 +117,7 @@ describe("openroad ops", () => {
               workspaceId: "acme"
             }
           ],
-          schemaVersion: 3,
+          schemaVersion: 4,
           syncJobs: [
             {
               attempt: 0,
@@ -132,6 +132,23 @@ describe("openroad ops", () => {
               reason: "manual",
               resultSummary: "Retried with Bearer raw-sync-summary-token",
               status: "queued",
+              updatedAt: "2026-07-04T00:00:00.000Z",
+              workspaceId: "acme"
+            }
+          ],
+          webhookRegistrations: [
+            {
+              attempt: 1,
+              createdAt: "2026-07-04T00:00:00.000Z",
+              events: ["issues"],
+              externalId: "raw-webhook-secret-id",
+              id: "webhook-registration-1",
+              installationId: "github-install",
+              lastAttemptAt: "2026-07-04T00:00:00.000Z",
+              lastError: "Provider failed token=raw-webhook-secret",
+              provider: "github",
+              status: "failed",
+              targetUrl: "https://openroad.example.com/api/openroad/integrations/github/webhook?access_token=raw-webhook-token",
               updatedAt: "2026-07-04T00:00:00.000Z",
               workspaceId: "acme"
             }
@@ -171,7 +188,10 @@ describe("openroad ops", () => {
     expect(archivedIntegration).not.toContain("raw-sync-token");
     expect(archivedIntegration).not.toContain("raw-sync-error-token");
     expect(archivedIntegration).not.toContain("raw-sync-summary-token");
+    expect(archivedIntegration).not.toContain("raw-webhook-secret");
+    expect(archivedIntegration).not.toContain("raw-webhook-token");
     expect(archivedIntegration).toContain("leaseExpiresAt");
+    expect(archivedIntegration).toContain("webhook-registration-1");
     expect(restoredIntegration).toContain("ciphertext");
     expect(restoredIntegration).not.toContain("raw-access-token");
     expect(restoredIntegration).not.toContain("raw-refresh-token");
@@ -179,6 +199,8 @@ describe("openroad ops", () => {
     expect(restoredIntegration).not.toContain("raw-sync-token");
     expect(restoredIntegration).not.toContain("raw-sync-error-token");
     expect(restoredIntegration).not.toContain("raw-sync-summary-token");
+    expect(restoredIntegration).not.toContain("raw-webhook-secret");
+    expect(restoredIntegration).not.toContain("raw-webhook-token");
   });
 
   it("fails backup when a required source file is missing", async ({ task }) => {
@@ -331,7 +353,7 @@ async function writeOpenRoadPair(root, workspaceId = "acme") {
         installations: [],
         credentials: [],
         mappings: [],
-        schemaVersion: 3,
+        schemaVersion: 4,
         syncEvents: [
           {
             createdAt: "2026-07-04T00:00:00.000Z",
@@ -344,7 +366,8 @@ async function writeOpenRoadPair(root, workspaceId = "acme") {
             workspaceId
           }
         ],
-        syncJobs: []
+        syncJobs: [],
+        webhookRegistrations: []
       },
       null,
       2

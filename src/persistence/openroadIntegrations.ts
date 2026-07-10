@@ -31,6 +31,26 @@ export type IntegrationStatusAccountSummary = {
   status: "active" | "disconnected" | "suspended";
 };
 
+export type IntegrationWebhookRegistrationStatus = "active" | "blocked" | "failed";
+
+export type IntegrationWebhookRegistrationSummary = {
+  attempt: number;
+  createdAt: string;
+  events: string[];
+  expiresAt?: string;
+  externalId?: string;
+  id: string;
+  installationId: string;
+  lastAttemptAt?: string;
+  lastError?: string;
+  provider: IntegrationProvider;
+  providerAccountName: string;
+  status: IntegrationWebhookRegistrationStatus;
+  targetUrl: string;
+  updatedAt: string;
+  workspaceId: string;
+};
+
 export type IntegrationConflictSummary = {
   connectedAt: string;
   external: {
@@ -60,6 +80,7 @@ export type IntegrationProviderStatus = {
     import: boolean;
     liveSync: boolean;
     manualSync: boolean;
+    registerWebhook: boolean;
     resolveConflicts: boolean;
     setup: boolean;
     webhooks: boolean;
@@ -83,6 +104,7 @@ export type IntegrationProviderStatus = {
   statusText: string;
   syncWorkerConfigured: boolean;
   totalInstallations: number;
+  webhookRegistrations: IntegrationWebhookRegistrationSummary[];
 };
 
 export type WorkspaceIntegrationStatus = {
@@ -136,6 +158,13 @@ export type ProviderConflictResolutionResult = {
   resolution: ProviderConflictResolution;
   resolvedAt?: string;
   status: "forbidden" | "resolved" | "unavailable";
+};
+
+export type ProviderWebhookRegistrationResult = {
+  message: string;
+  provider: IntegrationProvider;
+  registration?: IntegrationWebhookRegistrationSummary;
+  status: IntegrationWebhookRegistrationStatus | "forbidden" | "unavailable";
 };
 
 export type IntegrationCredentialSecretType = "access-token" | "refresh-token";
@@ -229,6 +258,7 @@ export function createStandaloneIntegrationStatus(
         import: false,
         liveSync: false,
         manualSync: false,
+        registerWebhook: false,
         resolveConflicts: false,
         setup: false,
         webhooks: false,
@@ -248,7 +278,8 @@ export function createStandaloneIntegrationStatus(
       setupConfigured: false,
       statusText: "Optional. Connect later when this workspace needs provider context.",
       syncWorkerConfigured: false,
-      totalInstallations: 0
+      totalInstallations: 0,
+      webhookRegistrations: []
     })),
     status: "unavailable",
     workspaceId
@@ -450,6 +481,38 @@ export async function resolveProviderConflict(
     resolution: parseConflictResolutionValue(result.payload, resolution),
     resolvedAt: getRecordText(result.payload, "resolvedAt"),
     status: "resolved"
+  };
+}
+
+export async function registerProviderWebhook(
+  provider: Extract<IntegrationProvider, "github" | "jira" | "linear">,
+  workspaceId: string,
+  installationId: string,
+  fetchImpl: typeof fetch = fetch
+): Promise<ProviderWebhookRegistrationResult> {
+  const result = await postJsonSafely(
+    `/api/openroad/workspaces/${encodeURIComponent(workspaceId)}/integrations/${provider}/webhooks/register`,
+    { installationId },
+    fetchImpl
+  );
+
+  if (!result.ok) {
+    return {
+      message: safeIntegrationErrorMessage(result.status, result.payload),
+      provider,
+      status: result.status === 403 ? "forbidden" : "unavailable"
+    };
+  }
+
+  return {
+    message:
+      getRecordText(result.payload, "message") ??
+      `${providerLabels[provider]} webhook registration updated.`,
+    provider,
+    registration: parseWebhookRegistrationSummary(
+      isRecord(result.payload) ? result.payload.registration : undefined
+    ),
+    status: getWebhookRegistrationStatus(isRecord(result.payload) ? result.payload.status : undefined) ?? "active"
   };
 }
 
@@ -782,7 +845,16 @@ function parseProviderStatus(value: unknown): IntegrationProviderStatus | undefi
     setupConfigured: getRecordBoolean(value, "setupConfigured"),
     statusText: getRecordText(value, "statusText") ?? "Integration status is unavailable.",
     syncWorkerConfigured: getRecordBoolean(value, "syncWorkerConfigured"),
-    totalInstallations: getRecordNumber(value, "totalInstallations")
+    totalInstallations: getRecordNumber(value, "totalInstallations"),
+    webhookRegistrations: Array.isArray(value.webhookRegistrations)
+      ? value.webhookRegistrations
+          .map(parseWebhookRegistrationSummary)
+          .filter(
+            (registration): registration is IntegrationWebhookRegistrationSummary =>
+              Boolean(registration)
+          )
+          .slice(0, 5)
+      : []
   };
 }
 
@@ -940,6 +1012,7 @@ function parseCapabilities(value: unknown): IntegrationProviderStatus["capabilit
     import: getRecordBoolean(record, "import"),
     liveSync: getRecordBoolean(record, "liveSync"),
     manualSync: getRecordBoolean(record, "manualSync"),
+    registerWebhook: getRecordBoolean(record, "registerWebhook"),
     resolveConflicts: getRecordBoolean(record, "resolveConflicts"),
     setup: getRecordBoolean(record, "setup"),
     webhooks: getRecordBoolean(record, "webhooks"),
@@ -979,6 +1052,40 @@ function parseIntegrationConflictSummary(value: unknown): IntegrationConflictSum
       type: "request"
     },
     providerAccountName: getRecordText(value, "providerAccountName") ?? "Unknown account"
+  };
+}
+
+function parseWebhookRegistrationSummary(
+  value: unknown
+): IntegrationWebhookRegistrationSummary | undefined {
+  if (!isRecord(value)) return undefined;
+  const id = getRecordIdentifier(value, "id");
+  const installationId = getRecordIdentifier(value, "installationId");
+  const provider = getProvider(value.provider);
+  const status = getWebhookRegistrationStatus(value.status);
+  const targetUrl = getRecordText(value, "targetUrl");
+  const workspaceId = getRecordIdentifier(value, "workspaceId");
+
+  if (!id || !installationId || !provider || !status || !targetUrl || !workspaceId) {
+    return undefined;
+  }
+
+  return {
+    attempt: getRecordNumber(value, "attempt"),
+    createdAt: getRecordText(value, "createdAt") ?? "",
+    events: parseTextList(value.events),
+    expiresAt: getRecordText(value, "expiresAt"),
+    externalId: getRecordIdentifier(value, "externalId"),
+    id,
+    installationId,
+    lastAttemptAt: getRecordText(value, "lastAttemptAt"),
+    lastError: getRecordText(value, "lastError"),
+    provider,
+    providerAccountName: getRecordText(value, "providerAccountName") ?? "Unknown account",
+    status,
+    targetUrl,
+    updatedAt: getRecordText(value, "updatedAt") ?? "",
+    workspaceId
   };
 }
 
@@ -1087,6 +1194,10 @@ function getJobStatus(value: unknown): IntegrationStatusJobSummary["status"] | u
   return value === "failed" || value === "queued" || value === "running" || value === "succeeded"
     ? value
     : undefined;
+}
+
+function getWebhookRegistrationStatus(value: unknown): IntegrationWebhookRegistrationStatus | undefined {
+  return value === "active" || value === "blocked" || value === "failed" ? value : undefined;
 }
 
 function getJobReason(value: unknown): IntegrationStatusJobSummary["reason"] | undefined {

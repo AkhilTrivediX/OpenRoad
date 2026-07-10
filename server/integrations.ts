@@ -12,15 +12,17 @@ import {
   type IntegrationPermission
 } from "../src/integrations/adapter.js";
 
-export const openRoadIntegrationSchemaVersion = 3;
+export const openRoadIntegrationSchemaVersion = 4;
 
 export const integrationCredentialSecretTypes = ["access-token", "refresh-token"] as const;
 export const integrationSyncJobReasons = ["manual", "scheduled", "webhook", "retry"] as const;
 export const integrationSyncJobStatuses = ["queued", "running", "succeeded", "failed"] as const;
+export const integrationWebhookRegistrationStatuses = ["active", "blocked", "failed"] as const;
 
 export type IntegrationCredentialSecretType = (typeof integrationCredentialSecretTypes)[number];
 export type IntegrationSyncJobReason = (typeof integrationSyncJobReasons)[number];
 export type IntegrationSyncJobStatus = (typeof integrationSyncJobStatuses)[number];
+export type IntegrationWebhookRegistrationStatus = (typeof integrationWebhookRegistrationStatuses)[number];
 
 export type EncryptedIntegrationCredentialSecret = {
   alg: "aes-256-gcm";
@@ -57,6 +59,7 @@ export type IntegrationState = {
   schemaVersion: typeof openRoadIntegrationSchemaVersion;
   syncEvents: IntegrationSyncEvent[];
   syncJobs: IntegrationSyncJob[];
+  webhookRegistrations: IntegrationWebhookRegistration[];
 };
 
 export type IntegrationSyncEvent = {
@@ -88,6 +91,23 @@ export type IntegrationSyncJob = {
   reason: IntegrationSyncJobReason;
   resultSummary?: string;
   status: IntegrationSyncJobStatus;
+  updatedAt: string;
+  workspaceId: string;
+};
+
+export type IntegrationWebhookRegistration = {
+  attempt: number;
+  createdAt: string;
+  events: string[];
+  expiresAt?: string;
+  externalId?: string;
+  id: string;
+  installationId: string;
+  lastAttemptAt?: string;
+  lastError?: string;
+  provider: IntegrationProvider;
+  status: IntegrationWebhookRegistrationStatus;
+  targetUrl: string;
   updatedAt: string;
   workspaceId: string;
 };
@@ -213,7 +233,8 @@ export function createInitialIntegrationState(): IntegrationState {
     mappings: [],
     schemaVersion: openRoadIntegrationSchemaVersion,
     syncEvents: [],
-    syncJobs: []
+    syncJobs: [],
+    webhookRegistrations: []
   };
 }
 
@@ -235,17 +256,23 @@ export function parseIntegrationState(value: unknown): IntegrationState {
   const schemaVersion = getPersistedSchemaVersion(value);
   const isVersionOne = schemaVersion === 1;
   const isVersionTwo = schemaVersion === 2;
+  const isVersionThree = schemaVersion === 3;
   const isCurrentVersion = schemaVersion === openRoadIntegrationSchemaVersion;
   const credentials = isVersionOne && value.credentials === undefined ? [] : value.credentials;
   const syncJobs = (isVersionOne || isVersionTwo) && value.syncJobs === undefined ? [] : value.syncJobs;
+  const webhookRegistrations =
+    (isVersionOne || isVersionTwo || isVersionThree) && value.webhookRegistrations === undefined
+      ? []
+      : value.webhookRegistrations;
 
   if (
-    (!isVersionOne && !isVersionTwo && !isCurrentVersion) ||
+    (!isVersionOne && !isVersionTwo && !isVersionThree && !isCurrentVersion) ||
     !Array.isArray(credentials) ||
     !Array.isArray(value.installations) ||
     !Array.isArray(value.mappings) ||
     (value.syncEvents !== undefined && !Array.isArray(value.syncEvents)) ||
-    !Array.isArray(syncJobs)
+    !Array.isArray(syncJobs) ||
+    !Array.isArray(webhookRegistrations)
   ) {
     throw new IntegrationStoreError("invalid_state", "OpenRoad integration metadata is invalid.");
   }
@@ -255,7 +282,8 @@ export function parseIntegrationState(value: unknown): IntegrationState {
     !value.installations.every(isIntegrationInstallation) ||
     !value.mappings.every(isMapping) ||
     (Array.isArray(value.syncEvents) && !value.syncEvents.every(isSyncEvent)) ||
-    !syncJobs.every(isIntegrationSyncJob)
+    !syncJobs.every(isIntegrationSyncJob) ||
+    !webhookRegistrations.every(isIntegrationWebhookRegistration)
   ) {
     throw new IntegrationStoreError("invalid_state", "OpenRoad integration metadata is invalid.");
   }
@@ -266,7 +294,8 @@ export function parseIntegrationState(value: unknown): IntegrationState {
     mappings: value.mappings.map(sanitizeExternalObjectMapping),
     schemaVersion: openRoadIntegrationSchemaVersion,
     syncEvents: (value.syncEvents ?? []).map(sanitizeIntegrationSyncEvent).slice(0, 1000),
-    syncJobs: trimIntegrationSyncJobs(syncJobs.map(sanitizeIntegrationSyncJob))
+    syncJobs: trimIntegrationSyncJobs(syncJobs.map(sanitizeIntegrationSyncJob)),
+    webhookRegistrations: webhookRegistrations.map(sanitizeIntegrationWebhookRegistration).slice(0, 1000)
   });
 }
 
@@ -441,6 +470,27 @@ export function sanitizeIntegrationSyncJob(job: IntegrationSyncJob): Integration
   };
 }
 
+export function sanitizeIntegrationWebhookRegistration(
+  registration: IntegrationWebhookRegistration
+): IntegrationWebhookRegistration {
+  return {
+    attempt: Math.max(0, Math.floor(registration.attempt)),
+    createdAt: registration.createdAt,
+    events: uniqueStrings(registration.events.map((event) => redactSensitiveText(event))).slice(0, 20),
+    ...(registration.expiresAt ? { expiresAt: registration.expiresAt } : {}),
+    ...(registration.externalId ? { externalId: redactSensitiveText(registration.externalId) } : {}),
+    id: registration.id,
+    installationId: registration.installationId,
+    ...(registration.lastAttemptAt ? { lastAttemptAt: registration.lastAttemptAt } : {}),
+    ...(registration.lastError ? { lastError: redactSensitiveText(registration.lastError) } : {}),
+    provider: registration.provider,
+    status: registration.status,
+    targetUrl: redactSensitiveText(registration.targetUrl),
+    updatedAt: registration.updatedAt,
+    workspaceId: registration.workspaceId
+  };
+}
+
 function upsertInstallationByKey(
   items: IntegrationInstallation[],
   nextItem: IntegrationInstallation
@@ -584,6 +634,30 @@ function isIntegrationSyncJob(value: unknown): value is IntegrationSyncJob {
     integrationSyncJobReasons.includes(value.reason as IntegrationSyncJobReason) &&
     (value.resultSummary === undefined || typeof value.resultSummary === "string") &&
     integrationSyncJobStatuses.includes(value.status as IntegrationSyncJobStatus) &&
+    typeof value.updatedAt === "string" &&
+    typeof value.workspaceId === "string"
+  );
+}
+
+function isIntegrationWebhookRegistration(value: unknown): value is IntegrationWebhookRegistration {
+  return (
+    isRecord(value) &&
+    typeof value.attempt === "number" &&
+    Number.isFinite(value.attempt) &&
+    typeof value.createdAt === "string" &&
+    Array.isArray(value.events) &&
+    value.events.every((event) => typeof event === "string") &&
+    (value.expiresAt === undefined || typeof value.expiresAt === "string") &&
+    (value.externalId === undefined || typeof value.externalId === "string") &&
+    typeof value.id === "string" &&
+    typeof value.installationId === "string" &&
+    (value.lastAttemptAt === undefined || typeof value.lastAttemptAt === "string") &&
+    (value.lastError === undefined || typeof value.lastError === "string") &&
+    integrationProviders.includes(value.provider as IntegrationProvider) &&
+    integrationWebhookRegistrationStatuses.includes(
+      value.status as IntegrationWebhookRegistrationStatus
+    ) &&
+    typeof value.targetUrl === "string" &&
     typeof value.updatedAt === "string" &&
     typeof value.workspaceId === "string"
   );

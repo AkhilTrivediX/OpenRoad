@@ -87,6 +87,16 @@ Handled events:
 
 Webhook delivery IDs are stored as sanitized `syncEvents` in `OPENROAD_INTEGRATION_FILE` for idempotency and hidden operational visibility. The event log stores delivery id, event name, provider, result, summary, workspace id, and installation id only; raw payloads, signatures, headers, tokens, and secrets are not stored.
 
+## Hosted Webhook Registration
+
+`POST /api/openroad/workspaces/:workspaceId/integrations/github/webhooks/register`
+
+The endpoint requires `integration:manage`, a verified active installation with `webhook:receive`, GitHub App credentials, `OPENROAD_GITHUB_APP_WEBHOOK_SECRET`, and either `OPENROAD_PUBLIC_APP_URL` or `OPENROAD_WEBHOOK_PUBLIC_BASE_URL`.
+
+OpenRoad updates the GitHub App webhook configuration server-side with JSON content type, SSL verification enabled, the derived public callback URL, and the server-only webhook secret. Browser requests submit only an installation id. Responses and stored registration metadata never include the webhook secret, private key, JWT, installation token, authorization headers, raw provider responses, request bodies, or request headers.
+
+Repeated registration for the same provider/workspace/installation/target URL updates the same registration record and increments the attempt count.
+
 ## Disconnect Endpoint
 
 `POST /api/openroad/workspaces/:workspaceId/integrations/github/app/installations/:installationId/disconnect`
@@ -123,6 +133,5 @@ GitHub write-back is explicit and request-scoped. It updates only the linked iss
 
 ## Deferred Work
 
-- Full browser connect/disconnect flows and expanded sync logs.
 - Setup callback page that carries workspace context from GitHub back into OpenRoad.
-- Conflict handling.
+- Expanded sync/log observability beyond the compact Settings status surface.

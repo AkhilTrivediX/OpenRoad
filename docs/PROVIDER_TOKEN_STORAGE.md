@@ -42,7 +42,7 @@ All credential endpoints require `integration:manage`, which is limited to local
 
 ## Storage Boundary
 
-Credentials are stored in `OPENROAD_INTEGRATION_FILE`. The credential record shape was introduced in integration metadata schema `2`; current schema `3` also stores provider-neutral background sync job metadata.
+Credentials are stored in `OPENROAD_INTEGRATION_FILE`. The credential record shape was introduced in integration metadata schema `2`; current schema `4` also stores provider-neutral background sync job metadata and hosted webhook registration metadata.
 
 API responses return only credential metadata:
 

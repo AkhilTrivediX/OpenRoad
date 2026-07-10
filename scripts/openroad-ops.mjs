@@ -380,7 +380,8 @@ function validateIntegrationState(value) {
     !Array.isArray(value.mappings) ||
     (value.schemaVersion >= 2 && !Array.isArray(value.credentials)) ||
     (value.syncEvents !== undefined && !Array.isArray(value.syncEvents)) ||
-    (value.schemaVersion >= 3 && !Array.isArray(value.syncJobs))
+    (value.schemaVersion >= 3 && !Array.isArray(value.syncJobs)) ||
+    (value.schemaVersion >= 4 && !Array.isArray(value.webhookRegistrations))
   ) {
     throw new OpsError(
       "invalid_integration_state",
@@ -408,6 +409,9 @@ function sanitizeIntegrationState(value) {
     syncEvents: (value.syncEvents ?? []).map(sanitizeIntegrationSyncEvent),
     ...(value.schemaVersion >= 3
       ? { syncJobs: value.syncJobs.map(sanitizeIntegrationSyncJob) }
+      : {}),
+    ...(value.schemaVersion >= 4
+      ? { webhookRegistrations: value.webhookRegistrations.map(sanitizeIntegrationWebhookRegistration) }
       : {})
   };
 }
@@ -581,6 +585,33 @@ function sanitizeIntegrationSyncJob(job) {
   };
 }
 
+function sanitizeIntegrationWebhookRegistration(registration) {
+  if (!isRecord(registration)) return registration;
+
+  return {
+    attempt: registration.attempt,
+    createdAt: registration.createdAt,
+    events: Array.isArray(registration.events)
+      ? registration.events.map((event) => redactSensitiveText(String(event).slice(0, 500)))
+      : [],
+    ...(registration.expiresAt ? { expiresAt: registration.expiresAt } : {}),
+    ...(registration.externalId
+      ? { externalId: redactSensitiveText(String(registration.externalId).slice(0, 500)) }
+      : {}),
+    id: registration.id,
+    installationId: registration.installationId,
+    ...(registration.lastAttemptAt ? { lastAttemptAt: registration.lastAttemptAt } : {}),
+    ...(registration.lastError
+      ? { lastError: redactSensitiveText(String(registration.lastError).slice(0, 500)) }
+      : {}),
+    provider: registration.provider,
+    status: registration.status,
+    targetUrl: redactSensitiveText(String(registration.targetUrl ?? "").slice(0, 500)),
+    updatedAt: registration.updatedAt,
+    workspaceId: registration.workspaceId
+  };
+}
+
 function redactSensitiveText(value) {
   return value
     .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [redacted]")
@@ -601,9 +632,10 @@ function createEmptyIntegrationState() {
     credentials: [],
     installations: [],
     mappings: [],
-    schemaVersion: 3,
+    schemaVersion: 4,
     syncEvents: [],
-    syncJobs: []
+    syncJobs: [],
+    webhookRegistrations: []
   };
 }
 

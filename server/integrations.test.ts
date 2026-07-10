@@ -35,7 +35,8 @@ describe("OpenRoad integration metadata store", () => {
       schemaVersion: openRoadIntegrationSchemaVersion,
       syncEvents: [],
       credentials: [],
-      syncJobs: []
+      syncJobs: [],
+      webhookRegistrations: []
     });
   });
 
@@ -118,6 +119,23 @@ describe("OpenRoad integration metadata store", () => {
           workspaceId: "acme"
         }
       ],
+      webhookRegistrations: [
+        {
+          attempt: 1,
+          createdAt: "2026-07-04T00:00:00.000Z",
+          events: ["issues", "token-secret-event"],
+          externalId: "hook-secret-id",
+          id: "webhook-registration-1",
+          installationId: "github-install",
+          lastAttemptAt: "2026-07-04T00:00:00.000Z",
+          lastError: "Provider failed token=secret",
+          provider: "github",
+          status: "failed",
+          targetUrl: "https://openroad.example.com/api/openroad/integrations/github/webhook?access_token=raw",
+          updatedAt: "2026-07-04T00:00:00.000Z",
+          workspaceId: "acme"
+        }
+      ],
       syncJobs: [
         {
           attempt: 0,
@@ -161,6 +179,7 @@ describe("OpenRoad integration metadata store", () => {
       "workspaceId"
     ]);
     expect(JSON.stringify(state.syncJobs[0])).not.toContain("secret");
+    expect(JSON.stringify(state.webhookRegistrations[0])).not.toContain("secret");
     expect(Object.keys(state.syncJobs[0])).toEqual([
       "attempt",
       "createdAt",
@@ -177,6 +196,8 @@ describe("OpenRoad integration metadata store", () => {
     ]);
     expect(state.syncJobs[0].error).toContain("[redacted]");
     expect(state.syncJobs[0].resultSummary).toContain("[redacted]");
+    expect(state.webhookRegistrations[0].lastError).toContain("[redacted]");
+    expect(state.webhookRegistrations[0].targetUrl).toContain("[redacted]");
   });
 
   it("loads older integration metadata that has no sync job queue yet", () => {
@@ -192,14 +213,26 @@ describe("OpenRoad integration metadata store", () => {
       schemaVersion: 2,
       syncEvents: []
     });
+    const versionThree = parseIntegrationState({
+      credentials: [],
+      installations: [],
+      mappings: [],
+      schemaVersion: 3,
+      syncEvents: [],
+      syncJobs: []
+    });
 
     expect(state.syncEvents).toEqual([]);
     expect(state.credentials).toEqual([]);
     expect(state.syncJobs).toEqual([]);
+    expect(state.webhookRegistrations).toEqual([]);
     expect(state.schemaVersion).toBe(openRoadIntegrationSchemaVersion);
     expect(versionTwo.credentials).toHaveLength(1);
     expect(versionTwo.syncJobs).toEqual([]);
+    expect(versionTwo.webhookRegistrations).toEqual([]);
     expect(versionTwo.schemaVersion).toBe(openRoadIntegrationSchemaVersion);
+    expect(versionThree.webhookRegistrations).toEqual([]);
+    expect(versionThree.schemaVersion).toBe(openRoadIntegrationSchemaVersion);
   });
 
   it("stores credential metadata while redacting encrypted secret payloads from API metadata", () => {
@@ -216,7 +249,8 @@ describe("OpenRoad integration metadata store", () => {
       mappings: [],
       schemaVersion: openRoadIntegrationSchemaVersion,
       syncEvents: [],
-      syncJobs: []
+      syncJobs: [],
+      webhookRegistrations: []
     });
     const metadata = sanitizeIntegrationCredentialMetadata(state.credentials[0]);
 
@@ -286,7 +320,8 @@ describe("OpenRoad integration metadata store", () => {
               updatedAt: "2026-07-04T00:00:00.000Z",
               workspaceId: "acme"
             }
-          ]
+          ],
+          webhookRegistrations: []
         },
         null,
         2
@@ -323,7 +358,8 @@ describe("OpenRoad integration metadata store", () => {
         mappings: [],
         schemaVersion: openRoadIntegrationSchemaVersion + 1,
         syncEvents: [],
-        syncJobs: []
+        syncJobs: [],
+        webhookRegistrations: []
       })
     ).toThrow(IntegrationStoreError);
   });
@@ -335,7 +371,8 @@ describe("OpenRoad integration metadata store", () => {
         credentials: [],
         mappings: [],
         schemaVersion: openRoadIntegrationSchemaVersion,
-        syncJobs: []
+        syncJobs: [],
+        webhookRegistrations: []
       })
     ).toThrow("invalid");
     expect(() =>
@@ -344,7 +381,8 @@ describe("OpenRoad integration metadata store", () => {
         credentials: [],
         mappings: [{ id: "broken" }],
         schemaVersion: openRoadIntegrationSchemaVersion,
-        syncJobs: []
+        syncJobs: [],
+        webhookRegistrations: []
       })
     ).toThrow("invalid");
     expect(() =>
@@ -354,7 +392,8 @@ describe("OpenRoad integration metadata store", () => {
         mappings: [],
         schemaVersion: openRoadIntegrationSchemaVersion,
         syncEvents: [],
-        syncJobs: []
+        syncJobs: [],
+        webhookRegistrations: []
       })
     ).toThrow("invalid");
     expect(() =>
@@ -364,7 +403,19 @@ describe("OpenRoad integration metadata store", () => {
         mappings: [],
         schemaVersion: openRoadIntegrationSchemaVersion,
         syncEvents: [],
-        syncJobs: [{ id: "broken" }]
+        syncJobs: [{ id: "broken" }],
+        webhookRegistrations: []
+      })
+    ).toThrow("invalid");
+    expect(() =>
+      parseIntegrationState({
+        credentials: [],
+        installations: [],
+        mappings: [],
+        schemaVersion: openRoadIntegrationSchemaVersion,
+        syncEvents: [],
+        syncJobs: [],
+        webhookRegistrations: [{ id: "broken" }]
       })
     ).toThrow("invalid");
   });

@@ -46,6 +46,18 @@ export type TeamAccountCredentialSummary = {
   userId: string;
 };
 
+export type TeamWorkspaceMemberSummary = {
+  accountPasswordSet: boolean;
+  createdAt: string;
+  email: string;
+  id: string;
+  isLocalOwner: boolean;
+  name: string;
+  role: WorkspaceRole;
+  userId: string;
+  workspaceId: string;
+};
+
 export type TeamInvitationStatus = "accepted" | "expired" | "pending" | "revoked";
 export type TeamInvitationDeliveryStatus = "failed" | "sent";
 
@@ -145,6 +157,17 @@ export type SetAccountPasswordInput = {
   userId: string;
 };
 
+export type UpdateWorkspaceMemberRoleInput = {
+  membershipId: string;
+  role: WorkspaceRole;
+  workspaceId: string;
+};
+
+export type DeactivateWorkspaceMemberInput = {
+  membershipId: string;
+  workspaceId: string;
+};
+
 export type AuthenticateAccountPasswordInput = {
   email: string;
   password: string;
@@ -174,6 +197,14 @@ export type AuthenticateAccountPasswordResult = {
   user: TeamUser;
 };
 
+export type UpdateWorkspaceMemberRoleResult = {
+  member: TeamWorkspaceMemberSummary;
+};
+
+export type DeactivateWorkspaceMemberResult = {
+  member: TeamWorkspaceMemberSummary;
+};
+
 export type TeamStore = {
   acceptInvitation(
     openRoadState: OpenRoadState,
@@ -191,6 +222,10 @@ export type TeamStore = {
     openRoadState: OpenRoadState,
     workspaceId: string
   ): Promise<TeamInvitationSummary[]>;
+  listWorkspaceMembers(
+    openRoadState: OpenRoadState,
+    workspaceId: string
+  ): Promise<TeamWorkspaceMemberSummary[]>;
   load(openRoadState: OpenRoadState): Promise<TeamStoreLoadResult>;
   recordInvitationDelivery(
     openRoadState: OpenRoadState,
@@ -208,6 +243,14 @@ export type TeamStore = {
     openRoadState: OpenRoadState,
     input: SetAccountPasswordInput
   ): Promise<SetAccountPasswordResult>;
+  updateWorkspaceMemberRole(
+    openRoadState: OpenRoadState,
+    input: UpdateWorkspaceMemberRoleInput
+  ): Promise<UpdateWorkspaceMemberRoleResult>;
+  deactivateWorkspaceMember(
+    openRoadState: OpenRoadState,
+    input: DeactivateWorkspaceMemberInput
+  ): Promise<DeactivateWorkspaceMemberResult>;
 };
 
 export class TeamStoreError extends Error {
@@ -429,6 +472,64 @@ export class FileTeamStore implements TeamStore {
     return result.state.invitations
       .filter((invitation) => invitation.workspaceId === workspaceId)
       .map((invitation) => summarizeInvitation(invitation, now));
+  }
+
+  async listWorkspaceMembers(
+    openRoadState: OpenRoadState,
+    workspaceId: string
+  ): Promise<TeamWorkspaceMemberSummary[]> {
+    assertWorkspaceExists(openRoadState, workspaceId);
+
+    const result = await this.load(openRoadState);
+    return summarizeWorkspaceMembers(result.state, workspaceId);
+  }
+
+  async updateWorkspaceMemberRole(
+    openRoadState: OpenRoadState,
+    input: UpdateWorkspaceMemberRoleInput
+  ): Promise<UpdateWorkspaceMemberRoleResult> {
+    assertWorkspaceExists(openRoadState, input.workspaceId);
+
+    const result = await this.load(openRoadState);
+    const role = normalizeWorkspaceRole(input.role);
+    const membership = findWorkspaceMembership(
+      result.state,
+      input.workspaceId,
+      input.membershipId
+    );
+    assertMutableWorkspaceMembership(result.state, membership, "update");
+    assertOwnerMutationAllowed(result.state, membership, role);
+
+    const memberships = result.state.memberships.map((item) =>
+      item.id === membership.id ? { ...item, role } : item
+    );
+    const state = { ...result.state, memberships };
+    await this.writeState(state);
+
+    return {
+      member: summarizeWorkspaceMember(state, memberships.find((item) => item.id === membership.id)!)
+    };
+  }
+
+  async deactivateWorkspaceMember(
+    openRoadState: OpenRoadState,
+    input: DeactivateWorkspaceMemberInput
+  ): Promise<DeactivateWorkspaceMemberResult> {
+    assertWorkspaceExists(openRoadState, input.workspaceId);
+
+    const result = await this.load(openRoadState);
+    const membership = findWorkspaceMembership(
+      result.state,
+      input.workspaceId,
+      input.membershipId
+    );
+    assertMutableWorkspaceMembership(result.state, membership, "deactivate");
+    assertOwnerMutationAllowed(result.state, membership, undefined);
+    const member = summarizeWorkspaceMember(result.state, membership);
+    const memberships = result.state.memberships.filter((item) => item.id !== membership.id);
+    await this.writeState({ ...result.state, memberships });
+
+    return { member };
   }
 
   async recordInvitationDelivery(
@@ -832,6 +933,96 @@ function summarizeInvitation(
     ...safeInvitation,
     status: getInvitationStatus(invitation, now)
   };
+}
+
+function summarizeWorkspaceMembers(state: TeamState, workspaceId: string) {
+  return state.memberships
+    .filter((membership) => membership.workspaceId === workspaceId)
+    .map((membership) => summarizeWorkspaceMember(state, membership))
+    .sort((left, right) => {
+      const roleDelta = workspaceRoleRank(left.role) - workspaceRoleRank(right.role);
+      if (roleDelta !== 0) return roleDelta;
+      return left.email.localeCompare(right.email);
+    });
+}
+
+function summarizeWorkspaceMember(
+  state: TeamState,
+  membership: WorkspaceMembership
+): TeamWorkspaceMemberSummary {
+  const user = state.users.find((item) => item.id === membership.userId);
+  if (!user) {
+    throw new TeamStoreError("invalid_state", "OpenRoad team membership references a missing user.");
+  }
+
+  return {
+    accountPasswordSet: state.credentials.some((credential) => credential.userId === user.id),
+    createdAt: membership.createdAt,
+    email: user.email,
+    id: membership.id,
+    isLocalOwner: user.id === "local-owner",
+    name: user.name,
+    role: membership.role,
+    userId: user.id,
+    workspaceId: membership.workspaceId
+  };
+}
+
+function findWorkspaceMembership(state: TeamState, workspaceId: string, membershipId: string) {
+  const normalizedMembershipId = boundText(membershipId, 200);
+  const membership = state.memberships.find(
+    (item) => item.workspaceId === workspaceId && item.id === normalizedMembershipId
+  );
+  if (!membership) {
+    throw new TeamStoreError("not_found", "OpenRoad workspace member was not found.");
+  }
+  return membership;
+}
+
+function assertMutableWorkspaceMembership(
+  state: TeamState,
+  membership: WorkspaceMembership,
+  action: "deactivate" | "update"
+) {
+  const user = state.users.find((item) => item.id === membership.userId);
+  if (!user) {
+    throw new TeamStoreError("invalid_state", "OpenRoad team membership references a missing user.");
+  }
+
+  if (user.id === "local-owner") {
+    throw new TeamStoreError(
+      "invalid_request",
+      action === "deactivate"
+        ? "The local owner membership cannot be deactivated."
+        : "The local owner membership role cannot be changed."
+    );
+  }
+}
+
+function assertOwnerMutationAllowed(
+  state: TeamState,
+  membership: WorkspaceMembership,
+  nextRole: WorkspaceRole | undefined
+) {
+  if (membership.role !== "Owner") return;
+  if (nextRole === "Owner") return;
+
+  const ownerCount = state.memberships.filter(
+    (item) => item.workspaceId === membership.workspaceId && item.role === "Owner"
+  ).length;
+  if (ownerCount <= 1) {
+    throw new TeamStoreError(
+      "invalid_request",
+      "At least one owner membership must remain in this workspace."
+    );
+  }
+}
+
+function workspaceRoleRank(role: WorkspaceRole) {
+  if (role === "Owner") return 0;
+  if (role === "Maintainer") return 1;
+  if (role === "Contributor") return 2;
+  return 3;
 }
 
 function getInvitationStatus(invitation: TeamInvitation, now = new Date()): TeamInvitationStatus {

@@ -173,6 +173,7 @@ import {
   TeamStoreError,
   type AuditEvent,
   type TeamInvitationSummary,
+  type TeamWorkspaceMemberSummary,
   type TeamStore
 } from "./team.js";
 import {
@@ -920,6 +921,58 @@ async function handleApiRequest(
     return;
   }
 
+  const workspaceMembersMatch = requestUrl.pathname.match(
+    /^\/api\/openroad\/workspaces\/([^/]+)\/members$/
+  );
+
+  if (workspaceMembersMatch) {
+    await handleWorkspaceMemberCollectionRequest(
+      request,
+      response,
+      store,
+      access,
+      teamStore,
+      workspaceMembersMatch[1]
+    );
+    return;
+  }
+
+  const workspaceMemberDeactivateMatch = requestUrl.pathname.match(
+    /^\/api\/openroad\/workspaces\/([^/]+)\/members\/([^/]+)\/deactivate$/
+  );
+
+  if (workspaceMemberDeactivateMatch) {
+    await handleWorkspaceMemberDeactivateRequest(
+      request,
+      response,
+      store,
+      access,
+      teamStore,
+      sessionStore,
+      workspaceMemberDeactivateMatch[1],
+      workspaceMemberDeactivateMatch[2]
+    );
+    return;
+  }
+
+  const workspaceMemberMatch = requestUrl.pathname.match(
+    /^\/api\/openroad\/workspaces\/([^/]+)\/members\/([^/]+)$/
+  );
+
+  if (workspaceMemberMatch) {
+    await handleWorkspaceMemberRequest(
+      request,
+      response,
+      store,
+      access,
+      teamStore,
+      sessionStore,
+      workspaceMemberMatch[1],
+      workspaceMemberMatch[2]
+    );
+    return;
+  }
+
   const workspaceInvitationsMatch = requestUrl.pathname.match(
     /^\/api\/openroad\/workspaces\/([^/]+)\/invitations$/
   );
@@ -1654,6 +1707,167 @@ async function handleWorkspaceInvitationRevokeRequest(
       response,
       200,
       { invitation: sanitizeInvitationForJson(invitation), status: "revoked" },
+      access
+    );
+  } catch (error) {
+    writeKnownApiError(response, error, access);
+  }
+}
+
+async function handleWorkspaceMemberCollectionRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  store: OpenRoadStore,
+  access: AccessContext,
+  teamStore: TeamStore | undefined,
+  encodedWorkspaceId: string
+) {
+  if (request.method !== "GET") {
+    writeApiError(response, 405, "invalid_method", "This endpoint only supports GET.", access);
+    return;
+  }
+
+  if (!teamStore) {
+    writeKnownApiError(
+      response,
+      new ApiRequestError("not_configured", 503, "OpenRoad team metadata store is not configured."),
+      access
+    );
+    return;
+  }
+
+  const workspaceId = decodeURIComponent(encodedWorkspaceId);
+
+  try {
+    requirePermission(access, "integration:manage", workspaceId);
+    const current = await store.load();
+    const members = await teamStore.listWorkspaceMembers(current.state, workspaceId);
+    writeJson(response, 200, { members: members.map(sanitizeWorkspaceMemberForJson) }, access);
+  } catch (error) {
+    writeKnownApiError(response, error, access);
+  }
+}
+
+async function handleWorkspaceMemberRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  store: OpenRoadStore,
+  access: AccessContext,
+  teamStore: TeamStore | undefined,
+  sessionStore: SessionStore | undefined,
+  encodedWorkspaceId: string,
+  encodedMembershipId: string
+) {
+  if (request.method !== "PATCH") {
+    writeApiError(response, 405, "invalid_method", "This endpoint only supports PATCH.", access);
+    return;
+  }
+
+  if (!teamStore) {
+    writeKnownApiError(
+      response,
+      new ApiRequestError("not_configured", 503, "OpenRoad team metadata store is not configured."),
+      access
+    );
+    return;
+  }
+
+  const workspaceId = decodeURIComponent(encodedWorkspaceId);
+  const membershipId = decodeURIComponent(encodedMembershipId);
+
+  try {
+    requirePermission(access, "integration:manage", workspaceId);
+    const payload = await readJsonBody(request, 8192);
+    const role = getWorkspaceMemberRolePayload(payload);
+    const current = await store.load();
+    const result = await teamStore.updateWorkspaceMemberRole(current.state, {
+      membershipId,
+      role,
+      workspaceId
+    });
+    const revokedSessions = sessionStore
+      ? await sessionStore.revokeMemberSessions({
+          userId: result.member.userId,
+          workspaceId
+        })
+      : 0;
+
+    await recordAuditEvent(teamStore, current.state, access, {
+      summary: `Updated ${result.member.email} role to ${result.member.role}.`,
+      type: "team.member.role.update",
+      workspaceId
+    });
+
+    writeJson(
+      response,
+      200,
+      {
+        member: sanitizeWorkspaceMemberForJson(result.member),
+        revokedSessions,
+        status: "updated"
+      },
+      access
+    );
+  } catch (error) {
+    writeKnownApiError(response, error, access);
+  }
+}
+
+async function handleWorkspaceMemberDeactivateRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  store: OpenRoadStore,
+  access: AccessContext,
+  teamStore: TeamStore | undefined,
+  sessionStore: SessionStore | undefined,
+  encodedWorkspaceId: string,
+  encodedMembershipId: string
+) {
+  if (request.method !== "POST") {
+    writeApiError(response, 405, "invalid_method", "This endpoint only supports POST.", access);
+    return;
+  }
+
+  if (!teamStore) {
+    writeKnownApiError(
+      response,
+      new ApiRequestError("not_configured", 503, "OpenRoad team metadata store is not configured."),
+      access
+    );
+    return;
+  }
+
+  const workspaceId = decodeURIComponent(encodedWorkspaceId);
+  const membershipId = decodeURIComponent(encodedMembershipId);
+
+  try {
+    requirePermission(access, "integration:manage", workspaceId);
+    const current = await store.load();
+    const result = await teamStore.deactivateWorkspaceMember(current.state, {
+      membershipId,
+      workspaceId
+    });
+    const revokedSessions = sessionStore
+      ? await sessionStore.revokeMemberSessions({
+          userId: result.member.userId,
+          workspaceId
+        })
+      : 0;
+
+    await recordAuditEvent(teamStore, current.state, access, {
+      summary: `Deactivated workspace access for ${result.member.email}.`,
+      type: "team.member.deactivate",
+      workspaceId
+    });
+
+    writeJson(
+      response,
+      200,
+      {
+        member: sanitizeWorkspaceMemberForJson(result.member),
+        revokedSessions,
+        status: "deactivated"
+      },
       access
     );
   } catch (error) {
@@ -5991,6 +6205,19 @@ function getInvitationAcceptPayload(payload: unknown) {
   };
 }
 
+function getWorkspaceMemberRolePayload(payload: unknown) {
+  if (!isRecord(payload)) {
+    throw new ApiRequestError("invalid_request", 400, "Workspace member payload must be an object.");
+  }
+
+  const role = getWorkspaceRolePayload(payload.role);
+  if (!role) {
+    throw new ApiRequestError("invalid_request", 400, "Workspace member role is required.");
+  }
+
+  return role;
+}
+
 function getWorkspaceRolePayload(value: unknown): WorkspaceRole | undefined {
   return value === "Owner" ||
     value === "Maintainer" ||
@@ -6002,6 +6229,10 @@ function getWorkspaceRolePayload(value: unknown): WorkspaceRole | undefined {
 
 function sanitizeInvitationForJson(invitation: TeamInvitationSummary) {
   return { ...invitation };
+}
+
+function sanitizeWorkspaceMemberForJson(member: TeamWorkspaceMemberSummary) {
+  return { ...member };
 }
 
 function sanitizeMembership(membership: { id: string; role: WorkspaceRole; userId: string; workspaceId: string }) {

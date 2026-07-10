@@ -930,6 +930,228 @@ describe("OpenRoad production server", () => {
     });
   });
 
+  it("manages workspace members with owner-only access and secret-free responses", async () => {
+    const { url } = await startTestServer({
+      auth: { adminToken: "secret", singleUserMode: false, trustProxyHeaders: true }
+    });
+    const invite = await fetchJson(`${url}/api/openroad/workspaces/acme/invitations`, {
+      body: JSON.stringify({ email: "managed@example.com", name: "Managed User", role: "Contributor" }),
+      headers: {
+        ...workspaceActorHeaders("acme", "Owner"),
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    const memberSession = await fetchJson(`${url}/api/openroad/invitations/session`, {
+      body: JSON.stringify({ name: "Managed User", token: invite.body.acceptToken }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const memberCookie = cookiePair(memberSession.headers.get("set-cookie") ?? "");
+    await fetchJson(`${url}/api/openroad/account/password`, {
+      body: JSON.stringify({ password: "managed password value" }),
+      headers: { Cookie: memberCookie, "Content-Type": "application/json" },
+      method: "POST"
+    });
+
+    const ownerList = await fetchJson(`${url}/api/openroad/workspaces/acme/members`, {
+      headers: workspaceActorHeaders("acme", "Owner")
+    });
+    const maintainerList = await fetchJson(`${url}/api/openroad/workspaces/acme/members`, {
+      headers: workspaceActorHeaders("acme", "Maintainer")
+    });
+    const memberList = await fetchJson(`${url}/api/openroad/workspaces/acme/members`, {
+      headers: { Cookie: memberCookie }
+    });
+    const crossWorkspaceList = await fetchJson(`${url}/api/openroad/workspaces/acme/members`, {
+      headers: workspaceActorHeaders("maintainer", "Owner")
+    });
+    const responseText = JSON.stringify(ownerList.body);
+
+    expect(invite.status).toBe(201);
+    expect(ownerList.status).toBe(200);
+    expect(ownerList.body.members).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          accountPasswordSet: true,
+          email: "managed@example.com",
+          isLocalOwner: false,
+          name: "Managed User",
+          role: "Contributor",
+          workspaceId: "acme"
+        }),
+        expect.objectContaining({
+          accountPasswordSet: false,
+          email: "owner@openroad.local",
+          isLocalOwner: true,
+          role: "Owner",
+          userId: "local-owner"
+        })
+      ])
+    );
+    expect(responseText).not.toContain("passwordHash");
+    expect(responseText).not.toContain("salt");
+    expect(responseText).not.toContain("managed password value");
+    expect(responseText).not.toContain("tokenHash");
+    expect(maintainerList.status).toBe(403);
+    expect(memberList.status).toBe(403);
+    expect(crossWorkspaceList.status).toBe(403);
+  });
+
+  it("updates member roles, revokes stale sessions, and deactivates memberships", async () => {
+    const { teamFile, url } = await startTestServer({
+      auth: { adminToken: "secret", singleUserMode: false, trustProxyHeaders: true }
+    });
+    const invite = await fetchJson(`${url}/api/openroad/workspaces/acme/invitations`, {
+      body: JSON.stringify({ email: "managed-role@example.com", name: "Managed Role", role: "Contributor" }),
+      headers: {
+        ...workspaceActorHeaders("acme", "Owner"),
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    const invitationSession = await fetchJson(`${url}/api/openroad/invitations/session`, {
+      body: JSON.stringify({ name: "Managed Role", token: invite.body.acceptToken }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const invitationCookie = cookiePair(invitationSession.headers.get("set-cookie") ?? "");
+    await fetchJson(`${url}/api/openroad/account/password`, {
+      body: JSON.stringify({ password: "managed role password" }),
+      headers: { Cookie: invitationCookie, "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const passwordLogin = await fetchJson(`${url}/api/openroad/auth/password/login`, {
+      body: JSON.stringify({ email: "managed-role@example.com", password: "managed role password" }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const passwordCookie = cookiePair(passwordLogin.headers.get("set-cookie") ?? "");
+    const members = await fetchJson(`${url}/api/openroad/workspaces/acme/members`, {
+      headers: workspaceActorHeaders("acme", "Owner")
+    });
+    const managedMember = (members.body.members as Array<{ email: string; id: string }>).find(
+      (member) => member.email === "managed-role@example.com"
+    );
+
+    const roleUpdate = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/members/${encodeURIComponent(managedMember?.id ?? "")}`,
+      {
+        body: JSON.stringify({ role: "Viewer" }),
+        headers: {
+          ...workspaceActorHeaders("acme", "Owner"),
+          "Content-Type": "application/json"
+        },
+        method: "PATCH"
+      }
+    );
+    const staleRead = await fetchJson(`${url}/api/openroad/workspaces/acme`, {
+      headers: { Cookie: passwordCookie }
+    });
+    const viewerLogin = await fetchJson(`${url}/api/openroad/auth/password/login`, {
+      body: JSON.stringify({ email: "managed-role@example.com", password: "managed role password" }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const viewerCookie = cookiePair(viewerLogin.headers.get("set-cookie") ?? "");
+    const viewerWrite = await fetchJson(`${url}/api/openroad/workspaces/acme/actions`, {
+      body: JSON.stringify({
+        action: {
+          request: {
+            ...createInitialOpenRoadState().workspaces[0].requests[0],
+            id: "viewer-after-role-update",
+            title: "Viewer after role update"
+          },
+          type: "create-request",
+          workspaceId: "acme"
+        }
+      }),
+      headers: { Cookie: viewerCookie, "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const deactivated = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/members/${encodeURIComponent(managedMember?.id ?? "")}/deactivate`,
+      {
+        headers: workspaceActorHeaders("acme", "Owner"),
+        method: "POST"
+      }
+    );
+    const deactivatedRead = await fetchJson(`${url}/api/openroad/workspaces/acme`, {
+      headers: { Cookie: viewerCookie }
+    });
+    const removedLogin = await fetchJson(`${url}/api/openroad/auth/password/login`, {
+      body: JSON.stringify({ email: "managed-role@example.com", password: "managed role password" }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const persistedTeam = await readFile(teamFile, "utf8");
+
+    expect(passwordLogin.status).toBe(200);
+    expect(roleUpdate.status).toBe(200);
+    expect(roleUpdate.body).toMatchObject({
+      member: {
+        email: "managed-role@example.com",
+        role: "Viewer"
+      },
+      status: "updated"
+    });
+    expect(roleUpdate.body.revokedSessions).toBeGreaterThanOrEqual(2);
+    expect(JSON.stringify(roleUpdate.body)).not.toContain("passwordHash");
+    expect(staleRead.status).toBe(403);
+    expect(viewerLogin.status).toBe(200);
+    expect(viewerLogin.body.actor).toMatchObject({ role: "Viewer" });
+    expect(viewerWrite.status).toBe(403);
+    expect(deactivated.status).toBe(200);
+    expect(deactivated.body).toMatchObject({
+      member: {
+        accountPasswordSet: true,
+        email: "managed-role@example.com",
+        role: "Viewer"
+      },
+      status: "deactivated"
+    });
+    expect(deactivated.body.revokedSessions).toBeGreaterThanOrEqual(1);
+    expect(deactivatedRead.status).toBe(403);
+    expect(removedLogin.status).toBe(400);
+    expect(persistedTeam).toContain('"email": "managed-role@example.com"');
+    expect(persistedTeam).toContain('"credentials"');
+    expect(persistedTeam).not.toContain("managed role password");
+  });
+
+  it("blocks unsafe member mutations for the local owner membership", async () => {
+    const { url } = await startTestServer({
+      auth: { adminToken: "secret", singleUserMode: false, trustProxyHeaders: true }
+    });
+
+    const demoteLocalOwner = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/members/membership-local-owner-acme`,
+      {
+        body: JSON.stringify({ role: "Viewer" }),
+        headers: {
+          ...workspaceActorHeaders("acme", "Owner"),
+          "Content-Type": "application/json"
+        },
+        method: "PATCH"
+      }
+    );
+    const deactivateLocalOwner = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/members/membership-local-owner-acme/deactivate`,
+      {
+        headers: workspaceActorHeaders("acme", "Owner"),
+        method: "POST"
+      }
+    );
+
+    expect(demoteLocalOwner.status).toBe(400);
+    expect(demoteLocalOwner.body.error.message).toBe(
+      "The local owner membership role cannot be changed."
+    );
+    expect(deactivateLocalOwner.status).toBe(400);
+    expect(deactivateLocalOwner.body.error.message).toBe(
+      "The local owner membership cannot be deactivated."
+    );
+  });
+
   it("prevents viewer member sessions from writing workspace data", async () => {
     const { url } = await startTestServer({
       auth: { adminToken: "secret", singleUserMode: false, trustProxyHeaders: true }

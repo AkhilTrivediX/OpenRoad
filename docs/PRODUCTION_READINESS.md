@@ -168,12 +168,12 @@ OpenRoad releases must eventually include:
 
 ## Current Readiness Debt
 
-These are known production gaps after the account auth foundation.
+These are known production gaps after the member management UI foundation.
 
 - Some UI orchestration still lives inside `App.tsx`; the first helper/module extraction is complete, but component-level splitting remains future work.
 - Product, integration, and team persistence are file-backed, not managed SQL with online migrations.
 - Full-state APIs are protected by single-user/admin-token mode, and admin-token deployments now have httpOnly owner browser sessions plus invitation-token and account-password member browser sessions scoped to one workspace and role.
-- Persistent workspace membership, audit events, owner browser sessions, invitation management UI, member invite sessions, JSONL invitation delivery handoff, and account password login exist, but direct SMTP/provider invitation sending, OAuth login, email verification, deeper member management UI, account recovery, MFA/passkeys, SSO, and hosted account administration are not implemented.
+- Persistent workspace membership, audit events, owner browser sessions, invitation management UI, member invite sessions, JSONL invitation delivery handoff, account password login, and owner member role/deactivation controls exist, but direct SMTP/provider invitation sending, OAuth login, email verification, bulk member operations, account recovery, MFA/passkeys, SSO, and hosted account administration are not implemented.
 - Backup/restore, local self-host smoke commands, and release candidate manifests exist, but published Docker images and hosted release promotion are not implemented.
 - Observability is limited to process logs; structured operational events and dashboards are pending.
 - Public portal write controls, persisted anonymous visitor vote identity, idempotent vote dedupe, and process-local rate limits exist, but notification preferences, CAPTCHA/external bot checks, and distributed abuse controls are pending.
@@ -183,13 +183,13 @@ These are known production gaps after the account auth foundation.
 
 ## Next Production Move
 
-Next branch: `feat/member-management-ui`
+Next branch: `feat/invitation-provider-delivery`
 
 Purpose:
 
-- Let owners inspect team users, memberships, invitation state, and account credential readiness without hand-editing team metadata.
-- Add bounded role-management and member deactivation paths only where the current permission model already supports them.
-- Preserve current owner session, member session, password-login, bearer-token, trusted-proxy, public portal, invitation delivery, and integration secret boundaries.
+- Add a production invitation delivery adapter path beyond local JSONL handoff, starting with SMTP or a provider abstraction that can be configured without exposing secrets to browser code.
+- Preserve one-time invitation token semantics, audit boundaries, and owner/member session behavior.
+- Keep failed delivery recoverable without dropping invitations, and keep raw accept tokens out of team metadata, backups, list APIs, and browser-visible state.
 - Preserve the existing production gate: feature branch, test plan first, focused tests, `pnpm check`, browser QA when UI changes, smoke test, audit, merge, then push.
 
-Linear/Jira webhooks, provider write-back, OAuth callback exchange, direct provider notification delivery, direct SMTP/provider invitation sending, conflict UI, account recovery, SSO/MFA, and hosted account management remain hardening work that should stay behind server-only secret management, background job controls, and/or explicit delivery infrastructure.
+Linear/Jira webhooks, provider write-back, OAuth callback exchange, direct provider notification delivery, conflict UI, account recovery, SSO/MFA, bulk member operations, and hosted account management remain hardening work that should stay behind server-only secret management, background job controls, and/or explicit delivery infrastructure.

@@ -146,6 +146,57 @@ describe("FileSessionStore", () => {
     expect(resolved).toBeUndefined();
   });
 
+  it("revokes active member sessions by user and workspace only", async () => {
+    const sessionFile = await createTempSessionFile();
+    const store = new FileSessionStore(sessionFile);
+    const matching = await store.createMemberSession({
+      actor: {
+        id: "user-member@example.com",
+        role: "Contributor",
+        type: "workspace-member",
+        workspaceId: "acme"
+      },
+      now: new Date("2026-07-05T00:00:00.000Z")
+    });
+    const otherWorkspace = await store.createMemberSession({
+      actor: {
+        id: "user-member@example.com",
+        role: "Contributor",
+        type: "workspace-member",
+        workspaceId: "other"
+      },
+      now: new Date("2026-07-05T00:00:00.000Z")
+    });
+    const owner = await store.createSession({
+      adminToken: "admin-secret",
+      now: new Date("2026-07-05T00:00:00.000Z")
+    });
+
+    const revoked = await store.revokeMemberSessions({
+      now: new Date("2026-07-05T00:01:00.000Z"),
+      userId: "user-member@example.com",
+      workspaceId: "acme"
+    });
+    const matchingResolved = await store.resolveSession({
+      cookieValue: matching.cookieValue,
+      now: new Date("2026-07-05T00:02:00.000Z")
+    });
+    const otherResolved = await store.resolveSession({
+      cookieValue: otherWorkspace.cookieValue,
+      now: new Date("2026-07-05T00:02:00.000Z")
+    });
+    const ownerResolved = await store.resolveSession({
+      adminToken: "admin-secret",
+      cookieValue: owner.cookieValue,
+      now: new Date("2026-07-05T00:02:00.000Z")
+    });
+
+    expect(revoked).toBe(1);
+    expect(matchingResolved).toBeUndefined();
+    expect(otherResolved?.actor).toMatchObject({ workspaceId: "other" });
+    expect(ownerResolved?.actor).toMatchObject({ type: "local-owner" });
+  });
+
   it("binds sessions to the active admin token", async () => {
     const sessionFile = await createTempSessionFile();
     const store = new FileSessionStore(sessionFile);

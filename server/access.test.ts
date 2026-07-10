@@ -21,6 +21,7 @@ describe("OpenRoad API access contract", () => {
       "Viewer"
     ]);
     expect(openRoadApiContract.permissions).toContain("workspace:write");
+    expect(openRoadApiContract.permissions).toContain("account:write");
     expect(openRoadApiContract.routeProtections).toContainEqual(
       expect.objectContaining({
         path: "/api/openroad/state",
@@ -33,6 +34,20 @@ describe("OpenRoad API access contract", () => {
         path: "/api/openroad/auth/login",
         permission: "contract:read",
         scope: "public"
+      })
+    );
+    expect(openRoadApiContract.routeProtections).toContainEqual(
+      expect.objectContaining({
+        path: "/api/openroad/auth/password/login",
+        permission: "contract:read",
+        scope: "public"
+      })
+    );
+    expect(openRoadApiContract.routeProtections).toContainEqual(
+      expect.objectContaining({
+        path: "/api/openroad/account/password",
+        permission: "account:write",
+        scope: "global"
       })
     );
     expect(openRoadApiContract.routeProtections).toContainEqual(
@@ -129,6 +144,27 @@ describe("OpenRoad API access contract", () => {
     expect(openRoadApiContract.routeProtections).toContainEqual(
       expect.objectContaining({
         path: "/api/openroad/workspaces/:workspaceId/integrations/:provider/sync/jobs",
+        permission: "integration:manage",
+        scope: "workspace"
+      })
+    );
+    expect(openRoadApiContract.routeProtections).toContainEqual(
+      expect.objectContaining({
+        path: "/api/openroad/workspaces/:workspaceId/members",
+        permission: "integration:manage",
+        scope: "workspace"
+      })
+    );
+    expect(openRoadApiContract.routeProtections).toContainEqual(
+      expect.objectContaining({
+        path: "/api/openroad/workspaces/:workspaceId/members/:membershipId",
+        permission: "integration:manage",
+        scope: "workspace"
+      })
+    );
+    expect(openRoadApiContract.routeProtections).toContainEqual(
+      expect.objectContaining({
+        path: "/api/openroad/workspaces/:workspaceId/members/:membershipId/deactivate",
         permission: "integration:manage",
         scope: "workspace"
       })
@@ -255,6 +291,27 @@ describe("OpenRoad API access contract", () => {
 
     expect(hasPermission(context.actor, "workspace:read", "acme")).toBe(true);
     expect(hasPermission(context.actor, "workspace:write", "acme")).toBe(false);
+    expect(hasPermission(context.actor, "account:write")).toBe(true);
+  });
+
+  it("limits account password changes to owners and workspace members", () => {
+    const admin = createAccessContext(
+      { headers: { authorization: "Bearer secret" } },
+      { adminToken: "secret", singleUserMode: false }
+    );
+    const integration = createAccessContext(
+      {
+        headers: {
+          "x-openroad-actor-type": "integration",
+          "x-openroad-integration-id": "github-install",
+          "x-openroad-workspace-id": "acme"
+        }
+      },
+      { singleUserMode: false, trustProxyHeaders: true }
+    );
+
+    expect(hasPermission(admin.actor, "account:write")).toBe(true);
+    expect(hasPermission(integration.actor, "account:write", "acme")).toBe(false);
   });
 
   it("limits integration management to owners and local admins", () => {

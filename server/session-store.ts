@@ -70,6 +70,11 @@ export type SessionStore = {
   createMemberSession(input: MemberSessionCreateInput): Promise<SessionCreateResult>;
   load(): Promise<SessionStoreLoadResult>;
   resolveSession(input: SessionResolveInput): Promise<SessionMetadata | undefined>;
+  revokeMemberSessions(input: {
+    now?: Date;
+    userId: string;
+    workspaceId: string;
+  }): Promise<number>;
   revokeSession(cookieValue: string | undefined, now?: Date): Promise<boolean>;
 };
 
@@ -224,6 +229,34 @@ export class FileSessionStore implements SessionStore {
     }
 
     return revoked;
+  }
+
+  async revokeMemberSessions(input: { now?: Date; userId: string; workspaceId: string }) {
+    const now = input.now ?? new Date();
+    const result = await this.load();
+    let revokedCount = 0;
+    const sessions = result.state.sessions.map((session) => {
+      if (session.revokedAt || !isSessionActive(session, now)) return session;
+      if (
+        session.actor.type !== "workspace-member" ||
+        session.actor.id !== input.userId ||
+        session.actor.workspaceId !== input.workspaceId
+      ) {
+        return session;
+      }
+
+      revokedCount += 1;
+      return { ...session, revokedAt: now.toISOString() };
+    });
+
+    if (revokedCount > 0) {
+      await this.writeState({
+        schemaVersion: openRoadSessionSchemaVersion,
+        sessions: pruneInactiveSessions(sessions, now)
+      });
+    }
+
+    return revokedCount;
   }
 
   private async backupCorruptState() {

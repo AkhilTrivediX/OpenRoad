@@ -192,9 +192,16 @@ As a workspace maintainer, I can request assistant triage for a selected request
 ## Evidence
 
 - Branch: `feat/model-adapter-foundation`
-- Commit SHAs: pending.
-- Acceptance criteria status: pending implementation.
-- Commands run: pending.
+- Commit SHAs: `f9f169e` test plan; implementation commit pending.
+- Acceptance criteria status: passed for the scoped model adapter foundation.
+- Commands run:
+  - `pnpm build:server` passed before focused test expansion.
+  - `pnpm vitest run src\app\openroadAssistant.test.ts server\model-adapter.test.ts server\access.test.ts server\http.test.ts` passed 139 tests.
+  - `pnpm vitest run src\app\openroadAssistant.test.ts server\model-adapter.test.ts server\access.test.ts server\http.test.ts scripts\openroad-ops.test.mjs` passed 149 tests.
+  - `pnpm check` passed 35 test files / 464 tests plus production client and server builds.
+  - `pnpm release:verify` passed before implementation commit; rerun after commit required for final manifest commit.
+  - Built-server deterministic smoke passed on port `4265`: `health`, `contract`, `portal`, `private-denied`, `private-token`, `assistant-triage`.
+  - Built-server fake OpenAI-compatible provider probe passed on port `4266`: one `/v1/responses` call, `store:false`, model summary merged, and sanitized `category=ai` operational event verified.
 - Browser/viewports tested: not expected unless UI changes.
-- Reviewer notes: pending.
+- Reviewer notes: The browser UI remains deterministic and unchanged. The server endpoint requires workspace read access, defaults to deterministic output, and calls an external adapter only with explicit request-level consent plus server-side provider configuration. Model output can update only `summary.problem` and `summary.nextAction`; duplicates and changelog suggestions remain deterministic and approval-only.
 - Known unresolved risks: UI consent controls, per-workspace AI policy settings, hosted account-level AI controls, model evals, streaming, background AI jobs, embeddings, provider-specific prompt policies, and AI usage dashboards remain future slices.

@@ -46,6 +46,7 @@ import type { NotificationDeliveryAdapter } from "./notifications";
 import type { JiraOAuthExchangeClient, LinearOAuthExchangeClient } from "./oauth-clients";
 import { createIntegrationTokenVault, type IntegrationTokenVault } from "./token-vault";
 import type { IntegrationSyncWorker } from "./sync-jobs";
+import type { AssistantModelAdapter } from "./model-adapter";
 
 const openServers: Server[] = [];
 
@@ -6684,6 +6685,212 @@ describe("OpenRoad production server", () => {
     expect(crossWorkspaceAudit.status).toBe(403);
   });
 
+  it("keeps assistant triage private and deterministic by default", async () => {
+    const state = createInitialOpenRoadState();
+    const requestId = state.workspaces[0].requests[0].id;
+    const { url } = await startTestServer({
+      auth: { adminToken: "secret", singleUserMode: false, trustProxyHeaders: true }
+    });
+
+    const denied = await fetchJson(`${url}/api/openroad/workspaces/acme/assistant/triage`, {
+      body: JSON.stringify({ requestId }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const method = await fetchJson(`${url}/api/openroad/workspaces/acme/assistant/triage`, {
+      headers: { Authorization: "Bearer secret" },
+      method: "GET"
+    });
+    const ownWorkspace = await fetchJson(`${url}/api/openroad/workspaces/acme/assistant/triage`, {
+      body: JSON.stringify({ requestId }),
+      headers: {
+        ...workspaceActorHeaders("acme", "Viewer"),
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    const crossWorkspace = await fetchJson(
+      `${url}/api/openroad/workspaces/maintainer/assistant/triage`,
+      {
+        body: JSON.stringify({ requestId }),
+        headers: {
+          ...workspaceActorHeaders("acme", "Viewer"),
+          "Content-Type": "application/json"
+        },
+        method: "POST"
+      }
+    );
+
+    expect(denied.status).toBe(403);
+    expect(method.status).toBe(405);
+    expect(ownWorkspace.status).toBe(200);
+    expect(ownWorkspace.body).toMatchObject({
+      model: {
+        externalUsed: false,
+        fallbackReason: "external_not_requested",
+        mode: "deterministic",
+        provider: "deterministic"
+      },
+      requestId,
+      status: "suggested",
+      workspaceId: "acme"
+    });
+    expect(ownWorkspace.body.suggestion.summary.problem).toBeTruthy();
+    expect(JSON.stringify(ownWorkspace.body)).not.toContain("openroad-team");
+    expect(crossWorkspace.status).toBe(403);
+  });
+
+  it("uses model adapter only with explicit consent and records sanitized evidence", async () => {
+    let capturedPrompt = "";
+    const adapter: AssistantModelAdapter = {
+      async createSummary(input) {
+        capturedPrompt = input.context.prompt;
+        return {
+          nextAction: "Confirm the API limit message with Product before planning work.",
+          problem: "Developers need clearer API limit visibility before requests fail."
+        };
+      },
+      provider: "openai"
+    };
+    const { store, url } = await startTestServer({
+      assistantModelAdapter: adapter,
+      auth: { singleUserMode: false, trustProxyHeaders: true }
+    });
+    await store.replaceState(createStateWithSensitiveAssistantRequest());
+
+    const withoutConsent = await fetchJson(`${url}/api/openroad/workspaces/acme/assistant/triage`, {
+      body: JSON.stringify({
+        allowExternalModel: true,
+        requestId: "sensitive-ai-request"
+      }),
+      headers: {
+        ...workspaceActorHeaders("acme", "Viewer"),
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    const withConsent = await fetchJson(`${url}/api/openroad/workspaces/acme/assistant/triage`, {
+      body: JSON.stringify({
+        allowExternalModel: true,
+        consent: { shareRequesterIdentity: false, shareWorkspaceContext: true },
+        requestId: "sensitive-ai-request"
+      }),
+      headers: {
+        ...workspaceActorHeaders("acme", "Viewer"),
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    const audit = await fetchJson(`${url}/api/openroad/audit-events?workspaceId=acme`, {
+      headers: workspaceActorHeaders("acme", "Viewer")
+    });
+    const ops = await fetchJson(`${url}/api/openroad/ops/events?workspaceId=acme&category=ai`, {
+      headers: workspaceActorHeaders("acme", "Viewer")
+    });
+
+    expect(withoutConsent.status).toBe(200);
+    expect(withoutConsent.body.model).toMatchObject({
+      externalUsed: false,
+      fallbackReason: "consent_required",
+      mode: "fallback",
+      provider: "openai"
+    });
+    expect(withConsent.status).toBe(200);
+    expect(withConsent.body.model).toMatchObject({
+      externalUsed: true,
+      mode: "model",
+      provider: "openai"
+    });
+    expect(withConsent.body.suggestion.summary.problem).toBe(
+      "Developers need clearer API limit visibility before requests fail."
+    );
+    expect(withConsent.body.suggestion.duplicates[0].request.id).toBe("sensitive-ai-duplicate");
+    expect(withConsent.body.suggestion.changelogSuggestion.publicSummary).toContain(
+      "Review this private draft"
+    );
+    expect(capturedPrompt).toContain("[redacted requester]");
+    expect(capturedPrompt).toContain("[redacted]");
+    expect(capturedPrompt).not.toContain("akhil@example.com");
+    expect(capturedPrompt).not.toContain("Bearer sk-secret");
+    expect(capturedPrompt).not.toContain("internal assistant secret");
+    expect(capturedPrompt).not.toContain("hidden assistant secret");
+    expect(capturedPrompt).not.toContain("private assistant notes");
+    expect(capturedPrompt).not.toContain("notification assistant secret");
+    expect(audit.body.auditEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "assistant.triage.model",
+          workspaceId: "acme"
+        })
+      ])
+    );
+    expect(ops.body.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          category: "ai",
+          metadata: expect.objectContaining({
+            externalRequested: true,
+            externalUsed: true,
+            mode: "model",
+            provider: "openai"
+          }),
+          severity: "info",
+          type: "assistant.triage",
+          workspaceId: "acme"
+        })
+      ])
+    );
+    expect(JSON.stringify(ops.body)).not.toContain("sk-secret");
+    expect(JSON.stringify(ops.body)).not.toContain("akhil@example.com");
+  });
+
+  it("falls back for missing model providers and rejects unknown assistant requests safely", async () => {
+    const { url } = await startTestServer({
+      auth: { singleUserMode: false, trustProxyHeaders: true }
+    });
+
+    const noProvider = await fetchJson(`${url}/api/openroad/workspaces/acme/assistant/triage`, {
+      body: JSON.stringify({
+        allowExternalModel: true,
+        consent: { shareWorkspaceContext: true },
+        requestId: "api-rate-limit-visibility"
+      }),
+      headers: {
+        ...workspaceActorHeaders("acme", "Viewer"),
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    const missingRequest = await fetchJson(`${url}/api/openroad/workspaces/acme/assistant/triage`, {
+      body: JSON.stringify({ requestId: "missing-request" }),
+      headers: {
+        ...workspaceActorHeaders("acme", "Viewer"),
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    const invalidPayload = await fetchJson(`${url}/api/openroad/workspaces/acme/assistant/triage`, {
+      body: JSON.stringify({ requestId: "   " }),
+      headers: {
+        ...workspaceActorHeaders("acme", "Viewer"),
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+
+    expect(noProvider.status).toBe(200);
+    expect(noProvider.body.model).toMatchObject({
+      externalUsed: false,
+      fallbackReason: "provider_not_configured",
+      mode: "fallback",
+      provider: "deterministic"
+    });
+    expect(missingRequest.status).toBe(404);
+    expect(missingRequest.body.error.code).toBe("not_found");
+    expect(invalidPayload.status).toBe(400);
+    expect(invalidPayload.body.error.code).toBe("invalid_request");
+  });
+
   it("keeps ops status private", async () => {
     const { url } = await startTestServer({
       auth: { adminToken: "secret", singleUserMode: false }
@@ -6966,6 +7173,7 @@ describe("OpenRoad production server", () => {
 
 async function startTestServer(
   options: {
+    assistantModelAdapter?: AssistantModelAdapter;
     auth?: AuthOptions;
     githubAppClient?: GitHubAppClient;
     githubAppConfig?: GitHubAppConfig;
@@ -7008,6 +7216,7 @@ async function startTestServer(
   const server = createOpenRoadServer({
     accountRecoveryDeliveryAdapter: options.accountRecoveryDeliveryAdapter,
     accountRecoveryPublicBaseUrl: options.accountRecoveryPublicBaseUrl,
+    assistantModelAdapter: options.assistantModelAdapter,
     auth: options.auth,
     distDir,
     githubAppClient: options.githubAppClient,
@@ -7690,6 +7899,92 @@ function createStateWithQueuedNotification() {
     type: "replace-request",
     workspaceId: workspace.id
   });
+}
+
+function createStateWithSensitiveAssistantRequest() {
+  const state = createInitialOpenRoadState();
+  const workspace = state.workspaces[0];
+  const selected: RequestItem = {
+    ...workspace.requests[0],
+    comments: [
+      {
+        age: "Today",
+        author: "Internal",
+        body: "internal assistant secret",
+        id: "assistant-internal",
+        visibility: "Internal"
+      },
+      {
+        age: "Today",
+        author: "Moderator",
+        body: "hidden assistant secret",
+        id: "assistant-hidden",
+        visibility: "Hidden"
+      },
+      {
+        age: "Today",
+        author: "Customer",
+        body: "public assistant comment",
+        id: "assistant-public",
+        visibility: "Public"
+      }
+    ],
+    description: "Users cannot see API limits before failures. Bearer sk-secret api_key=abc123",
+    id: "sensitive-ai-request",
+    requester: "akhil@example.com",
+    source: "Portal",
+    tags: ["api", "limits"],
+    title: "API limits visibility",
+    votes: 120
+  };
+  const duplicate: RequestItem = {
+    ...workspace.requests[1],
+    comments: [],
+    description: "Warn developers before API usage limits fail.",
+    id: "sensitive-ai-duplicate",
+    requester: "other@example.com",
+    source: "Portal",
+    tags: ["api", "limits"],
+    title: "API limit warning",
+    votes: 72
+  };
+  const changelog: ChangelogItem = {
+    ...workspace.changelog[0],
+    id: "assistant-private-release",
+    privateNotes: "private assistant notes",
+    requestIds: [selected.id],
+    title: "Assistant private release token=secret"
+  };
+
+  return {
+    ...state,
+    workspaces: [
+      {
+        ...workspace,
+        changelog: [changelog],
+        notifications: {
+          ...workspace.notifications,
+          outbox: [
+            {
+              body: "notification assistant secret",
+              createdAt: "Today",
+              dedupeKey: "assistant-notification",
+              deliveryAttempts: 0,
+              id: "assistant-notification",
+              requestId: selected.id,
+              requestTitle: selected.title,
+              requester: selected.requester,
+              status: "queued",
+              title: "Assistant notification",
+              type: "request-status-change"
+            }
+          ]
+        },
+        requests: [selected, duplicate, ...workspace.requests.slice(2)]
+      },
+      ...state.workspaces.slice(1)
+    ]
+  };
 }
 
 function createStateWithPrivatePortalData() {

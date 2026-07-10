@@ -13,6 +13,7 @@ This runbook covers the current production path: one Node process serving the bu
 - Existing credentialed team users can recover account access through a hashed one-time reset token and operator-controlled JSONL handoff.
 - Workspace owners can list members, change roles, and deactivate memberships; affected member sessions are revoked on role change or deactivation.
 - Invitation delivery is disabled by default; file mode appends raw-token invite handoff records to an operator-controlled JSONL file, and HTTP provider mode posts bounded invite payloads to an operator-configured HTTPS endpoint.
+- Assistant triage is deterministic by default; optional OpenAI provider use is server-only and requires explicit request-level consent.
 - The public portal API remains unauthenticated and returns only public data.
 - Backups contain product, requester, integration, team, membership, and audit data; store them like production data.
 
@@ -72,6 +73,12 @@ $env:OPENROAD_JIRA_CLIENT_SECRET=""
 $env:OPENROAD_JIRA_REDIRECT_URI=""
 $env:OPENROAD_JIRA_API_BASE_URL="https://api.atlassian.com/ex/jira"
 $env:OPENROAD_JIRA_WEBHOOK_SECRET=""
+$env:OPENROAD_AI_PROVIDER="deterministic"
+$env:OPENROAD_OPENAI_API_KEY=""
+$env:OPENROAD_OPENAI_MODEL=""
+$env:OPENROAD_OPENAI_BASE_URL="https://api.openai.com/v1"
+$env:OPENROAD_AI_TIMEOUT_MS="10000"
+$env:OPENROAD_AI_MAX_OUTPUT_TOKENS="220"
 $env:OPENROAD_SINGLE_USER_MODE="false"
 $env:OPENROAD_TRUST_PROXY_HEADERS="false"
 $env:PORT="4173"
@@ -125,6 +132,12 @@ $env:OPENROAD_JIRA_CLIENT_SECRET=""
 $env:OPENROAD_JIRA_REDIRECT_URI=""
 $env:OPENROAD_JIRA_API_BASE_URL="https://api.atlassian.com/ex/jira"
 $env:OPENROAD_JIRA_WEBHOOK_SECRET=""
+$env:OPENROAD_AI_PROVIDER="deterministic"
+$env:OPENROAD_OPENAI_API_KEY=""
+$env:OPENROAD_OPENAI_MODEL=""
+$env:OPENROAD_OPENAI_BASE_URL="https://api.openai.com/v1"
+$env:OPENROAD_AI_TIMEOUT_MS="10000"
+$env:OPENROAD_AI_MAX_OUTPUT_TOKENS="220"
 $env:OPENROAD_SINGLE_USER_MODE="false"
 $env:OPENROAD_TRUST_PROXY_HEADERS="false"
 $env:PORT="4173"
@@ -440,6 +453,53 @@ The HTTP adapter posts one public-safe JSON payload per queued event with notifi
 
 HTTP notification provider URLs must be HTTPS except localhost/loopback development URLs, must not include embedded username/password credentials, and redirects are blocked. Non-2xx responses, malformed success responses, timeouts, aborts, and network errors keep events queued for retry with redacted failure text. This mode does not include built-in SMTP, provider-specific templates, unsubscribe routing, bounce handling, suppression lists, notification analytics, or scheduler packaging.
 
+## Assistant Model Adapter
+
+Assistant triage is deterministic unless external model use is explicitly requested and consented to for a request. The browser never submits provider credentials or model configuration.
+
+To keep deterministic-only behavior:
+
+```powershell
+$env:OPENROAD_AI_PROVIDER="deterministic"
+```
+
+To enable the optional OpenAI Responses API adapter:
+
+```powershell
+$env:OPENROAD_AI_PROVIDER="openai"
+$env:OPENROAD_OPENAI_API_KEY="replace-with-openai-api-key"
+$env:OPENROAD_OPENAI_MODEL="replace-with-pinned-model"
+$env:OPENROAD_OPENAI_BASE_URL="https://api.openai.com/v1"
+$env:OPENROAD_AI_TIMEOUT_MS="10000"
+$env:OPENROAD_AI_MAX_OUTPUT_TOKENS="220"
+```
+
+The private endpoint is:
+
+```powershell
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://127.0.0.1:4173/api/openroad/workspaces/acme/assistant/triage" `
+  -Headers @{ Authorization = "Bearer $env:OPENROAD_ADMIN_TOKEN" } `
+  -ContentType "application/json" `
+  -Body '{"requestId":"api-rate-limit-visibility"}'
+```
+
+External model use requires:
+
+```json
+{
+  "requestId": "api-rate-limit-visibility",
+  "allowExternalModel": true,
+  "consent": {
+    "shareWorkspaceContext": true,
+    "shareRequesterIdentity": false
+  }
+}
+```
+
+OpenRoad sends only bounded, redacted server-built prompt context. It excludes internal and hidden comment bodies, notification outbox bodies, private changelog notes, provider secrets, encrypted credential material, webhook payloads, and raw provider responses. Model output may refine only the selected request problem summary and next action in this foundation slice.
+
 ## Restore
 
 Stop OpenRoad before restoring files.
@@ -467,6 +527,7 @@ The smoke command checks:
 - `GET /api/openroad/workspaces/:workspaceId/portal`
 - Private ops API denial without a token when token mode is configured.
 - Private ops API success with `Authorization: Bearer <token>`.
+- Private deterministic assistant triage for one active request.
 - Public portal read and write APIs should never return private workspace data.
 
 For local single-user mode without `OPENROAD_ADMIN_TOKEN`, omit `--admin-token`; the command expects private ops status to be readable by the local owner.
@@ -506,6 +567,7 @@ For local single-user mode without `OPENROAD_ADMIN_TOKEN`, omit `--admin-token`;
 - With `Authorization: Bearer <token>`, `GET /api/openroad/state` should return `200`.
 - `GET /api/openroad/ops/status` should require private read permission.
 - `GET /api/openroad/ops/events?limit=10` should require private read permission and return sanitized operational events only.
+- `POST /api/openroad/workspaces/acme/assistant/triage` should require workspace read permission and return deterministic suggestions without external model use unless explicit consent and provider configuration are supplied.
 - `POST /api/openroad/notifications/deliver` should require private write permission and return `503` unless a delivery adapter is configured.
 - With `OPENROAD_NOTIFICATION_DELIVERY_MODE=http` and a local provider endpoint, requester notification delivery should post one bounded public-safe provider payload, mark the event delivered, and keep the provider bearer token out of state/API responses.
 - `POST /api/openroad/workspaces/acme/invitations` should require owner/admin permission and return a one-time accept token only on creation.
@@ -531,6 +593,8 @@ For local single-user mode without `OPENROAD_ADMIN_TOKEN`, omit `--admin-token`;
 - Do not publish invitation delivery JSONL files; they contain raw accept tokens.
 - Do not publish account recovery delivery JSONL files; they contain raw reset tokens.
 - Keep HTTP invitation and requester notification provider bearer tokens in server environment or secret storage only.
+- Keep `OPENROAD_OPENAI_API_KEY` in server environment or secret storage only; never expose it to browser code or workspace exports.
+- Leave `OPENROAD_AI_PROVIDER=deterministic` unless the deployment is ready for explicit consented external model calls.
 - Treat backup archives as sensitive because they contain requester, workspace, membership, and audit data.
 - Tune public portal rate limits for the deployment shape. Current limits are process-local and reset on restart.
 - Review release manifests before sharing them; they should contain checksums and release metadata, not secrets or product data.
@@ -540,7 +604,7 @@ For local single-user mode without `OPENROAD_ADMIN_TOKEN`, omit `--admin-token`;
 - Owner browser sessions for admin-token self-hosting, backend invitation APIs, invitation UI, member invite sessions, JSONL invitation delivery handoff, HTTP invitation provider delivery, account password login and JSONL account recovery for existing team users, and owner member role/deactivation controls are implemented; built-in SMTP delivery, provider-specific invitation/recovery/notification templates, OAuth login, email verification, bulk member operations, MFA/passkeys, SSO, and hosted account management are not implemented.
 - Team metadata is file-backed, not managed SQL.
 - Trusted proxy headers are disabled by default.
-- Payload-backed GitHub issue import, GitHub App installation verification, live issue fetch, signed GitHub/Linear/Jira webhooks, hosted GitHub App webhook registration, safe disconnect APIs, encrypted server-only provider credential storage, provider-neutral background sync job metadata, GitHub/Linear/Jira workers for already-linked issue mappings, Linear/Jira OAuth callback exchange and refresh-token rotation, explicit provider write-back for linked GitHub/Linear/Jira issues, provider conflict resolution controls, payload-backed Linear issue import, payload-backed Jira issue import, requester notification outbox/preferences, JSONL notification delivery handoff, and HTTP requester notification provider delivery exist; Linear/Jira hosted webhook creation and billing are not implemented.
+- Payload-backed GitHub issue import, GitHub App installation verification, live issue fetch, signed GitHub/Linear/Jira webhooks, hosted GitHub App webhook registration, safe disconnect APIs, encrypted server-only provider credential storage, provider-neutral background sync job metadata, GitHub/Linear/Jira workers for already-linked issue mappings, Linear/Jira OAuth callback exchange and refresh-token rotation, explicit provider write-back for linked GitHub/Linear/Jira issues, provider conflict resolution controls, payload-backed Linear issue import, payload-backed Jira issue import, requester notification outbox/preferences, JSONL notification delivery handoff, HTTP requester notification provider delivery, and server-side assistant model adapter foundation exist; Linear/Jira hosted webhook creation, browser AI consent settings, model evals, AI usage dashboards, and billing are not implemented.
 - Docker images are build-local by default; release manifests can record publishing metadata, but registry publishing infrastructure is not bundled yet.
 - Signed artifact infrastructure is not bundled yet; release manifests record signing as not configured unless an operator supplies signing metadata.
 - Named Docker volume backup requires an operator copy step or a future packaged volume helper.

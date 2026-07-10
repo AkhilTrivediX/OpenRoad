@@ -209,6 +209,12 @@ export const routeProtections: RouteProtection[] = [
     scope: "workspace"
   },
   {
+    methods: ["POST"],
+    path: "/api/openroad/workspaces/:workspaceId/assistant/triage",
+    permission: "workspace:read",
+    scope: "workspace"
+  },
+  {
     methods: ["PUT"],
     path: "/api/openroad/workspaces/:workspaceId",
     permission: "workspace:write",

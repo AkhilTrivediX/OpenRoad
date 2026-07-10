@@ -128,6 +128,7 @@ export type AuditEvent = {
 export type OperationalEventSeverity = "info" | "warning" | "error";
 
 export type OperationalEventCategory =
+  | "ai"
   | "api"
   | "auth"
   | "integration"
@@ -1872,6 +1873,7 @@ function isOperationalActorType(value: unknown): value is OpenRoadActor["type"] 
 
 function isOperationalEventCategory(value: unknown): value is OperationalEventCategory {
   return (
+    value === "ai" ||
     value === "api" ||
     value === "auth" ||
     value === "integration" ||

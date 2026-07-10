@@ -221,10 +221,18 @@ import {
   sessionCookieName,
   type SessionStore
 } from "./session-store.js";
+import {
+  createAssistantTriageResult,
+  createModelAdapterFromEnv,
+  type AssistantConsent,
+  type AssistantModelAdapter,
+  type AssistantTriageResult
+} from "./model-adapter.js";
 
 type CreateOpenRoadServerOptions = {
   accountRecoveryDeliveryAdapter?: AccountRecoveryDeliveryAdapter;
   accountRecoveryPublicBaseUrl?: string;
+  assistantModelAdapter?: AssistantModelAdapter;
   auth?: AuthOptions;
   distDir?: string;
   githubAppClient?: GitHubAppClient;
@@ -364,6 +372,7 @@ export function createPortalRateLimiterFromEnv(env = process.env): PortalRateLim
 export function createOpenRoadServer({
   accountRecoveryDeliveryAdapter = createAccountRecoveryDeliveryAdapterFromEnv(),
   accountRecoveryPublicBaseUrl = resolveAccountRecoveryPublicBaseUrl(),
+  assistantModelAdapter = createModelAdapterFromEnv(),
   auth,
   distDir = resolve("dist"),
   githubAppConfig = githubAppConfigFromEnv(),
@@ -450,6 +459,7 @@ export function createOpenRoadServer({
           linearWebhookConfig,
           accountRecoveryDeliveryAdapter,
           accountRecoveryPublicBaseUrl,
+          assistantModelAdapter,
           invitationDeliveryAdapter,
           invitationDeliveryPublicBaseUrl,
           notificationDeliveryAdapter,
@@ -607,6 +617,7 @@ async function handleApiRequest(
   linearWebhookConfig: LinearWebhookConfig,
   accountRecoveryDeliveryAdapter: AccountRecoveryDeliveryAdapter | undefined,
   accountRecoveryPublicBaseUrl: string | undefined,
+  assistantModelAdapter: AssistantModelAdapter | undefined,
   invitationDeliveryAdapter: InvitationDeliveryAdapter | undefined,
   invitationDeliveryPublicBaseUrl: string | undefined,
   notificationDeliveryAdapter: NotificationDeliveryAdapter | undefined,
@@ -778,6 +789,23 @@ async function handleApiRequest(
 
   if (requestUrl.pathname === "/api/openroad/ops/status") {
     await handleOpsStatusRequest(request, response, store, access, teamStore, integrationStore);
+    return;
+  }
+
+  const assistantTriageMatch = requestUrl.pathname.match(
+    /^\/api\/openroad\/workspaces\/([^/]+)\/assistant\/triage$/
+  );
+
+  if (assistantTriageMatch) {
+    await handleAssistantTriageRequest(
+      request,
+      response,
+      store,
+      access,
+      teamStore,
+      assistantModelAdapter,
+      assistantTriageMatch[1]
+    );
     return;
   }
 
@@ -2671,6 +2699,73 @@ async function handleWorkspaceActionRequest(
       access
     );
   } catch (error) {
+    writeKnownApiError(response, error, access);
+  }
+}
+
+async function handleAssistantTriageRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  store: OpenRoadStore,
+  access: AccessContext,
+  teamStore: TeamStore | undefined,
+  assistantModelAdapter: AssistantModelAdapter | undefined,
+  encodedWorkspaceId: string
+) {
+  if (request.method !== "POST") {
+    writeApiError(response, 405, "invalid_method", "This endpoint only supports POST.", access);
+    return;
+  }
+
+  const workspaceId = decodeURIComponent(encodedWorkspaceId);
+
+  try {
+    requirePermission(access, "workspace:read", workspaceId);
+    const payload = getAssistantTriagePayload(await readJsonBody(request, 32_000));
+    const current = await store.load();
+    const workspace = current.state.workspaces.find((item) => item.id === workspaceId);
+
+    if (!workspace) {
+      throw new ApiRequestError("not_found", 404, "Workspace was not found.");
+    }
+
+    const selectedRequest = workspace.requests.find((item) => item.id === payload.requestId);
+    if (!selectedRequest) {
+      throw new ApiRequestError("not_found", 404, "Request was not found.");
+    }
+
+    const result = await createAssistantTriageResult({
+      allowExternalModel: payload.allowExternalModel,
+      consent: payload.consent,
+      modelAdapter: assistantModelAdapter,
+      selectedRequest,
+      workspace
+    });
+
+    if (result.model.externalUsed) {
+      await recordAuditEvent(teamStore, current.state, access, {
+        summary: `Generated model-assisted assistant triage for ${selectedRequest.id}.`,
+        type: "assistant.triage.model",
+        workspaceId
+      });
+    }
+
+    await recordAssistantOperationalEvent(
+      teamStore,
+      current.state,
+      access,
+      result,
+      payload.allowExternalModel,
+      workspaceId
+    );
+    writeJson(response, 200, result, access);
+  } catch (error) {
+    await recordOperationalFailure(teamStore, store, access, error, {
+      category: "ai",
+      summary: "Assistant triage request failed.",
+      type: "assistant.triage.failed",
+      workspaceId
+    });
     writeKnownApiError(response, error, access);
   }
 }
@@ -8371,6 +8466,7 @@ function parseOperationalEventSeverity(value: string | null) {
 
 function isOperationalEventCategory(value: string): value is OperationalEvent["category"] {
   return (
+    value === "ai" ||
     value === "api" ||
     value === "auth" ||
     value === "integration" ||
@@ -9416,6 +9512,32 @@ function getPasswordLoginPayload(payload: unknown) {
   };
 }
 
+function getAssistantTriagePayload(payload: unknown): {
+  allowExternalModel: boolean;
+  consent: AssistantConsent;
+  requestId: string;
+} {
+  if (!isRecord(payload)) {
+    throw new ApiRequestError("invalid_request", 400, "Assistant triage payload must be an object.");
+  }
+
+  const requestId = getBoundedText(payload.requestId, 160);
+  if (!requestId) {
+    throw new ApiRequestError("invalid_request", 400, "Assistant triage requires requestId.");
+  }
+
+  const consentPayload = isRecord(payload.consent) ? payload.consent : {};
+
+  return {
+    allowExternalModel: payload.allowExternalModel === true,
+    consent: {
+      shareRequesterIdentity: consentPayload.shareRequesterIdentity === true,
+      shareWorkspaceContext: consentPayload.shareWorkspaceContext === true
+    },
+    requestId
+  };
+}
+
 function getAccountRecoveryRequestPayload(payload: unknown) {
   if (!isRecord(payload)) {
     throw new ApiRequestError("invalid_request", 400, "Account recovery payload must be an object.");
@@ -9789,6 +9911,54 @@ async function recordOperationalEvent(
     console.error("OpenRoad failed to persist an operational event.", error);
     return undefined;
   }
+}
+
+async function recordAssistantOperationalEvent(
+  teamStore: TeamStore | undefined,
+  openRoadState: Parameters<TeamStore["load"]>[0],
+  access: AccessContext,
+  result: AssistantTriageResult,
+  externalRequested: boolean,
+  workspaceId: string
+) {
+  const fallbackReason = result.model.fallbackReason;
+  const severity = result.model.mode === "fallback" && fallbackReason !== "external_not_requested"
+    ? "warning"
+    : "info";
+  const status = result.model.mode === "fallback" ? "ignored" : "succeeded";
+  const summary =
+    result.model.mode === "model"
+      ? "Generated model-assisted assistant triage."
+      : fallbackReason === "consent_required"
+        ? "Returned deterministic assistant triage because external consent was missing."
+        : fallbackReason === "provider_not_configured"
+          ? "Returned deterministic assistant triage because no model provider was configured."
+          : fallbackReason === "invalid_model_output"
+            ? "Returned deterministic assistant triage because model output was invalid."
+            : fallbackReason === "provider_failed"
+              ? "Returned deterministic assistant triage because model provider failed."
+              : "Returned deterministic assistant triage.";
+
+  await recordOperationalEvent(teamStore, openRoadState, access, {
+    category: "ai",
+    metadata: {
+      contextSections: result.model.context.includedSections.length,
+      externalRequested,
+      externalUsed: result.model.externalUsed,
+      ...(fallbackReason ? { fallbackReason } : {}),
+      mode: result.model.mode,
+      provider: result.model.provider,
+      ...(result.model.context.promptCharacters
+        ? { promptCharacters: result.model.context.promptCharacters }
+        : {}),
+      redactionCount: result.model.context.redactionCount
+    },
+    severity,
+    status,
+    summary,
+    type: "assistant.triage",
+    workspaceId
+  });
 }
 
 async function recordOperationalFailure(

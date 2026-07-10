@@ -230,6 +230,31 @@ export async function smokeOpenRoad(options = {}) {
     checks.push("private-single-user");
   }
 
+  const privateHeaders = adminToken ? { authorization: `Bearer ${adminToken}` } : {};
+  const workspace = await getJson(
+    `${baseUrl}/api/openroad/workspaces/${encodeURIComponent(workspaceId)}`,
+    privateHeaders
+  );
+  const requestId = workspace.body?.workspace?.requests?.find?.((request) => !request.archived)?.id;
+  if (workspace.status !== 200 || typeof requestId !== "string") {
+    throw new OpsError("smoke_assistant_workspace_failed", "Private workspace read for assistant smoke failed.");
+  }
+
+  const assistant = await postJson(
+    `${baseUrl}/api/openroad/workspaces/${encodeURIComponent(workspaceId)}/assistant/triage`,
+    { requestId },
+    privateHeaders
+  );
+  if (
+    assistant.status !== 200 ||
+    assistant.body?.status !== "suggested" ||
+    assistant.body?.model?.externalUsed !== false ||
+    assistant.body?.workspaceId !== workspaceId
+  ) {
+    throw new OpsError("smoke_assistant_failed", "Deterministic assistant triage smoke failed.");
+  }
+  checks.push("assistant-triage");
+
   return {
     baseUrl,
     checks,
@@ -262,6 +287,32 @@ async function getJson(url, headers = {}) {
   let response;
   try {
     response = await fetch(url, { headers });
+  } catch (error) {
+    throw new OpsError("smoke_network_failed", `Could not reach ${url}: ${errorMessage(error)}`);
+  }
+
+  const text = await response.text();
+  let body;
+  try {
+    body = text ? JSON.parse(text) : undefined;
+  } catch {
+    body = undefined;
+  }
+
+  return { body, status: response.status };
+}
+
+async function postJson(url, payload, headers = {}) {
+  let response;
+  try {
+    response = await fetch(url, {
+      body: JSON.stringify(payload),
+      headers: {
+        ...headers,
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
   } catch (error) {
     throw new OpsError("smoke_network_failed", `Could not reach ${url}: ${errorMessage(error)}`);
   }

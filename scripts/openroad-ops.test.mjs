@@ -366,7 +366,7 @@ describe("openroad ops", () => {
       await expect(
         smokeOpenRoad({ baseUrl: server.baseUrl, workspaceId: "acme" })
       ).resolves.toMatchObject({
-        checks: ["health", "contract", "portal", "private-single-user"]
+        checks: ["health", "contract", "portal", "private-single-user", "assistant-triage"]
       });
     } finally {
       await server.close();
@@ -379,7 +379,7 @@ describe("openroad ops", () => {
       await expect(
         smokeOpenRoad({ adminToken: "secret", baseUrl: server.baseUrl, workspaceId: "acme" })
       ).resolves.toMatchObject({
-        checks: ["health", "contract", "portal", "private-denied", "private-token"]
+        checks: ["health", "contract", "portal", "private-denied", "private-token", "assistant-triage"]
       });
     } finally {
       await server.close();
@@ -499,6 +499,45 @@ async function startSmokeServer({ token, tokenMode }) {
 
     if (url.pathname === "/api/openroad/workspaces/acme/portal") {
       response.end(JSON.stringify({ enabled: true, requests: [], roadmap: {} }));
+      return;
+    }
+
+    if (url.pathname === "/api/openroad/workspaces/acme") {
+      if (tokenMode && request.headers.authorization !== `Bearer ${token}`) {
+        response.statusCode = 403;
+        response.end(JSON.stringify({ error: { code: "forbidden" } }));
+        return;
+      }
+      response.end(
+        JSON.stringify({
+          workspace: {
+            id: "acme",
+            requests: [{ archived: false, id: "request-1" }]
+          }
+        })
+      );
+      return;
+    }
+
+    if (url.pathname === "/api/openroad/workspaces/acme/assistant/triage") {
+      if (request.method !== "POST") {
+        response.statusCode = 405;
+        response.end(JSON.stringify({ error: { code: "invalid_method" } }));
+        return;
+      }
+      if (tokenMode && request.headers.authorization !== `Bearer ${token}`) {
+        response.statusCode = 403;
+        response.end(JSON.stringify({ error: { code: "forbidden" } }));
+        return;
+      }
+      response.end(
+        JSON.stringify({
+          model: { externalUsed: false, mode: "deterministic", provider: "deterministic" },
+          requestId: "request-1",
+          status: "suggested",
+          workspaceId: "acme"
+        })
+      );
       return;
     }
 

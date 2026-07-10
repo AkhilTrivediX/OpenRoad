@@ -977,7 +977,7 @@ Acceptance:
 
 Branch: `feat/model-adapter-foundation`
 
-Status: planned.
+Status: implemented and production-checked.
 
 Build:
 

@@ -10,7 +10,7 @@ Each feature must also satisfy `docs/PRODUCTION_READINESS.md` before merging to 
 
 Current stage: Stage 2 Team Beta foundation in progress.
 
-The standalone loop now covers workspaces, requests, triage, internal work, roadmap planning, changelog drafts, public portal preview, local durability, production APIs, basic tenancy boundaries, file-backed team metadata, audit events, self-host operations, owner browser sessions and owner sign-in for admin-token deployments, team invitation/account-access APIs, scoped member browser sessions from invitation tokens, server-side JSONL invitation delivery handoff, durable account password login for existing team users, owner member-management UI/APIs with stale-session revocation, app-level crash recovery, a first app-module boundary, hardened public portal write APIs with persisted visitor vote identity, the provider-neutral integration adapter contract, a payload-backed GitHub issue import/link API, server-only GitHub App installation verification, live GitHub issue fetch through verified installations, signed GitHub webhooks, safe disconnect handling, encrypted server-only provider credential storage, provider-neutral background sync job foundations, GitHub/Linear/Jira workers for already-linked issue mappings, progressive Settings visibility with GitHub/Linear/Jira manual sync controls, Linear issue import/link, Jira issue import/link with explicit field mapping, requester notification preferences/outbox events plus JSONL delivery handoff, deterministic local assistant triage, and release candidate manifest tooling. The next production work should deepen account lifecycle controls, direct invitation/provider delivery, and provider connect/disconnect, while Linear/Jira webhooks, provider write-back, conflict UI, and real model-backed AI adapters remain separate hardening slices.
+The standalone loop now covers workspaces, requests, triage, internal work, roadmap planning, changelog drafts, public portal preview, local durability, production APIs, basic tenancy boundaries, file-backed team metadata, audit events, self-host operations, owner browser sessions and owner sign-in for admin-token deployments, team invitation/account-access APIs, scoped member browser sessions from invitation tokens, server-side JSONL invitation delivery handoff, server-side HTTP invitation provider delivery, durable account password login for existing team users, owner member-management UI/APIs with stale-session revocation, app-level crash recovery, a first app-module boundary, hardened public portal write APIs with persisted visitor vote identity, the provider-neutral integration adapter contract, a payload-backed GitHub issue import/link API, server-only GitHub App installation verification, live GitHub issue fetch through verified installations, signed GitHub webhooks, safe disconnect handling, encrypted server-only provider credential storage, provider-neutral background sync job foundations, GitHub/Linear/Jira workers for already-linked issue mappings, progressive Settings visibility with GitHub/Linear/Jira manual sync controls, Linear issue import/link, Jira issue import/link with explicit field mapping, requester notification preferences/outbox events plus JSONL delivery handoff, deterministic local assistant triage, and release candidate manifest tooling. The next production work should deepen account lifecycle controls and provider connect/disconnect, while Linear/Jira webhooks, provider write-back, conflict UI, and real model-backed AI adapters remain separate hardening slices.
 
 ## Feature 1: Workspace Shell
 
@@ -293,6 +293,31 @@ Acceptance:
 - Raw accept tokens remain out of team metadata, list APIs, audit events, backups, and browser-visible persisted state.
 - Delivery failures do not drop invitations; owners still receive the one-time token and can revoke or retry operationally.
 - Member invite sessions, owner sessions, and workspace isolation continue to pass.
+
+### Invitation Provider Delivery
+
+Branch: `feat/invitation-provider-delivery`
+
+Status: implemented and production-checked.
+
+Build:
+
+- Server-side HTTP invitation delivery adapter for mail/webhook providers.
+- `OPENROAD_INVITATION_DELIVERY_HTTP_URL`, `OPENROAD_INVITATION_DELIVERY_HTTP_BEARER_TOKEN`, and `OPENROAD_INVITATION_DELIVERY_HTTP_TIMEOUT_MS` configuration.
+- `OPENROAD_PUBLIC_APP_URL` requirement for provider mode so invite links use an operator-owned origin.
+- HTTPS-only provider URL validation with localhost/loopback exceptions for local development.
+- Redirect blocking, timeout handling, bounded provider response parsing, and redacted provider message ids/errors.
+- HTTP provider creation tests that verify provider secrets and raw accept tokens stay out of persisted/browser-visible state.
+- Deployment, contract, readiness, Docker, and README documentation for provider mode.
+
+Acceptance:
+
+- HTTP provider mode is disabled unless explicitly configured and remains standalone-compatible.
+- Provider payloads contain recipient, workspace, role, subject/body, invitation id, expiration, and accept URL, but no admin tokens, session secrets, token hashes, or provider bearer secrets.
+- Provider bearer tokens are sent only in the outbound authorization header and are never persisted or returned.
+- Provider delivery success records only bounded delivery metadata.
+- Provider failures, redirects, malformed responses, timeouts, and network errors keep invitations pending and usable with redacted failure metadata.
+- Disabled delivery, JSONL delivery, invitation sessions, account password login, member management, public portal, integrations, ops, and release verification continue to pass.
 
 ### Account Auth Foundation
 

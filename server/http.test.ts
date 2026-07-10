@@ -573,6 +573,66 @@ describe("OpenRoad production server", () => {
     expect(JSON.stringify(audit.body)).not.toContain(acceptToken);
   });
 
+  it("scopes operational event reads to authorized workspace filters", async () => {
+    const { store, teamStore, url } = await startTestServer({
+      auth: { singleUserMode: false, trustProxyHeaders: true }
+    });
+    const current = await store.load();
+    await teamStore.recordOperationalEvent(current.state, {
+      actorId: "local-owner",
+      actorType: "local-owner",
+      category: "sync",
+      metadata: { processed: 1 },
+      provider: "github",
+      requestId: "request-acme",
+      severity: "info",
+      status: "succeeded",
+      summary: "Acme sync processed.",
+      type: "integration.sync.run",
+      workspaceId: "acme"
+    });
+    await teamStore.recordOperationalEvent(current.state, {
+      actorId: "local-owner",
+      actorType: "local-owner",
+      category: "sync",
+      metadata: { processed: 1 },
+      provider: "linear",
+      requestId: "request-maintainer",
+      severity: "warning",
+      status: "failed",
+      summary: "Maintainer sync failed.",
+      type: "integration.sync.run",
+      workspaceId: "maintainer"
+    });
+
+    const broad = await fetchJson(`${url}/api/openroad/ops/events`, {
+      headers: workspaceActorHeaders("acme", "Viewer")
+    });
+    const ownWorkspace = await fetchJson(
+      `${url}/api/openroad/ops/events?workspaceId=acme&category=sync&provider=github`,
+      {
+        headers: workspaceActorHeaders("acme", "Viewer")
+      }
+    );
+    const crossWorkspace = await fetchJson(
+      `${url}/api/openroad/ops/events?workspaceId=maintainer`,
+      {
+        headers: workspaceActorHeaders("acme", "Viewer")
+      }
+    );
+
+    expect(broad.status).toBe(403);
+    expect(ownWorkspace.status).toBe(200);
+    expect(ownWorkspace.body.events).toEqual([
+      expect.objectContaining({
+        provider: "github",
+        type: "integration.sync.run",
+        workspaceId: "acme"
+      })
+    ]);
+    expect(crossWorkspace.status).toBe(403);
+  });
+
   it("delivers created workspace invitations through a configured adapter", async () => {
     const deliveries: Array<{ acceptToken: string; baseUrl: string; email: string; workspaceName: string }> = [];
     const adapter: InvitationDeliveryAdapter = {
@@ -6715,6 +6775,15 @@ describe("OpenRoad production server", () => {
     const persisted = await store.load();
     const team = await teamStore.load(persisted.state);
     const event = persisted.state.workspaces[0].notifications.outbox[0];
+    const opsEvents = await fetchJson(
+      `${url}/api/openroad/ops/events?workspaceId=acme&category=notification`,
+      {
+        headers: { Authorization: "Bearer secret" }
+      }
+    );
+    const opsStatus = await fetchJson(`${url}/api/openroad/ops/status`, {
+      headers: { Authorization: "Bearer secret" }
+    });
 
     expect(delivered.status).toBe(200);
     expect(delivered.body).toMatchObject({
@@ -6742,6 +6811,31 @@ describe("OpenRoad production server", () => {
       type: "notifications.deliver",
       workspaceId: "acme"
     });
+    expect(team.state.operationalEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          category: "notification",
+          metadata: expect.objectContaining({ attempted: 1, delivered: 1, failed: 0 }),
+          severity: "info",
+          status: "succeeded",
+          type: "notifications.deliver",
+          workspaceId: "acme"
+        })
+      ])
+    );
+    expect(opsEvents.status).toBe(200);
+    expect(opsEvents.body.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          category: "notification",
+          severity: "info",
+          type: "notifications.deliver",
+          workspaceId: "acme"
+        })
+      ])
+    );
+    expect(JSON.stringify(opsEvents.body)).not.toContain("Dark mode for docs site moved");
+    expect(opsStatus.body.operationalEvents.recent24hBySeverity.info).toBeGreaterThanOrEqual(2);
   });
 
   it("serializes concurrent requester notification delivery requests", async () => {

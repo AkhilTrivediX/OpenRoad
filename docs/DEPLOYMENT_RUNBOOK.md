@@ -481,7 +481,8 @@ For local single-user mode without `OPENROAD_ADMIN_TOKEN`, omit `--admin-token`;
 6. Confirm automatic state migration succeeds when the release notes mention a schema bump.
 7. Run `pnpm ops:smoke`.
 8. Check `/api/openroad/ops/status` with the admin token.
-9. Reopen access.
+9. Check `/api/openroad/ops/events?limit=10` with the admin token when diagnosing a live issue.
+10. Reopen access.
 
 ## Rollback
 
@@ -504,6 +505,7 @@ For local single-user mode without `OPENROAD_ADMIN_TOKEN`, omit `--admin-token`;
 - After `POST /api/openroad/auth/logout`, the same cookie should no longer read private state.
 - With `Authorization: Bearer <token>`, `GET /api/openroad/state` should return `200`.
 - `GET /api/openroad/ops/status` should require private read permission.
+- `GET /api/openroad/ops/events?limit=10` should require private read permission and return sanitized operational events only.
 - `POST /api/openroad/notifications/deliver` should require private write permission and return `503` unless a delivery adapter is configured.
 - With `OPENROAD_NOTIFICATION_DELIVERY_MODE=http` and a local provider endpoint, requester notification delivery should post one bounded public-safe provider payload, mark the event delivered, and keep the provider bearer token out of state/API responses.
 - `POST /api/openroad/workspaces/acme/invitations` should require owner/admin permission and return a one-time accept token only on creation.

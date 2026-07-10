@@ -59,6 +59,51 @@ describe("FileTeamStore", () => {
     });
   });
 
+  it("persists sanitized operational events without raw secret metadata", async () => {
+    const teamFile = await createTempTeamFile();
+    const openRoadState = createInitialOpenRoadState();
+    const store = new FileTeamStore(teamFile);
+    await store.load(openRoadState);
+
+    const operationalEvent = await store.recordOperationalEvent(openRoadState, {
+      actorId: "local-owner",
+      actorType: "local-owner",
+      category: "notification",
+      metadata: {
+        attempted: 1,
+        bearer: "Bearer raw-operational-bearer-token",
+        providerMessageId: "msg-1",
+        secretToken: "raw-operational-token"
+      },
+      requestId: "request-1",
+      severity: "warning",
+      status: "failed",
+      summary: "Delivery failed with token=raw-operational-summary-token",
+      type: "notifications.deliver",
+      workspaceId: "acme"
+    });
+    const persistedText = await readFile(teamFile, "utf8");
+    const result = await store.load(openRoadState);
+
+    expect(operationalEvent.id).toContain("op-");
+    expect(result.state.operationalEvents[0]).toMatchObject({
+      category: "notification",
+      severity: "warning",
+      status: "failed",
+      type: "notifications.deliver",
+      workspaceId: "acme"
+    });
+    expect(result.state.operationalEvents[0].metadata).toMatchObject({
+      attempted: 1,
+      bearer: "Bearer [redacted]",
+      providerMessageId: "msg-1",
+      secretToken: "[redacted]"
+    });
+    expect(persistedText).not.toContain("raw-operational-token");
+    expect(persistedText).not.toContain("raw-operational-summary-token");
+    expect(persistedText).not.toContain("raw-operational-bearer-token");
+  });
+
   it("migrates schema v1 team metadata with empty invitations", async () => {
     const teamFile = await createTempTeamFile();
     const openRoadState = createInitialOpenRoadState();
@@ -206,6 +251,36 @@ describe("FileTeamStore", () => {
     expect(result.state.credentials[0]).toMatchObject({ userId: "local-owner" });
   });
 
+  it("migrates schema v5 team metadata with empty operational events", async () => {
+    const teamFile = await createTempTeamFile();
+    const openRoadState = createInitialOpenRoadState();
+    await writeFile(
+      teamFile,
+      JSON.stringify({
+        accountRecoveryRequests: [],
+        auditEvents: [],
+        credentials: [],
+        invitations: [],
+        memberships: [],
+        schemaVersion: 5,
+        users: []
+      }),
+      "utf8"
+    );
+
+    const result = await new FileTeamStore(teamFile).load(openRoadState);
+    const persisted = JSON.parse(await readFile(teamFile, "utf8")) as {
+      operationalEvents: unknown[];
+      schemaVersion: number;
+    };
+
+    expect(result.status).toBe("migrated");
+    expect(result.state.schemaVersion).toBe(openRoadTeamSchemaVersion);
+    expect(result.state.operationalEvents).toEqual([]);
+    expect(persisted.schemaVersion).toBe(openRoadTeamSchemaVersion);
+    expect(persisted.operationalEvents).toEqual([]);
+  });
+
   it("creates invitations without persisting or listing raw accept tokens", async () => {
     const teamFile = await createTempTeamFile();
     const openRoadState = createInitialOpenRoadState();
@@ -317,6 +392,7 @@ describe("FileTeamStore", () => {
           }
         ],
         memberships: [],
+        operationalEvents: [],
         schemaVersion: openRoadTeamSchemaVersion,
         users: []
       })
@@ -623,6 +699,7 @@ describe("FileTeamStore", () => {
         ],
         invitations: [],
         memberships: [],
+        operationalEvents: [],
         schemaVersion: openRoadTeamSchemaVersion,
         users: []
       })
@@ -772,6 +849,7 @@ describe("FileTeamStore", () => {
               workspaceId: "acme"
             }
           ],
+          operationalEvents: [],
           schemaVersion: openRoadTeamSchemaVersion,
           users: [
             { createdAt: "seed", email: "owner@openroad.local", id: "local-owner", name: "Owner" },

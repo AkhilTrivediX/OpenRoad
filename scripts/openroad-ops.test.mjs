@@ -35,7 +35,7 @@ describe("openroad ops", () => {
     expect(manifest.files.data.schemaVersion).toBe(2);
     expect(manifest.files.integration.schemaVersion).toBe(4);
     expect(manifest.files.session.schemaVersion).toBe(2);
-    expect(manifest.files.team.schemaVersion).toBe(5);
+    expect(manifest.files.team.schemaVersion).toBe(6);
     await expect(readFile(join(result.backupDir, "openroad-state.json"), "utf8")).resolves.toContain("acme");
     await expect(readFile(join(result.backupDir, "openroad-integrations.json"), "utf8")).resolves.toContain(
       "installations"
@@ -201,6 +201,75 @@ describe("openroad ops", () => {
     expect(restoredIntegration).not.toContain("raw-sync-summary-token");
     expect(restoredIntegration).not.toContain("raw-webhook-secret");
     expect(restoredIntegration).not.toContain("raw-webhook-token");
+  });
+
+  it("sanitizes operational events during team metadata backup and restore", async ({ task }) => {
+    const root = await createTempRoot(task.name);
+    const source = join(root, "source");
+    const target = join(root, "target");
+    const { dataFile, integrationFile, sessionFile, teamFile } = await writeOpenRoadPair(source);
+    const rawTeam = JSON.parse(await readFile(teamFile, "utf8"));
+    await writeFile(
+      teamFile,
+      JSON.stringify(
+        {
+          ...rawTeam,
+          operationalEvents: [
+            {
+              actorId: "local-owner",
+              actorType: "local-owner",
+              category: "notification",
+              createdAt: "2026-07-10T00:00:00.000Z",
+              id: "op-1",
+              metadata: {
+                bearer: "Bearer raw-operational-bearer-token",
+                providerMessageId: "msg-1",
+                secretToken: "raw-operational-token"
+              },
+              requestId: "request-1",
+              severity: "warning",
+              status: "failed",
+              summary: "Delivery failed with token=raw-operational-summary-token",
+              type: "notifications.deliver",
+              workspaceId: "acme"
+            }
+          ]
+        },
+        null,
+        2
+      )
+    );
+
+    const backup = await createBackup({
+      dataFile,
+      integrationFile,
+      name: "snapshot",
+      outputDir: join(root, "backups"),
+      sessionFile,
+      teamFile
+    });
+    const archivedTeam = await readFile(join(backup.backupDir, "openroad-team.json"), "utf8");
+    const targetPair = await writeOpenRoadPair(target, "old-workspace");
+
+    await restoreBackup({
+      dataFile: targetPair.dataFile,
+      inputDir: backup.backupDir,
+      integrationFile: targetPair.integrationFile,
+      safetyDir: join(root, "safety"),
+      sessionFile: targetPair.sessionFile,
+      teamFile: targetPair.teamFile
+    });
+    const restoredTeam = await readFile(targetPair.teamFile, "utf8");
+
+    expect(archivedTeam).toContain("notifications.deliver");
+    expect(archivedTeam).toContain("[redacted]");
+    expect(archivedTeam).not.toContain("raw-operational-token");
+    expect(archivedTeam).not.toContain("raw-operational-summary-token");
+    expect(archivedTeam).not.toContain("raw-operational-bearer-token");
+    expect(restoredTeam).toContain("notifications.deliver");
+    expect(restoredTeam).not.toContain("raw-operational-token");
+    expect(restoredTeam).not.toContain("raw-operational-summary-token");
+    expect(restoredTeam).not.toContain("raw-operational-bearer-token");
   });
 
   it("fails backup when a required source file is missing", async ({ task }) => {
@@ -382,7 +451,8 @@ async function writeOpenRoadPair(root, workspaceId = "acme") {
         credentials: [],
         invitations: [],
         memberships: [],
-        schemaVersion: 5,
+        operationalEvents: [],
+        schemaVersion: 6,
         users: [{ createdAt: "seed", email: "owner@example.com", id: "owner", name: "Owner" }]
       },
       null,

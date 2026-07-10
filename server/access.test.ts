@@ -59,6 +59,20 @@ describe("OpenRoad API access contract", () => {
     );
     expect(openRoadApiContract.routeProtections).toContainEqual(
       expect.objectContaining({
+        path: "/api/openroad/ops/events",
+        permission: "state:read",
+        scope: "global"
+      })
+    );
+    expect(openRoadApiContract.routeProtections).toContainEqual(
+      expect.objectContaining({
+        path: "/api/openroad/ops/status",
+        permission: "state:read",
+        scope: "global"
+      })
+    );
+    expect(openRoadApiContract.routeProtections).toContainEqual(
+      expect.objectContaining({
         path: "/api/openroad/workspaces/:workspaceId/portal/requests/:requestId/comments",
         permission: "portal:interact",
         scope: "public"

@@ -209,6 +209,7 @@ import {
 import {
   TeamStoreError,
   type AuditEvent,
+  type OperationalEvent,
   type TeamAccountRecoverySummary,
   type TeamInvitationSummary,
   type TeamWorkspaceMemberSummary,
@@ -469,6 +470,22 @@ export function createOpenRoadServer({
       await serveStaticAsset(request, response, requestUrl, resolvedDistDir, access);
     } catch (error) {
       logger.error(error);
+      try {
+        const result = await store.load();
+        await recordOperationalEvent(teamStore, result.state, access, {
+          category: "api",
+          metadata: {
+            method: request.method ?? "UNKNOWN",
+            path: getBoundedText(request.url, 300) ?? "/"
+          },
+          severity: "error",
+          status: "failed",
+          summary: "OpenRoad server failed to handle the request.",
+          type: "api.unhandled_error"
+        });
+      } catch (eventError) {
+        logger.error(eventError);
+      }
       writeApiError(
         response,
         500,
@@ -751,6 +768,11 @@ async function handleApiRequest(
       runIntegrationMutationExclusive,
       runIntegrationSyncExclusive
     );
+    return;
+  }
+
+  if (requestUrl.pathname === "/api/openroad/ops/events") {
+    await handleOperationalEventsRequest(request, response, requestUrl, store, access, teamStore);
     return;
   }
 
@@ -1381,6 +1403,16 @@ async function handleStateRequest(
       const state = await store.replaceState(statePayload);
       await recordAuditEvent(teamStore, state, access, {
         summary: "Replaced OpenRoad state.",
+        type: "state.replace"
+      });
+      await recordOperationalEvent(teamStore, state, access, {
+        category: "state",
+        metadata: {
+          workspaces: state.workspaces.length
+        },
+        severity: "info",
+        status: "succeeded",
+        summary: "OpenRoad state was replaced.",
         type: "state.replace"
       });
       writeJson(response, 200, { state, status: "saved" }, access);
@@ -4786,6 +4818,8 @@ async function handleIntegrationSyncRunRequest(
     return;
   }
 
+  let runOptions: ReturnType<typeof parseIntegrationSyncRunPayload> | undefined;
+
   try {
     requirePermission(access, "state:write");
 
@@ -4802,17 +4836,18 @@ async function handleIntegrationSyncRunRequest(
     }
 
     const payload = await readJsonBody(request, 20_000);
-    const runOptions = parseIntegrationSyncRunPayload(payload);
+    const resolvedRunOptions = parseIntegrationSyncRunPayload(payload);
+    runOptions = resolvedRunOptions;
     const openRoadResult = await store.load();
     const runResult = await runIntegrationSyncExclusive(async () => {
       const claimed = await runIntegrationMutationExclusive(async () => {
         const integrationResult = await integrationStore.load();
         const now = new Date().toISOString();
         const claimed = claimDueIntegrationSyncJobs(integrationResult.state, {
-          limit: runOptions.limit,
+          limit: resolvedRunOptions.limit,
           now,
-          provider: runOptions.provider,
-          workspaceId: runOptions.workspaceId
+          provider: resolvedRunOptions.provider,
+          workspaceId: resolvedRunOptions.workspaceId
         });
         const state =
           claimed.jobs.length > 0
@@ -4877,19 +4912,43 @@ async function handleIntegrationSyncRunRequest(
       await recordAuditEvent(teamStore, openRoadResult.state, access, {
         summary: `Integration sync worker processed ${claimed.jobs.length} job(s).`,
         type: "integration.sync.run",
-        workspaceId: runOptions.workspaceId
+        workspaceId: resolvedRunOptions.workspaceId
+      });
+
+      const failed = processed.filter((job) => job.status !== "succeeded").length;
+      await recordOperationalEvent(teamStore, openRoadResult.state, access, {
+        category: "sync",
+        metadata: {
+          claimed: claimed.jobs.length,
+          failed,
+          processed: processed.length,
+          remainingQueued: countQueuedSyncJobs(state, resolvedRunOptions)
+        },
+        ...(resolvedRunOptions.provider ? { provider: resolvedRunOptions.provider } : {}),
+        severity: failed > 0 ? "warning" : "info",
+        status: failed > 0 ? "failed" : "succeeded",
+        summary: `Integration sync worker processed ${claimed.jobs.length} job(s).`,
+        type: "integration.sync.run",
+        workspaceId: resolvedRunOptions.workspaceId
       });
 
       return {
         claimed: claimed.jobs.length,
         processed,
-        remainingQueued: countQueuedSyncJobs(state, runOptions),
+        remainingQueued: countQueuedSyncJobs(state, resolvedRunOptions),
         status: "processed"
       };
     });
 
     writeJson(response, 200, runResult, access);
   } catch (error) {
+    await recordOperationalFailure(teamStore, store, access, error, {
+      category: "sync",
+      ...(runOptions?.provider ? { provider: runOptions.provider } : {}),
+      summary: "Integration sync run failed.",
+      type: "integration.sync.run",
+      workspaceId: runOptions?.workspaceId
+    });
     writeKnownApiError(response, error, access);
   }
 }
@@ -5159,9 +5218,11 @@ async function handleProviderWebhookRegistrationRequest(
   }
 
   const workspaceId = decodeURIComponent(encodedWorkspaceId);
+  let installationId: string | undefined;
+  let provider: IntegrationProvider | undefined;
 
   try {
-    const provider = parseIntegrationProviderPath(encodedProvider);
+    provider = parseIntegrationProviderPath(encodedProvider);
     requirePermission(access, "integration:manage", workspaceId);
 
     if (!integrationStore) {
@@ -5185,7 +5246,7 @@ async function handleProviderWebhookRegistrationRequest(
       throw new ApiRequestError("invalid_request", 400, "Webhook registration payload must be an object.");
     }
 
-    const installationId = getBoundedIdentifier(payload.installationId, 160);
+    installationId = getBoundedIdentifier(payload.installationId, 160);
     if (!installationId) {
       throw new ApiRequestError("invalid_request", 400, "Integration installation id is required.");
     }
@@ -5210,6 +5271,20 @@ async function handleProviderWebhookRegistrationRequest(
       workspaceId
     });
 
+    await recordOperationalEvent(teamStore, current.state, access, {
+      category: "webhook",
+      metadata: {
+        installationId,
+        registrationStatus: result.status
+      },
+      provider,
+      severity: result.status === "failed" ? "warning" : "info",
+      status: result.status === "failed" ? "failed" : "succeeded",
+      summary: `Registered ${provider} webhook delivery with status ${result.status}.`,
+      type: "integration.webhook_registration",
+      workspaceId
+    });
+
     writeJson(
       response,
       result.status === "active" ? 200 : 202,
@@ -5220,6 +5295,16 @@ async function handleProviderWebhookRegistrationRequest(
       access
     );
   } catch (error) {
+    await recordOperationalFailure(teamStore, store, access, error, {
+      category: "webhook",
+      metadata: {
+        installationId: installationId ?? null
+      },
+      ...(provider ? { provider } : {}),
+      summary: "Hosted webhook registration failed.",
+      type: "integration.webhook_registration",
+      workspaceId
+    });
     writeKnownApiError(response, error, access);
   }
 }
@@ -6450,6 +6535,10 @@ async function handleGitHubWebhookRequest(
     return;
   }
 
+  let deliveryId: string | undefined;
+  let eventName: string | undefined;
+  let signatureVerified = false;
+
   try {
     if (!integrationStore) {
       throw new ApiRequestError(
@@ -6469,12 +6558,12 @@ async function handleGitHubWebhookRequest(
 
     const rawBody = await readRawBody(request, 2_000_000);
     const signatureHeader = getSingleHeader(request.headers, "x-hub-signature-256");
-    const deliveryId = getRequiredHeaderText(
+    deliveryId = getRequiredHeaderText(
       request,
       "x-github-delivery",
       "GitHub delivery id is required."
     );
-    const eventName = getRequiredHeaderText(
+    eventName = getRequiredHeaderText(
       request,
       "x-github-event",
       "GitHub webhook event is required."
@@ -6489,6 +6578,7 @@ async function handleGitHubWebhookRequest(
     ) {
       throw new AccessDeniedError("GitHub webhook signature is invalid.");
     }
+    signatureVerified = true;
 
     if (activeGitHubWebhookDeliveries.has(deliveryId)) {
       writeJson(
@@ -6510,6 +6600,8 @@ async function handleGitHubWebhookRequest(
     }
 
     activeGitHubWebhookDeliveries.add(deliveryId);
+    const verifiedDeliveryId = deliveryId;
+    const verifiedEventName = eventName;
 
     try {
       const payload = parseJsonBuffer(rawBody);
@@ -6521,6 +6613,17 @@ async function handleGitHubWebhookRequest(
         );
 
         if (duplicateEvent) {
+          await recordProviderWebhookOperationalEvent({
+            access,
+            event: {
+              ...duplicateEvent,
+              result: "duplicate",
+              summary: `Duplicate GitHub delivery ${deliveryId} ignored.`
+            },
+            openRoadState: current.state,
+            provider: "github",
+            teamStore
+          });
           return {
             body: {
               event: sanitizeIntegrationSyncEvent({
@@ -6535,8 +6638,8 @@ async function handleGitHubWebhookRequest(
         }
 
         const result = processGitHubWebhookDelivery({
-          deliveryId,
-          eventName,
+          deliveryId: verifiedDeliveryId,
+          eventName: verifiedEventName,
           integrationState: integrationResult.state,
           now: new Date().toISOString(),
           openRoadState: current.state,
@@ -6557,6 +6660,17 @@ async function handleGitHubWebhookRequest(
           );
         }
 
+        await recordProviderWebhookOperationalEvent({
+          access:
+            result.audit && result.audit.workspaceId
+              ? createIntegrationAccess(access, result.audit.workspaceId, result.audit.installationId)
+              : access,
+          event: result.event,
+          openRoadState: state,
+          provider: "github",
+          teamStore
+        });
+
         return {
           body: {
             event: sanitizeIntegrationSyncEvent(result.event),
@@ -6576,6 +6690,18 @@ async function handleGitHubWebhookRequest(
       activeGitHubWebhookDeliveries.delete(deliveryId);
     }
   } catch (error) {
+    if (signatureVerified) {
+      await recordOperationalFailure(teamStore, store, access, error, {
+        category: "webhook",
+        metadata: {
+          deliveryId: deliveryId ?? null,
+          eventName: eventName ?? null
+        },
+        provider: "github",
+        summary: "GitHub webhook delivery failed.",
+        type: "integration.github.webhook"
+      });
+    }
     writeKnownApiError(response, error, access);
   }
 }
@@ -6595,6 +6721,10 @@ async function handleLinearWebhookRequest(
     writeApiError(response, 405, "invalid_method", "This endpoint only supports POST.", access);
     return;
   }
+
+  let deliveryId: string | undefined;
+  let eventName: string | undefined;
+  let signatureVerified = false;
 
   try {
     if (!integrationStore) {
@@ -6625,13 +6755,14 @@ async function handleLinearWebhookRequest(
     ) {
       throw new AccessDeniedError("Linear webhook signature is invalid.");
     }
+    signatureVerified = true;
 
     const payload = parseJsonBuffer(rawBody);
     assertLinearWebhookTimestampIsCurrent(payload);
-    const deliveryId =
+    deliveryId =
       getBoundedIdentifier(getSingleHeader(request.headers, "linear-delivery"), 200) ??
       getLinearWebhookDeliveryId(payload);
-    const eventName = getLinearWebhookEventName(payload);
+    eventName = getLinearWebhookEventName(payload);
 
     if (activeLinearWebhookDeliveries.has(deliveryId)) {
       writeJson(
@@ -6654,6 +6785,8 @@ async function handleLinearWebhookRequest(
     }
 
     activeLinearWebhookDeliveries.add(deliveryId);
+    const verifiedDeliveryId = deliveryId;
+    const verifiedEventName = eventName;
 
     try {
       const webhookResponse = await runIntegrationMutationExclusive(async () => {
@@ -6664,6 +6797,17 @@ async function handleLinearWebhookRequest(
         );
 
         if (duplicateEvent) {
+          await recordProviderWebhookOperationalEvent({
+            access,
+            event: {
+              ...duplicateEvent,
+              result: "duplicate",
+              summary: `Duplicate Linear delivery ${deliveryId} ignored.`
+            },
+            openRoadState: current.state,
+            provider: "linear",
+            teamStore
+          });
           return {
             body: {
               event: sanitizeIntegrationSyncEvent({
@@ -6678,8 +6822,8 @@ async function handleLinearWebhookRequest(
         }
 
         const result = processLinearWebhookDelivery({
-          deliveryId,
-          eventName,
+          deliveryId: verifiedDeliveryId,
+          eventName: verifiedEventName,
           integrationState: integrationResult.state,
           now: new Date().toISOString(),
           openRoadState: current.state,
@@ -6700,6 +6844,17 @@ async function handleLinearWebhookRequest(
           );
         }
 
+        await recordProviderWebhookOperationalEvent({
+          access:
+            result.audit && result.audit.workspaceId
+              ? createIntegrationAccess(access, result.audit.workspaceId, result.audit.installationId)
+              : access,
+          event: result.event,
+          openRoadState: state,
+          provider: "linear",
+          teamStore
+        });
+
         return {
           body: {
             event: sanitizeIntegrationSyncEvent(result.event),
@@ -6719,6 +6874,18 @@ async function handleLinearWebhookRequest(
       activeLinearWebhookDeliveries.delete(deliveryId);
     }
   } catch (error) {
+    if (signatureVerified) {
+      await recordOperationalFailure(teamStore, store, access, error, {
+        category: "webhook",
+        metadata: {
+          deliveryId: deliveryId ?? null,
+          eventName: eventName ?? null
+        },
+        provider: "linear",
+        summary: "Linear webhook delivery failed.",
+        type: "integration.linear.webhook"
+      });
+    }
     writeKnownApiError(response, error, access);
   }
 }
@@ -6739,6 +6906,10 @@ async function handleJiraWebhookRequest(
     return;
   }
 
+  let deliveryId: string | undefined;
+  let eventName: string | undefined;
+  let signatureVerified = false;
+
   try {
     if (!integrationStore) {
       throw new ApiRequestError(
@@ -6758,7 +6929,7 @@ async function handleJiraWebhookRequest(
 
     const rawBody = await readRawBody(request, 2_000_000);
     const signatureHeader = getSingleHeader(request.headers, "x-hub-signature");
-    const deliveryId = getRequiredHeaderText(
+    deliveryId = getRequiredHeaderText(
       request,
       "x-atlassian-webhook-identifier",
       "Jira webhook delivery id is required."
@@ -6773,6 +6944,7 @@ async function handleJiraWebhookRequest(
     ) {
       throw new AccessDeniedError("Jira webhook signature is invalid.");
     }
+    signatureVerified = true;
 
     if (activeJiraWebhookDeliveries.has(deliveryId)) {
       writeJson(
@@ -6795,10 +6967,12 @@ async function handleJiraWebhookRequest(
     }
 
     activeJiraWebhookDeliveries.add(deliveryId);
+    const verifiedDeliveryId = deliveryId;
 
     try {
       const payload = parseJsonBuffer(rawBody);
-      const eventName = getJiraWebhookEventName(payload);
+      eventName = getJiraWebhookEventName(payload);
+      const verifiedEventName = eventName;
       const webhookResponse = await runIntegrationMutationExclusive(async () => {
         const current = await store.load();
         const integrationResult = await integrationStore.load();
@@ -6807,6 +6981,17 @@ async function handleJiraWebhookRequest(
         );
 
         if (duplicateEvent) {
+          await recordProviderWebhookOperationalEvent({
+            access,
+            event: {
+              ...duplicateEvent,
+              result: "duplicate",
+              summary: `Duplicate Jira delivery ${deliveryId} ignored.`
+            },
+            openRoadState: current.state,
+            provider: "jira",
+            teamStore
+          });
           return {
             body: {
               event: sanitizeIntegrationSyncEvent({
@@ -6821,8 +7006,8 @@ async function handleJiraWebhookRequest(
         }
 
         const result = processJiraWebhookDelivery({
-          deliveryId,
-          eventName,
+          deliveryId: verifiedDeliveryId,
+          eventName: verifiedEventName,
           integrationState: integrationResult.state,
           now: new Date().toISOString(),
           openRoadState: current.state,
@@ -6843,6 +7028,17 @@ async function handleJiraWebhookRequest(
           );
         }
 
+        await recordProviderWebhookOperationalEvent({
+          access:
+            result.audit && result.audit.workspaceId
+              ? createIntegrationAccess(access, result.audit.workspaceId, result.audit.installationId)
+              : access,
+          event: result.event,
+          openRoadState: state,
+          provider: "jira",
+          teamStore
+        });
+
         return {
           body: {
             event: sanitizeIntegrationSyncEvent(result.event),
@@ -6862,6 +7058,18 @@ async function handleJiraWebhookRequest(
       activeJiraWebhookDeliveries.delete(deliveryId);
     }
   } catch (error) {
+    if (signatureVerified) {
+      await recordOperationalFailure(teamStore, store, access, error, {
+        category: "webhook",
+        metadata: {
+          deliveryId: deliveryId ?? null,
+          eventName: eventName ?? null
+        },
+        provider: "jira",
+        summary: "Jira webhook delivery failed.",
+        type: "integration.jira.webhook"
+      });
+    }
     writeKnownApiError(response, error, access);
   }
 }
@@ -7957,6 +8165,85 @@ function createIntegrationAccess(
   };
 }
 
+async function recordProviderWebhookOperationalEvent({
+  access,
+  event,
+  openRoadState,
+  provider,
+  teamStore
+}: {
+  access: AccessContext;
+  event: IntegrationSyncEvent;
+  openRoadState: OpenRoadState;
+  provider: NonNullable<OperationalEvent["provider"]>;
+  teamStore: TeamStore | undefined;
+}) {
+  await recordOperationalEvent(teamStore, openRoadState, access, {
+    category: "webhook",
+    metadata: {
+      deliveryId: event.deliveryId,
+      eventName: event.event,
+      installationId: event.installationId ?? null,
+      result: event.result
+    },
+    provider,
+    severity: "info",
+    status: getWebhookOperationalStatus(event.result),
+    summary: event.summary,
+    type: `integration.${provider}.webhook`,
+    workspaceId: event.workspaceId
+  });
+}
+
+function getWebhookOperationalStatus(
+  result: IntegrationSyncEvent["result"]
+): NonNullable<OperationalEvent["status"]> {
+  if (result === "duplicate") return "duplicate";
+  if (result === "ignored") return "ignored";
+  return "succeeded";
+}
+
+async function handleOperationalEventsRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  requestUrl: URL,
+  store: OpenRoadStore,
+  access: AccessContext,
+  teamStore: TeamStore | undefined
+) {
+  if (request.method !== "GET") {
+    writeApiError(response, 405, "invalid_method", "This endpoint only supports GET.", access);
+    return;
+  }
+
+  try {
+    const filters = parseOperationalEventFilters(requestUrl);
+    if (filters.workspaceId) requirePermission(access, "workspace:read", filters.workspaceId);
+    else requirePermission(access, "state:read");
+
+    if (!teamStore) {
+      writeJson(response, 200, { events: [], status: "not_configured" }, access);
+      return;
+    }
+
+    const result = await store.load();
+    const team = await teamStore.load(result.state);
+    const events = team.state.operationalEvents
+      .filter((event) => {
+        if (filters.workspaceId && event.workspaceId !== filters.workspaceId) return false;
+        if (filters.category && event.category !== filters.category) return false;
+        if (filters.provider && event.provider !== filters.provider) return false;
+        if (filters.severity && event.severity !== filters.severity) return false;
+        return true;
+      })
+      .slice(0, filters.limit);
+
+    writeJson(response, 200, { events, status: "ok" }, access);
+  } catch (error) {
+    writeKnownApiError(response, error, access);
+  }
+}
+
 async function handleOpsStatusRequest(
   request: IncomingMessage,
   response: ServerResponse,
@@ -7986,6 +8273,7 @@ async function handleOpsStatusRequest(
           openRoad: result.status,
           team: team?.status ?? "not_configured"
         },
+        operationalEvents: summarizeOperationalEvents(team?.state.operationalEvents ?? []),
         totals: {
           auditEvents: team?.state.auditEvents.length ?? 0,
           integrationCredentials: integrations?.state.credentials.length ?? 0,
@@ -7994,6 +8282,7 @@ async function handleOpsStatusRequest(
           integrationSyncEvents: integrations?.state.syncEvents.length ?? 0,
           integrationSyncJobs: integrations?.state.syncJobs.length ?? 0,
           memberships: team?.state.memberships.length ?? 0,
+          operationalEvents: team?.state.operationalEvents.length ?? 0,
           users: team?.state.users.length ?? 0,
           workspaces: result.state.workspaces.length
         },
@@ -8004,6 +8293,95 @@ async function handleOpsStatusRequest(
   } catch (error) {
     writeKnownApiError(response, error, access);
   }
+}
+
+function parseOperationalEventFilters(requestUrl: URL) {
+  const workspaceId = getBoundedText(requestUrl.searchParams.get("workspaceId"), 160);
+  const category = parseOperationalEventCategory(requestUrl.searchParams.get("category"));
+  const provider = parseOperationalEventProvider(requestUrl.searchParams.get("provider"));
+  const severity = parseOperationalEventSeverity(requestUrl.searchParams.get("severity"));
+  const limit = Math.min(getPositiveInteger(requestUrl.searchParams.get("limit"), 100), 500);
+
+  return {
+    category,
+    limit,
+    provider,
+    severity,
+    workspaceId
+  };
+}
+
+function summarizeOperationalEvents(events: OperationalEvent[]) {
+  const since = Date.now() - 1000 * 60 * 60 * 24;
+  const summary = {
+    bySeverity: {
+      error: 0,
+      info: 0,
+      warning: 0
+    },
+    latestErrorAt: null as string | null,
+    latestWarningAt: null as string | null,
+    recent24h: 0,
+    recent24hBySeverity: {
+      error: 0,
+      info: 0,
+      warning: 0
+    },
+    total: events.length
+  };
+
+  for (const event of events) {
+    summary.bySeverity[event.severity] += 1;
+
+    if (event.severity === "error" && !summary.latestErrorAt) {
+      summary.latestErrorAt = event.createdAt;
+    }
+
+    if (event.severity === "warning" && !summary.latestWarningAt) {
+      summary.latestWarningAt = event.createdAt;
+    }
+
+    const eventTime = Date.parse(event.createdAt);
+    if (Number.isFinite(eventTime) && eventTime >= since) {
+      summary.recent24h += 1;
+      summary.recent24hBySeverity[event.severity] += 1;
+    }
+  }
+
+  return summary;
+}
+
+function parseOperationalEventCategory(value: string | null) {
+  if (!value) return undefined;
+  if (isOperationalEventCategory(value)) return value;
+  throw new ApiRequestError("invalid_request", 400, "Operational event category is not supported.");
+}
+
+function parseOperationalEventProvider(value: string | null) {
+  if (!value) return undefined;
+  if (value === "github" || value === "jira" || value === "linear") return value;
+  throw new ApiRequestError("invalid_request", 400, "Operational event provider is not supported.");
+}
+
+function parseOperationalEventSeverity(value: string | null) {
+  if (!value) return undefined;
+  if (value === "error" || value === "info" || value === "warning") return value;
+  throw new ApiRequestError("invalid_request", 400, "Operational event severity is not supported.");
+}
+
+function isOperationalEventCategory(value: string): value is OperationalEvent["category"] {
+  return (
+    value === "api" ||
+    value === "auth" ||
+    value === "integration" ||
+    value === "notification" ||
+    value === "ops" ||
+    value === "portal" ||
+    value === "state" ||
+    value === "sync" ||
+    value === "webhook" ||
+    value === "workspace"
+  );
 }
 
 async function handleNotificationDeliveryRequest(
@@ -8057,6 +8435,22 @@ async function handleNotificationDeliveryRequest(
       }
 
       await recordAuditEvent(teamStore, state, access, {
+        summary: `Requester notification delivery processed ${delivery.attempted} event(s).`,
+        type: "notifications.deliver",
+        workspaceId
+      });
+
+      await recordOperationalEvent(teamStore, state, access, {
+        category: "notification",
+        metadata: {
+          attempted: delivery.attempted,
+          delivered: delivery.delivered,
+          failed: delivery.failed,
+          remainingQueued: countQueuedNotifications(state, workspaceId),
+          skipped: delivery.skipped
+        },
+        severity: delivery.failed > 0 ? "warning" : "info",
+        status: delivery.failed > 0 ? "failed" : "succeeded",
         summary: `Requester notification delivery processed ${delivery.attempted} event(s).`,
         type: "notifications.deliver",
         workspaceId
@@ -8135,6 +8529,18 @@ async function handleWorkspaceRequest(
     const state = await store.replaceState(nextState);
     const auditEvent = await recordAuditEvent(teamStore, state, access, {
       summary: "Replaced workspace data.",
+      type: "workspace.replace",
+      workspaceId
+    });
+    await recordOperationalEvent(teamStore, state, access, {
+      category: "workspace",
+      metadata: {
+        requests: Array.isArray(workspacePayload.requests) ? workspacePayload.requests.length : 0,
+        workItems: Array.isArray(workspacePayload.workItems) ? workspacePayload.workItems.length : 0
+      },
+      severity: "info",
+      status: "succeeded",
+      summary: "Workspace data was replaced.",
       type: "workspace.replace",
       workspaceId
     });
@@ -9354,6 +9760,95 @@ async function recordAuditEvent(
     type: event.type,
     workspaceId: event.workspaceId
   });
+}
+
+async function recordOperationalEvent(
+  teamStore: TeamStore | undefined,
+  openRoadState: Parameters<TeamStore["load"]>[0],
+  access: AccessContext,
+  event: Pick<OperationalEvent, "category" | "severity" | "summary" | "type"> &
+    Partial<Pick<OperationalEvent, "metadata" | "provider" | "status" | "workspaceId">>
+) {
+  if (!teamStore) return undefined;
+
+  try {
+    return await teamStore.recordOperationalEvent(openRoadState, {
+      actorId: access.actor.id,
+      actorType: access.actor.type,
+      category: event.category,
+      ...(event.metadata ? { metadata: event.metadata } : {}),
+      ...(event.provider ? { provider: event.provider } : {}),
+      requestId: access.requestId,
+      severity: event.severity,
+      ...(event.status ? { status: event.status } : {}),
+      summary: event.summary,
+      type: event.type,
+      workspaceId: event.workspaceId
+    });
+  } catch (error) {
+    console.error("OpenRoad failed to persist an operational event.", error);
+    return undefined;
+  }
+}
+
+async function recordOperationalFailure(
+  teamStore: TeamStore | undefined,
+  store: OpenRoadStore,
+  access: AccessContext,
+  error: unknown,
+  event: Pick<OperationalEvent, "category" | "summary" | "type"> &
+    Partial<Pick<OperationalEvent, "metadata" | "provider" | "workspaceId">>
+) {
+  if (!teamStore || error instanceof AccessDeniedError) return undefined;
+
+  try {
+    const result = await store.load();
+    const errorStatus = getOperationalErrorStatus(error);
+    return await recordOperationalEvent(teamStore, result.state, access, {
+      category: event.category,
+      metadata: {
+        ...(event.metadata ?? {}),
+        errorCode: getOperationalErrorCode(error),
+        ...(errorStatus ? { errorStatus } : {})
+      },
+      ...(event.provider ? { provider: event.provider } : {}),
+      severity: errorStatus && errorStatus < 500 ? "warning" : "error",
+      status: "failed",
+      summary: event.summary,
+      type: event.type,
+      workspaceId: event.workspaceId
+    });
+  } catch (eventError) {
+    console.error("OpenRoad failed to persist an operational failure event.", eventError);
+    return undefined;
+  }
+}
+
+function getOperationalErrorCode(error: unknown) {
+  if (error instanceof ApiBodyError) return error.code;
+  if (error instanceof ApiRequestError) return error.code;
+  if (error instanceof GitHubAppClientError) return error.code;
+  if (error instanceof IntegrationStoreError) return error.code;
+  if (error instanceof OpenRoadStoreError) return error.code;
+  if (error instanceof SessionStoreError) return error.code;
+  if (error instanceof TeamStoreError) return error.code;
+
+  if (typeof error === "object" && error !== null && "code" in error) {
+    return getBoundedText((error as { code?: unknown }).code, 80) ?? "server_error";
+  }
+
+  return "server_error";
+}
+
+function getOperationalErrorStatus(error: unknown) {
+  if (error instanceof ApiBodyError) return error.code === "payload_too_large" ? 413 : 400;
+  if (error instanceof ApiRequestError) return error.status;
+  if (error instanceof AccessDeniedError) return error.status;
+  if (error instanceof OpenRoadStoreError && error.code === "future_schema") return 409;
+  if (error instanceof OpenRoadStoreError && error.code === "invalid_state") return 422;
+  if (error instanceof TeamStoreError && error.code === "future_schema") return 409;
+  if (error instanceof TeamStoreError && error.code === "invalid_state") return 422;
+  return undefined;
 }
 
 function canReadWorkspace(access: AccessContext, workspaceId: string) {

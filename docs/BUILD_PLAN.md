@@ -10,7 +10,7 @@ Each feature must also satisfy `docs/PRODUCTION_READINESS.md` before merging to 
 
 Current stage: Stage 3 Integration Beta hardening. `main` is production-checked for the shipped self-host and integration scopes, while Stage 4 public/hosted hardening remains explicit.
 
-The standalone loop now covers workspaces, requests, triage, internal work, roadmap planning, changelog drafts, public portal preview, local durability, production APIs, basic tenancy boundaries, file-backed team metadata, audit events, self-host operations, owner browser sessions and owner sign-in for admin-token deployments, team invitation/account-access APIs, scoped member browser sessions from invitation tokens, server-side JSONL invitation delivery handoff, server-side HTTP invitation provider delivery, durable account password login for existing team users, JSONL account recovery handoff with reset-token confirmation, owner member-management UI/APIs with stale-session revocation, app-level crash recovery, a first app-module boundary, hardened public portal write APIs with persisted visitor vote identity, the provider-neutral integration adapter contract, a payload-backed GitHub issue import/link API, server-only GitHub App installation verification, live GitHub issue fetch through verified installations, signed GitHub/Linear/Jira webhooks for already-linked issue mappings, hosted GitHub App webhook registration with safe Linear/Jira blocked states, safe disconnect handling, encrypted server-only provider credential storage, provider-neutral background sync job foundations, GitHub/Linear/Jira workers for already-linked issue mappings, Linear/Jira OAuth callback exchange and refresh-token rotation, progressive Settings visibility with GitHub/Linear/Jira connect, credential, disconnect, manual sync, conflict resolution, and hosted webhook registration controls, explicit provider write-back for linked GitHub/Linear/Jira issues, Linear issue import/link, Jira issue import/link with explicit field mapping, requester notification preferences/outbox events plus JSONL delivery handoff and HTTP provider delivery, deterministic local assistant triage, and release candidate manifest tooling. The next production hardening should target structured observability, real model-backed AI adapters, and hosted SaaS hardening as separate slices.
+The standalone loop now covers workspaces, requests, triage, internal work, roadmap planning, changelog drafts, public portal preview, local durability, production APIs, basic tenancy boundaries, file-backed team metadata, audit events, structured operational events, self-host operations, owner browser sessions and owner sign-in for admin-token deployments, team invitation/account-access APIs, scoped member browser sessions from invitation tokens, server-side JSONL invitation delivery handoff, server-side HTTP invitation provider delivery, durable account password login for existing team users, JSONL account recovery handoff with reset-token confirmation, owner member-management UI/APIs with stale-session revocation, app-level crash recovery, a first app-module boundary, hardened public portal write APIs with persisted visitor vote identity, the provider-neutral integration adapter contract, a payload-backed GitHub issue import/link API, server-only GitHub App installation verification, live GitHub issue fetch through verified installations, signed GitHub/Linear/Jira webhooks for already-linked issue mappings, hosted GitHub App webhook registration with safe Linear/Jira blocked states, safe disconnect handling, encrypted server-only provider credential storage, provider-neutral background sync job foundations, GitHub/Linear/Jira workers for already-linked issue mappings, Linear/Jira OAuth callback exchange and refresh-token rotation, progressive Settings visibility with GitHub/Linear/Jira connect, credential, disconnect, manual sync, conflict resolution, and hosted webhook registration controls, explicit provider write-back for linked GitHub/Linear/Jira issues, Linear issue import/link, Jira issue import/link with explicit field mapping, requester notification preferences/outbox events plus JSONL delivery handoff and HTTP provider delivery, deterministic local assistant triage, and release candidate manifest tooling. The next production hardening should target real model-backed AI adapters, hosted SaaS hardening, dashboard/exporter observability, and managed persistence as separate slices.
 
 ## Feature 1: Workspace Shell
 
@@ -453,6 +453,29 @@ Acceptance:
 
 - Self-host is a real deployment path, not a late marketing checkbox.
 - Backup and restore are documented before public release.
+
+### Observability Foundation
+
+Branch: `feat/observability-foundation`
+
+Status: implemented and production-checked.
+
+Build:
+
+- Team metadata schema `6` with a durable bounded private operational event ledger.
+- Sanitized event categories for server errors, notification delivery, integration sync, webhook ingestion, hosted webhook registration, state replacement, and workspace replacement.
+- Private `GET /api/openroad/ops/events` API with workspace/provider/category/severity/limit filters.
+- `GET /api/openroad/ops/status` summary for recent operational health signals and latest warning/error timestamps.
+- Best-effort event recording helper so observability persistence failures do not break product workflows.
+- Backup, restore, release, deployment, API contract, readiness, and test-plan documentation.
+
+Acceptance:
+
+- Operators can inspect recent structured events without scraping process logs.
+- Events are bounded, private, and free of secrets, raw provider payloads, stack traces, environment dumps, and workspace exports.
+- Workspace-scoped actors see only their own workspace events.
+- Audit events remain the user/action history and are not replaced by ops events.
+- Existing production gates remain green.
 
 ## Feature 5: Roadmap Now/Next/Later
 

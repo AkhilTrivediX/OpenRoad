@@ -99,11 +99,20 @@ As an invited teammate, after I accept an invitation and enter the workspace onc
 ## Evidence
 
 - Branch: `feat/account-auth-foundation`
-- Implementation commit SHA: Pending.
-- Date: Pending.
-- Commands run: Pending.
-- Browser/viewports tested: Pending.
-- Accessibility checks: Pending.
-- Reviewer notes: Pending.
+- Implementation commit SHA: `845bd32523dbfc370f9109a125cbc533d3f6fb22`.
+- Date: 2026-07-10.
+- Commands run:
+  - `pnpm vitest run server/team.test.ts server/http.test.ts src/App.test.tsx src/persistence/openroadServer.test.ts scripts/openroad-ops.test.mjs scripts/openroad-release.test.mjs`: 184 tests passed.
+  - `node C:\Users\PC\.agents\skills\impeccable\scripts\detect.mjs --json src\App.tsx src\styles.css`: no findings.
+  - `pnpm build:server`: passed.
+  - `pnpm check`: 361 tests passed, production client build passed, production server build passed.
+  - Built-server smoke against `server-dist/server/index.js`: health, owner invitation create, invitation member session, full-state denial, workspace read, account password set, wrong-password denial, password login session, workspace read/write, invite-token reuse denial, raw password not persisted, raw invitation token not persisted.
+  - `pnpm release:verify`: passed with rollback notes for OpenRoad state schema `7`, integration metadata schema `3`, session metadata schema `2`, and team metadata schema `4`.
+- Browser/viewports tested:
+  - In-app browser, production build at `1440x900`: owner/member auth panels fit, Account/Invite switch works, no document overflow.
+  - In-app browser, production build at `390x844`: account and invite member modes fit, no document overflow.
+  - In-app browser, production build at `360x740`: auth panels fit within viewport, no document overflow.
+- Accessibility checks: Auth controls use labeled inputs, semantic buttons, `aria-pressed` mode switch state, visible focus inherited from the app shell, and status messages use `role="status"`/`role="alert"` where relevant.
+- Reviewer notes: Passed. Account passwords are limited to existing team users and produce scoped workspace-member sessions; admin-token owner sessions, invitation sessions, public portal, integrations, ops, and release checks remained green.
 - Known unresolved risks: OAuth login, password recovery, email verification, MFA/passkeys, SSO, account deletion, hosted org admin, and billing remain future production slices.
-- Rollback notes: Pending.
+- Rollback notes: Restore a pre-schema-4 team metadata backup before downgrading to a build that does not understand account credential records. Product, integration, and session files remain separate but should be restored from the same operational snapshot when rolling back across a release.

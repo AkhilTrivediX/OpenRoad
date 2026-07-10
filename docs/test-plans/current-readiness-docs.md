@@ -44,11 +44,15 @@ As the project owner, I need the roadmap and readiness docs to tell the truth ab
 ## Evidence
 
 - Branch: `fix/current-readiness-docs`
-- Implementation commit SHA: Pending.
+- Implementation commit SHA: `c1633e7b6040fa347b50fd83237421b6f9436840`.
 - Date: 2026-07-10.
-- Commands run: Pending.
-- Acceptance criteria status: Pending.
+- Commands run:
+  - `rg -n "Status: active|provider-connect-disconnect-ui|after the account recovery foundation|Remaining larger product gaps|live Linear/Jira sync|app-level error boundary recovery|provider connection management usable|notification preferences.*pending" docs README.md` confirmed no stale status/next-branch language remains; remaining matches are current readiness wording or historical context.
+  - `git diff --check` passed.
+  - `pnpm check` passed 34 test files and 430 tests; production client/server builds passed.
+  - `pnpm release:verify` passed; dry-run manifest remained Docker `dry-run` and signing `not-configured`.
+- Acceptance criteria status: Passed before merge.
 - Browser/viewports tested: Not expected; docs-only change.
 - Accessibility checks: Not expected; docs-only change.
-- Reviewer notes: Pending.
+- Reviewer notes: Docs-only cleanup. No runtime, API, schema, or rendered UI behavior changed. The current docs now point next hardening toward conflict resolution instead of already-shipped provider connection UI, and keep hosted/public SaaS limits explicit.
 - Rollback notes: Revert this docs branch; no data or runtime migration.

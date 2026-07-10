@@ -22,12 +22,14 @@ export type JiraAccessibleResource = {
 
 export type LinearOAuthExchangeClient = {
   exchangeCode(options: OAuthCodeExchangeOptions): Promise<OAuthTokenExchangeResult>;
+  refreshToken(options: OAuthTokenRefreshOptions): Promise<OAuthTokenExchangeResult>;
 };
 
 export type JiraOAuthExchangeClient = {
   exchangeCode(options: OAuthCodeExchangeOptions): Promise<
     OAuthTokenExchangeResult & { resources: JiraAccessibleResource[] }
   >;
+  refreshToken(options: OAuthTokenRefreshOptions): Promise<OAuthTokenExchangeResult>;
 };
 
 export type OAuthCodeExchangeOptions = {
@@ -37,6 +39,14 @@ export type OAuthCodeExchangeOptions = {
     clientSecret: string;
     redirectUri: string;
   };
+};
+
+export type OAuthTokenRefreshOptions = {
+  config: {
+    clientId: string;
+    clientSecret: string;
+  };
+  refreshToken: string;
 };
 
 export class OAuthExchangeClientError extends Error {
@@ -94,6 +104,47 @@ export class FetchLinearOAuthExchangeClient implements LinearOAuthExchangeClient
       ...token,
       account: await this.loadAccount(token.accessToken)
     };
+  }
+
+  async refreshToken(options: OAuthTokenRefreshOptions) {
+    const body = new URLSearchParams({
+      client_id: options.config.clientId,
+      client_secret: options.config.clientSecret,
+      grant_type: "refresh_token",
+      refresh_token: options.refreshToken
+    });
+
+    return this.postTokenForm(body, "Linear OAuth token refresh");
+  }
+
+  private async postTokenForm(body: URLSearchParams, label: string) {
+    let response: Response;
+
+    try {
+      response = await this.fetchImpl(this.config.tokenUrl ?? "https://api.linear.app/oauth/token", {
+        body: body.toString(),
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/x-www-form-urlencoded"
+        },
+        method: "POST"
+      });
+    } catch {
+      throw new OAuthExchangeClientError(
+        "oauth_exchange_failed",
+        `${label} failed before response.`
+      );
+    }
+
+    if (!response.ok) {
+      throw new OAuthExchangeClientError(
+        "oauth_exchange_failed",
+        `${label} failed with status ${response.status}.`,
+        response.status
+      );
+    }
+
+    return parseOAuthTokenResponse(await readJson(response), "Linear");
   }
 
   private async loadAccount(accessToken: string) {
@@ -185,6 +236,41 @@ export class FetchJiraOAuthExchangeClient implements JiraOAuthExchangeClient {
     const token = parseOAuthTokenResponse(await readJson(tokenResponse), "Jira");
     const resources = await this.loadAccessibleResources(token.accessToken);
     return { ...token, resources };
+  }
+
+  async refreshToken(options: OAuthTokenRefreshOptions) {
+    let tokenResponse: Response;
+
+    try {
+      tokenResponse = await this.fetchImpl(new URL("/oauth/token", this.config.authBaseUrl).toString(), {
+        body: JSON.stringify({
+          client_id: options.config.clientId,
+          client_secret: options.config.clientSecret,
+          grant_type: "refresh_token",
+          refresh_token: options.refreshToken
+        }),
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json"
+        },
+        method: "POST"
+      });
+    } catch {
+      throw new OAuthExchangeClientError(
+        "oauth_exchange_failed",
+        "Jira OAuth token refresh failed before response."
+      );
+    }
+
+    if (!tokenResponse.ok) {
+      throw new OAuthExchangeClientError(
+        "oauth_exchange_failed",
+        `Jira OAuth token refresh failed with status ${tokenResponse.status}.`,
+        tokenResponse.status
+      );
+    }
+
+    return parseOAuthTokenResponse(await readJson(tokenResponse), "Jira");
   }
 
   private async loadAccessibleResources(accessToken: string) {
@@ -295,6 +381,16 @@ function parseLinearOAuthAccount(value: unknown) {
 }
 
 function parseScopes(value: unknown) {
+  if (Array.isArray(value)) {
+    return [
+      ...new Set(
+        value
+          .map((scope) => getText(scope, 160))
+          .filter((scope): scope is string => Boolean(scope))
+      )
+    ];
+  }
+
   if (typeof value !== "string") return [];
   return [...new Set(value.split(/[,\s]+/).map((scope) => scope.trim()).filter(Boolean))];
 }

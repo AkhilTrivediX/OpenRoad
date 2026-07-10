@@ -44,14 +44,14 @@ OpenRoad now has a working standalone product loop, production server foundation
 - Encrypted server-only provider credential storage primitives for GitHub, Linear, and Jira.
 - Provider-neutral background sync job foundation with private runner boundary and GitHub/Linear/Jira linked-issue workers.
 - Settings-managed provider installation bootstrap, credential metadata listing/storage/revoke, and provider-neutral disconnect for GitHub, Linear, and Jira.
-- Safe Linear OAuth setup/callback exchange plus payload-backed Linear issue import/link.
-- Safe Jira OAuth setup/callback exchange plus payload-backed Jira issue import/link with explicit field mapping and live linked-issue sync.
+- Safe Linear OAuth setup/callback exchange, refresh-token rotation, and payload-backed Linear issue import/link.
+- Safe Jira OAuth setup/callback exchange, refresh-token rotation, and payload-backed Jira issue import/link with explicit field mapping and live linked-issue sync.
 - Requester notification preferences plus an internal outbox for status and changelog updates.
 - Deterministic local assistant triage for request summaries, duplicate hints, and private changelog draft suggestions.
 - Release candidate manifest tooling for version, checksum, support-window, and dry-run publishing verification.
 - Docker Compose, backup/restore, and smoke-check commands for self-host operators.
 
-Current production limits are explicit: built-in SMTP delivery, provider-specific invitation/recovery templates, direct recovery provider delivery, OAuth login, email verification, managed database migrations, hosted release promotion, deeper observability, hosted organization administration, bulk member operations, OAuth refresh-token rotation, provider write-back, direct provider notification delivery, hosted webhook registration automation, real model-backed AI adapters with consent/prompt redaction/audit logs, and conflict UI are planned next-stage work. Admin-token self-hosting has an httpOnly owner browser session path, invitation tokens can create scoped member browser sessions, existing users can sign in with account passwords, and password recovery can be routed through a sensitive JSONL handoff without exposing raw reset tokens in team metadata.
+Current production limits are explicit: built-in SMTP delivery, provider-specific invitation/recovery templates, direct recovery provider delivery, OAuth login, email verification, managed database migrations, hosted release promotion, deeper observability, hosted organization administration, bulk member operations, provider write-back, direct provider notification delivery, hosted webhook registration automation, real model-backed AI adapters with consent/prompt redaction/audit logs, and conflict UI are planned next-stage work. Admin-token self-hosting has an httpOnly owner browser session path, invitation tokens can create scoped member browser sessions, existing users can sign in with account passwords, and password recovery can be routed through a sensitive JSONL handoff without exposing raw reset tokens in team metadata.
 
 Current docs:
 

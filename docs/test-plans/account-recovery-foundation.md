@@ -103,11 +103,21 @@ As an existing team member, I can request a password reset from the sign-in surf
 ## Evidence
 
 - Branch: `feat/account-recovery-foundation`
-- Implementation commit SHA: Pending.
-- Date: Pending.
-- Commands run: Pending.
-- Browser/viewports tested: Pending.
-- Accessibility checks: Pending.
-- Reviewer notes: Pending.
+- Implementation commit SHA: `c7bfa3c11c24ddc36c51a6cfc4542ca3008086af`.
+- Date: 2026-07-10.
+- Commands run:
+  - `pnpm vitest run server/access.test.ts server/team.test.ts server/session-store.test.ts server/account-recovery-delivery.test.ts server/http.test.ts src/persistence/openroadServer.test.ts src/App.test.tsx scripts/openroad-ops.test.mjs scripts/openroad-release.test.mjs`: 224 tests passed.
+  - `pnpm check`: 393 tests passed; production client and server builds passed.
+  - `node C:\Users\PC\.agents\skills\impeccable\scripts\context.mjs --target src\App.tsx`: loaded OpenRoad product/design context.
+  - `node C:\Users\PC\.agents\skills\impeccable\scripts\detect.mjs --json src\App.tsx src\styles.css`: no findings.
+  - Built-server smoke against `server-dist/server/index.js` on an isolated port with `OPENROAD_ACCOUNT_RECOVERY_DELIVERY_MODE=file`: health, invitation-created member, original password set/login, generic unknown/known recovery request, one JSONL recovery handoff, public-base reset URL, hashed-only team recovery metadata, recovery confirmation, stale-session revocation, old-password denial, new-password success, token replay denial, and team/session secret-redaction checks passed.
+  - `pnpm release:verify`: passed with rollback notes for OpenRoad state schema `7`, integration metadata schema `3`, session metadata schema `2`, and team metadata schema `5`.
+- Browser/viewports tested:
+  - In-app browser, production build at `1440x900`: account sign-in shows recovery entry point, request recovery form fits, no document/body overflow.
+  - In-app browser, production build at `390x844`: owner/member auth and request recovery surfaces fit, no document/body overflow.
+  - In-app browser, production build at `360x740`: request recovery surface fits inside the fixed shell; only the internal auth deck has a small safety scroll.
+  - In-app browser, production build at `390x844` with `?recovery=orec_visual-token&utm=email#reset`: reset form appears, URL token is removed from browser history, token text is not rendered, no document/body overflow.
+- Accessibility checks: Recovery request and confirmation forms have semantic form labels, labeled inputs, direct button names, status messages through existing `role="status"`/`role="alert"` patterns, visible focus inherited from the app shell, and mode-switch buttons preserve `aria-pressed` state.
+- Reviewer notes: Passed. The feature keeps recovery disabled by default, makes public request responses enumeration-safe, stores only reset-token hashes in team metadata, routes the raw reset token only through the sensitive JSONL delivery handoff, consumes tokens once, revokes stale member sessions before issuing a fresh cookie, and preserves invitation, password-login, member-management, ops, release, public portal, and integration regression coverage.
 - Known unresolved risks: Built-in SMTP/provider recovery delivery, email verification, account lockout throttling beyond existing process-local limits, MFA/passkeys, SSO, account deletion, email change, and hosted account administration remain future slices.
-- Rollback notes: Pending.
+- Rollback notes: Set `OPENROAD_ACCOUNT_RECOVERY_DELIVERY_MODE=disabled` to stop new recovery handoff immediately. Downgrading to a build that only understands team metadata schema `4` requires restoring a pre-schema-5 `OPENROAD_TEAM_FILE` backup or intentionally removing `accountRecoveryRequests` after backup; restore state, integration, session, and team files from the same operational snapshot when rolling back across a release.

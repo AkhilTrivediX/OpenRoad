@@ -98,11 +98,25 @@ As an OpenRoad operator, I can configure a trusted HTTPS notification provider e
 ## Evidence
 
 - Branch: `feat/requester-notification-provider-delivery`
-- Implementation commit SHA: Pending.
+- Implementation commit SHA: `96015027495e37ee1c48f1ad46f6010de2228eb0`.
 - Date: 2026-07-10.
-- Commands run: Pending.
-- Acceptance criteria status: Pending.
+- Commands run:
+  - `pnpm build:server`
+  - `pnpm vitest run server\notifications.test.ts`
+  - `pnpm vitest run server\http.test.ts server\access.test.ts scripts\openroad-ops.test.mjs`
+  - `pnpm check`
+  - `pnpm release:verify`
+  - Built-server HTTP provider smoke on `http://127.0.0.1:4246` with temporary OpenRoad state, `OPENROAD_NOTIFICATION_DELIVERY_MODE=http`, local HTTP provider, and admin token.
+- Acceptance criteria status: Passed for the scoped HTTP requester notification provider delivery capability, existing JSONL delivery mode, retry-safe failures, provider redaction, redirect blocking, timeout handling, repeat-delivery dedupe, private endpoint auth, and no schema migration.
 - Browser/viewports tested: No UI changes planned.
 - Accessibility checks: No UI changes planned.
-- Reviewer notes: Pending.
-- Rollback notes: Pending final implementation details.
+- Reviewer notes:
+  - The HTTP provider adapter is server-only and environment-driven; browser requests cannot submit provider URL, bearer token, delivery channel, or provider config.
+  - Provider payloads are bounded public-safe notification summaries plus workspace context, not full requests, full changelogs, preferences, audit events, workspace exports, or delivery internals.
+  - Provider bearer auth is sent only as an outbound `Authorization` header; the built-server smoke verified it did not persist into OpenRoad state or the provider JSON body.
+  - Provider responses may return `messageId`, `message_id`, `id`, or `x-message-id`; stored metadata is bounded and redacted.
+  - This branch intentionally does not add built-in SMTP, provider-specific templates, unsubscribe routing, delivery scheduler packaging, bounce handling, or notification analytics.
+- Rollback notes:
+  - Unset `OPENROAD_NOTIFICATION_DELIVERY_MODE=http` to stop direct provider calls immediately.
+  - Revert `96015027495e37ee1c48f1ad46f6010de2228eb0` and this evidence commit to remove HTTP provider mode.
+  - Already delivered notification events remain delivered in OpenRoad state schema `7`; restore a pre-delivery backup if an operator needs to replay those events.

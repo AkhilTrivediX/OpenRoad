@@ -114,17 +114,39 @@ References:
 
 ## Migration And Rollback
 
-- Integration metadata schema will move from `3` to the next version if durable registration records are implemented.
-- Rollback: revert this branch and restore the previous build. If a GitHub App webhook config was updated externally before rollback, reset the GitHub App webhook URL/secret in GitHub App settings or by re-running the previous deployment's webhook configuration. OpenRoad workspace state is not migrated.
+- Integration metadata schema moved from `3` to `4`; older schema versions are migrated by initializing `webhookRegistrations: []` while preserving existing credentials, mappings, sync jobs, and sync events.
+- Rollback: revert the implementation and evidence commits, then restore the previous build. If rolling back to a schema `3` build, restore a pre-schema-4 integration backup or remove `webhookRegistrations` from persisted integration metadata before downgrade. If a GitHub App webhook config was updated externally before rollback, reset the GitHub App webhook URL/secret in GitHub App settings or by re-running the previous deployment's webhook configuration.
 
 ## Evidence
 
 - Branch: `feat/hosted-webhook-registration`
-- Implementation commit SHA: Pending.
+- Implementation commit SHA: `d0a0d7824856709781ea90df7d6334d7fcd74764`.
 - Date: 2026-07-10.
-- Commands run: Pending.
-- Acceptance criteria status: Pending.
-- Browser/viewports tested: Pending.
-- Accessibility checks: Pending.
-- Reviewer notes: Pending.
-- Rollback notes: Pending final implementation details.
+- Commands run:
+  - `pnpm build:server`
+  - `pnpm build:client`
+  - `pnpm vitest run src\persistence\openroadIntegrations.test.ts src\App.test.tsx`
+  - `pnpm vitest run server\integrations.test.ts server\access.test.ts`
+  - `pnpm vitest run scripts\openroad-ops.test.mjs`
+  - `pnpm vitest run server\http.test.ts`
+  - `pnpm check`
+  - `pnpm release:verify`
+  - `pnpm ops:smoke -- --base-url http://127.0.0.1:4238 --workspace-id acme --admin-token smoke-secret` against the built `server-dist` server.
+- Acceptance criteria status: Passed for the scoped GitHub hosted registration capability and safe Linear/Jira blocked-state handling.
+- Browser/viewports tested:
+  - Desktop Chrome 1280x720 against the built server with seeded GitHub installation and GitHub App env; Settings rendered `Register webhook` and the DOM did not contain `github-hook-secret` or `raw-secret`.
+  - Mobile Chrome 390x844 against the built server with the same seeded state; Settings rendered `Register webhook`, the DOM did not contain `github-hook-secret` or `raw-secret`, and the compact header actions stayed inside the viewport.
+- Accessibility checks:
+  - The hosted GitHub action exposes `aria-label="GitHub register webhook delivery"`.
+  - Registration status is rendered as text plus badge state, not color alone.
+  - The action uses the existing button/focus system.
+  - React tests query the action by role and accessible name.
+- Reviewer notes:
+  - GitHub is the only provider with executable hosted registration in this slice.
+  - Linear and Jira return a safe blocked registration because current provider-created webhook registration cannot guarantee a server-known signing secret for OpenRoad's verifier.
+  - Browser requests post only the installation identity; URL, secret, events, SSL mode, provider authorization, and callback overrides are derived server-side or rejected.
+  - Integration metadata schema `4` is an automatic migration from schema `1`, `2`, and `3`.
+- Rollback notes:
+  - Revert `d0a0d7824856709781ea90df7d6334d7fcd74764` and this evidence commit.
+  - Restore a pre-schema-4 integration backup before downgrading to a schema-3 build, or remove `webhookRegistrations` from persisted metadata.
+  - Reset GitHub App webhook config in GitHub settings if the hosted registration was executed against a real app before rollback.

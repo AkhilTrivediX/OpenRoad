@@ -7,6 +7,8 @@ import type {
   Workspace
 } from "../src/domain/openroad.js";
 
+const MAX_PROVIDER_RESPONSE_BYTES = 32_768;
+
 export type NotificationDeliveryContext = {
   now: string;
   workspaceId: string;
@@ -82,6 +84,88 @@ export class JsonlNotificationDeliveryAdapter implements NotificationDeliveryAda
   }
 }
 
+export class HttpNotificationDeliveryAdapter implements NotificationDeliveryAdapter {
+  readonly channel = "http-provider";
+  private readonly bearerToken?: string;
+  private readonly endpoint: string;
+  private readonly timeoutMs: number;
+
+  constructor(
+    endpoint: string,
+    options: { bearerToken?: string; timeoutMs?: number } = {}
+  ) {
+    const normalized = normalizeHttpProviderUrl(endpoint);
+    if (!normalized) {
+      throw new Error("Notification HTTP provider URL must be HTTPS, except localhost or loopback.");
+    }
+
+    this.bearerToken = normalizeEnvValue(options.bearerToken);
+    this.endpoint = normalized;
+    this.timeoutMs = normalizeTimeoutMs(options.timeoutMs);
+  }
+
+  async deliver(
+    event: RequesterNotificationEvent,
+    context: NotificationDeliveryContext
+  ): Promise<NotificationDeliveryAdapterResult> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+
+    try {
+      const response = await fetch(this.endpoint, {
+        body: JSON.stringify({
+          body: event.body,
+          channel: this.channel,
+          changelogId: event.changelogId,
+          changelogTitle: event.changelogTitle,
+          createdAt: event.createdAt,
+          deliveredAt: context.now,
+          dedupeKey: event.dedupeKey,
+          eventId: event.id,
+          requestId: event.requestId,
+          requestTitle: event.requestTitle,
+          requester: event.requester,
+          title: event.title,
+          type: event.type,
+          workspaceId: context.workspaceId,
+          workspaceName: context.workspaceName
+        }),
+        headers: {
+          Accept: "application/json",
+          ...(this.bearerToken ? { Authorization: `Bearer ${this.bearerToken}` } : {}),
+          "Content-Type": "application/json"
+        },
+        method: "POST",
+        redirect: "error",
+        signal: controller.signal
+      });
+      const responseText = await readBoundedResponseText(response, MAX_PROVIDER_RESPONSE_BYTES);
+
+      if (!response.ok) {
+        throw new Error(
+          `Notification provider responded ${response.status}: ${redactDeliverySecretText(responseText)}`
+        );
+      }
+
+      return {
+        messageId: readProviderMessageId(responseText, response.headers)
+      };
+    } catch (error) {
+      if (isAbortError(error)) {
+        throw new Error("Notification provider delivery timed out.");
+      }
+
+      if (error instanceof Error) {
+        throw new Error(redactDeliverySecretText(error.message));
+      }
+
+      throw new Error(redactDeliverySecretText(String(error)));
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+}
+
 export function createNotificationDeliveryAdapterFromEnv(env = process.env) {
   const mode = normalizeEnvValue(env.OPENROAD_NOTIFICATION_DELIVERY_MODE);
   if (!mode || mode === "disabled") return undefined;
@@ -89,6 +173,16 @@ export function createNotificationDeliveryAdapterFromEnv(env = process.env) {
   if (mode === "file") {
     const filePath = normalizeEnvValue(env.OPENROAD_NOTIFICATION_DELIVERY_FILE);
     return filePath ? new JsonlNotificationDeliveryAdapter(filePath) : undefined;
+  }
+
+  if (mode === "http") {
+    const endpoint = normalizeEnvValue(env.OPENROAD_NOTIFICATION_DELIVERY_HTTP_URL);
+    if (!endpoint || !normalizeHttpProviderUrl(endpoint)) return undefined;
+
+    return new HttpNotificationDeliveryAdapter(endpoint, {
+      bearerToken: env.OPENROAD_NOTIFICATION_DELIVERY_HTTP_BEARER_TOKEN,
+      timeoutMs: getPositiveInteger(env.OPENROAD_NOTIFICATION_DELIVERY_HTTP_TIMEOUT_MS, 10_000)
+    });
   }
 
   return undefined;
@@ -316,6 +410,119 @@ function boundText(value: unknown, maxLength: number) {
   if (typeof value !== "string") return undefined;
   const trimmed = value.trim();
   return trimmed ? trimmed.slice(0, maxLength) : undefined;
+}
+
+function normalizeHttpProviderUrl(value: string | undefined) {
+  if (!value) return undefined;
+
+  try {
+    const url = new URL(value);
+    if (url.username || url.password) return undefined;
+    if (url.protocol === "https:") return url.toString();
+    if (url.protocol !== "http:") return undefined;
+
+    const host = url.hostname.toLowerCase();
+    if (host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "[::1]") {
+      return url.toString();
+    }
+  } catch {
+    return undefined;
+  }
+
+  return undefined;
+}
+
+function normalizeTimeoutMs(value: number | undefined) {
+  if (!value || !Number.isFinite(value)) return 10_000;
+  return Math.max(500, Math.min(60_000, Math.round(value)));
+}
+
+function getPositiveInteger(value: string | undefined, fallback: number) {
+  if (!value) return fallback;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function readProviderMessageId(responseText: string, headers: Headers) {
+  const headerMessageId = sanitizeProviderMessageId(headers.get("x-message-id"));
+  if (headerMessageId) return headerMessageId;
+
+  if (!responseText.trim()) return undefined;
+
+  try {
+    const payload = JSON.parse(responseText) as unknown;
+    if (!isRecord(payload)) {
+      throw new Error("Notification provider returned an invalid success response.");
+    }
+
+    return (
+      sanitizeProviderMessageId(payload.messageId) ??
+      sanitizeProviderMessageId(payload.message_id) ??
+      sanitizeProviderMessageId(payload.id)
+    );
+  } catch {
+    throw new Error("Notification provider returned a non-JSON success response.");
+  }
+}
+
+async function readBoundedResponseText(response: Response, maxBytes: number) {
+  if (!response.body) {
+    return (await response.text()).slice(0, maxBytes);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let bytesRead = 0;
+  let text = "";
+
+  while (true) {
+    const result = await reader.read();
+    if (result.done) break;
+    const value = result.value;
+    const remaining = maxBytes - bytesRead;
+
+    if (value.byteLength > remaining) {
+      text += decoder.decode(value.slice(0, Math.max(0, remaining)), { stream: true });
+      await reader.cancel();
+      return `${text}${decoder.decode()} [truncated]`;
+    }
+
+    bytesRead += value.byteLength;
+    text += decoder.decode(value, { stream: true });
+  }
+
+  return `${text}${decoder.decode()}`;
+}
+
+function sanitizeProviderMessageId(value: unknown) {
+  const bounded = boundText(value, 500);
+  if (!bounded) return undefined;
+  const redacted = redactDeliverySecretText(bounded);
+  if (redacted !== bounded) return "[redacted]";
+  return boundText(redacted, 240);
+}
+
+function redactDeliverySecretText(value: string) {
+  return value
+    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [redacted]")
+    .replace(
+      /([?&](?:access_token|refresh_token|invite|token|jwt|secret|client_secret|authorization)=)[^&\s]+/gi,
+      "$1[redacted]"
+    )
+    .replace(
+      /((?:accept[_-]?token|access[_-]?token|refresh[_-]?token|invite|token|secret|client[_-]?secret|password|authorization)\s*[:=]\s*)[^\s,;]+/gi,
+      "$1[redacted]"
+    )
+    .replace(/\b[\w.-]*(?:token|secret|password|credential|authorization)[\w.-]*\b/gi, "[redacted]")
+    .slice(0, 500);
+}
+
+function isAbortError(error: unknown) {
+  return error instanceof Error && error.name === "AbortError";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
 
 function normalizeEnvValue(value: string | undefined) {

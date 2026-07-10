@@ -177,19 +177,19 @@ These are known production gaps after hosted webhook registration and release op
 - Backup/restore, local self-host smoke commands, and release candidate manifests exist, but published Docker images, artifact signing infrastructure, and hosted release promotion are not implemented.
 - Observability is limited to process logs; structured operational events and dashboards are pending.
 - Public portal write controls, persisted anonymous visitor vote identity, idempotent vote dedupe, notification preferences, and process-local rate limits exist, but CAPTCHA/external bot checks, public identity verification, and distributed abuse controls are pending.
-- Payload-backed GitHub issue import/link, GitHub App installation verification, live issue fetch, signed GitHub/Linear/Jira webhook handling, hosted GitHub App webhook registration, safe disconnect APIs, encrypted server-only provider credential storage, provider-neutral background sync job metadata, GitHub/Linear/Jira workers for already-linked issue mappings, Linear/Jira OAuth callback exchange and refresh-token rotation, progressive browser Settings integration visibility with GitHub/Linear/Jira connect, credential, disconnect, manual sync, conflict resolution, and hosted webhook registration controls, explicit provider write-back for linked GitHub/Linear/Jira issues, payload-backed Linear issue import/link, payload-backed Jira issue import/link, requester notification outbox/preferences, and JSONL notification delivery handoff exist, but direct email/provider notification delivery and Linear/Jira hosted webhook creation are not implemented yet.
+- Payload-backed GitHub issue import/link, GitHub App installation verification, live issue fetch, signed GitHub/Linear/Jira webhook handling, hosted GitHub App webhook registration, safe disconnect APIs, encrypted server-only provider credential storage, provider-neutral background sync job metadata, GitHub/Linear/Jira workers for already-linked issue mappings, Linear/Jira OAuth callback exchange and refresh-token rotation, progressive browser Settings integration visibility with GitHub/Linear/Jira connect, credential, disconnect, manual sync, conflict resolution, and hosted webhook registration controls, explicit provider write-back for linked GitHub/Linear/Jira issues, payload-backed Linear issue import/link, payload-backed Jira issue import/link, requester notification outbox/preferences, JSONL notification delivery handoff, and HTTP requester notification provider delivery exist, but built-in SMTP/provider-specific notification templates and Linear/Jira hosted webhook creation are not implemented yet.
 - Deterministic local assistant triage exists, but real model-backed adapters, prompt redaction, user consent controls, AI audit logs, and external-provider policy review are not implemented yet.
 - Browser QA is manual rather than automated end-to-end CI.
 
 ## Next Production Move
 
-Next branch: `feat/requester-notification-provider-delivery`
+Next branch: `feat/observability-foundation`
 
 Purpose:
 
-- Add direct HTTP provider delivery for queued requester notifications.
-- Keep JSONL/self-host notification handoff working while giving hosted operators a server-only delivery path.
-- Reuse the existing private notification delivery endpoint and retry metadata without exposing provider URLs or bearer tokens to browser code.
+- Add structured operational events for errors, jobs, imports, exports, notification delivery, provider sync, webhook ingestion, and release-sensitive admin actions.
+- Keep process logs useful while giving operators a private, sanitized status/event surface for production support.
+- Preserve privacy boundaries by recording bounded metadata only, with no provider tokens, raw payloads, session secrets, or workspace exports.
 - Preserve the existing production gate: feature branch, test plan first, focused tests, `pnpm check`, browser QA when UI changes, smoke test, audit, merge, then push.
 
-Linear/Jira hosted webhook creation, real model-backed AI, SSO/MFA, bulk member operations, and hosted account management remain hardening work that should stay behind server-only secret management, background job controls, explicit delivery infrastructure, and/or user consent controls.
+Built-in SMTP/provider-specific notification templates, Linear/Jira hosted webhook creation, real model-backed AI, SSO/MFA, bulk member operations, and hosted account management remain hardening work that should stay behind server-only secret management, background job controls, explicit delivery infrastructure, and/or user consent controls.

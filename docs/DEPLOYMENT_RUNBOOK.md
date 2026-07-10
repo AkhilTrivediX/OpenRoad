@@ -48,6 +48,9 @@ $env:OPENROAD_ACCOUNT_RECOVERY_DELIVERY_FILE="C:\openroad\openroad-account-recov
 $env:OPENROAD_ACCOUNT_RECOVERY_PUBLIC_BASE_URL=""
 $env:OPENROAD_NOTIFICATION_DELIVERY_MODE="disabled"
 $env:OPENROAD_NOTIFICATION_DELIVERY_FILE="C:\openroad\openroad-notification-deliveries.jsonl"
+$env:OPENROAD_NOTIFICATION_DELIVERY_HTTP_URL=""
+$env:OPENROAD_NOTIFICATION_DELIVERY_HTTP_BEARER_TOKEN=""
+$env:OPENROAD_NOTIFICATION_DELIVERY_HTTP_TIMEOUT_MS="10000"
 $env:OPENROAD_TOKEN_ENCRYPTION_KEY=""
 $env:OPENROAD_TOKEN_ENCRYPTION_KEY_ID="primary"
 $env:OPENROAD_PORTAL_RATE_LIMIT_MAX="30"
@@ -98,6 +101,9 @@ $env:OPENROAD_ACCOUNT_RECOVERY_DELIVERY_FILE="C:\openroad\openroad-account-recov
 $env:OPENROAD_ACCOUNT_RECOVERY_PUBLIC_BASE_URL=""
 $env:OPENROAD_NOTIFICATION_DELIVERY_MODE="disabled"
 $env:OPENROAD_NOTIFICATION_DELIVERY_FILE="C:\openroad\openroad-notification-deliveries.jsonl"
+$env:OPENROAD_NOTIFICATION_DELIVERY_HTTP_URL=""
+$env:OPENROAD_NOTIFICATION_DELIVERY_HTTP_BEARER_TOKEN=""
+$env:OPENROAD_NOTIFICATION_DELIVERY_HTTP_TIMEOUT_MS="10000"
 $env:OPENROAD_TOKEN_ENCRYPTION_KEY=""
 $env:OPENROAD_TOKEN_ENCRYPTION_KEY_ID="primary"
 $env:OPENROAD_PORTAL_RATE_LIMIT_MAX="30"
@@ -154,7 +160,7 @@ The Compose service:
 - Requires `OPENROAD_ADMIN_TOKEN` before startup.
 - Keeps invitation delivery disabled unless `OPENROAD_INVITATION_DELIVERY_MODE=file` or `OPENROAD_INVITATION_DELIVERY_MODE=http` is configured.
 - Keeps account recovery delivery disabled unless `OPENROAD_ACCOUNT_RECOVERY_DELIVERY_MODE=file` is configured.
-- Keeps requester notification delivery disabled unless `OPENROAD_NOTIFICATION_DELIVERY_MODE=file` is configured.
+- Keeps requester notification delivery disabled unless `OPENROAD_NOTIFICATION_DELIVERY_MODE=file` or `OPENROAD_NOTIFICATION_DELIVERY_MODE=http` is configured.
 - Keeps provider credential storage disabled unless `OPENROAD_TOKEN_ENCRYPTION_KEY` is configured.
 - Applies process-local public portal write limits from `OPENROAD_PORTAL_RATE_LIMIT_MAX` and `OPENROAD_PORTAL_RATE_LIMIT_WINDOW_MS`.
 
@@ -401,11 +407,20 @@ Both mutations record audit events and revoke active workspace-member sessions f
 
 ## Requester Notification Delivery
 
-Requester notification delivery is disabled by default. To hand queued notifications to a local operational worker, configure:
+Requester notification delivery is disabled by default. To hand queued notifications to a local operational worker, configure file mode:
 
 ```powershell
 $env:OPENROAD_NOTIFICATION_DELIVERY_MODE="file"
 $env:OPENROAD_NOTIFICATION_DELIVERY_FILE="C:\openroad\openroad-notification-deliveries.jsonl"
+```
+
+To send queued notifications to an operator-controlled HTTP mail/helpdesk/webhook provider, configure HTTP mode:
+
+```powershell
+$env:OPENROAD_NOTIFICATION_DELIVERY_MODE="http"
+$env:OPENROAD_NOTIFICATION_DELIVERY_HTTP_URL="https://notify.example.com/openroad/notifications"
+$env:OPENROAD_NOTIFICATION_DELIVERY_HTTP_BEARER_TOKEN="replace-with-provider-token"
+$env:OPENROAD_NOTIFICATION_DELIVERY_HTTP_TIMEOUT_MS="10000"
 ```
 
 Then call the private delivery endpoint with the admin token:
@@ -420,6 +435,10 @@ Invoke-RestMethod `
 ```
 
 The file adapter appends public-safe JSONL records and marks queued events delivered. It does not send email or provider messages by itself.
+
+The HTTP adapter posts one public-safe JSON payload per queued event with notification id, type, title, body, requester, request id/title, optional changelog id/title, creation time, dedupe key, workspace id/name, channel, and delivery time. The optional bearer token is sent only as `Authorization: Bearer ...`; it is not persisted, returned, or exposed to browser code. Provider responses may return a JSON `messageId`, `message_id`, `id`, or `x-message-id` header; OpenRoad stores only bounded, redacted delivery metadata.
+
+HTTP notification provider URLs must be HTTPS except localhost/loopback development URLs, must not include embedded username/password credentials, and redirects are blocked. Non-2xx responses, malformed success responses, timeouts, aborts, and network errors keep events queued for retry with redacted failure text. This mode does not include built-in SMTP, provider-specific templates, unsubscribe routing, bounce handling, suppression lists, notification analytics, or scheduler packaging.
 
 ## Restore
 
@@ -486,6 +505,7 @@ For local single-user mode without `OPENROAD_ADMIN_TOKEN`, omit `--admin-token`;
 - With `Authorization: Bearer <token>`, `GET /api/openroad/state` should return `200`.
 - `GET /api/openroad/ops/status` should require private read permission.
 - `POST /api/openroad/notifications/deliver` should require private write permission and return `503` unless a delivery adapter is configured.
+- With `OPENROAD_NOTIFICATION_DELIVERY_MODE=http` and a local provider endpoint, requester notification delivery should post one bounded public-safe provider payload, mark the event delivered, and keep the provider bearer token out of state/API responses.
 - `POST /api/openroad/workspaces/acme/invitations` should require owner/admin permission and return a one-time accept token only on creation.
 - With `OPENROAD_INVITATION_DELIVERY_MODE=file`, invitation creation should append one sensitive JSONL delivery record and return delivery status metadata.
 - With `OPENROAD_INVITATION_DELIVERY_MODE=http`, `OPENROAD_PUBLIC_APP_URL`, and a local provider endpoint, invitation creation should post one bounded provider payload and return delivery status metadata without exposing the provider bearer token or raw accept token beyond the one-time `acceptToken`.
@@ -508,17 +528,17 @@ For local single-user mode without `OPENROAD_ADMIN_TOKEN`, omit `--admin-token`;
 - Do not publish `/data`, backup directories, or restore-safety directories.
 - Do not publish invitation delivery JSONL files; they contain raw accept tokens.
 - Do not publish account recovery delivery JSONL files; they contain raw reset tokens.
-- Keep HTTP invitation provider bearer tokens in server environment or secret storage only.
+- Keep HTTP invitation and requester notification provider bearer tokens in server environment or secret storage only.
 - Treat backup archives as sensitive because they contain requester, workspace, membership, and audit data.
 - Tune public portal rate limits for the deployment shape. Current limits are process-local and reset on restart.
 - Review release manifests before sharing them; they should contain checksums and release metadata, not secrets or product data.
 
 ## Current Limits
 
-- Owner browser sessions for admin-token self-hosting, backend invitation APIs, invitation UI, member invite sessions, JSONL invitation delivery handoff, HTTP invitation provider delivery, account password login and JSONL account recovery for existing team users, and owner member role/deactivation controls are implemented; built-in SMTP delivery, provider-specific invitation/recovery templates, OAuth login, email verification, bulk member operations, MFA/passkeys, SSO, and hosted account management are not implemented.
+- Owner browser sessions for admin-token self-hosting, backend invitation APIs, invitation UI, member invite sessions, JSONL invitation delivery handoff, HTTP invitation provider delivery, account password login and JSONL account recovery for existing team users, and owner member role/deactivation controls are implemented; built-in SMTP delivery, provider-specific invitation/recovery/notification templates, OAuth login, email verification, bulk member operations, MFA/passkeys, SSO, and hosted account management are not implemented.
 - Team metadata is file-backed, not managed SQL.
 - Trusted proxy headers are disabled by default.
-- Payload-backed GitHub issue import, GitHub App installation verification, live issue fetch, signed GitHub/Linear/Jira webhooks, hosted GitHub App webhook registration, safe disconnect APIs, encrypted server-only provider credential storage, provider-neutral background sync job metadata, GitHub/Linear/Jira workers for already-linked issue mappings, Linear/Jira OAuth callback exchange and refresh-token rotation, explicit provider write-back for linked GitHub/Linear/Jira issues, provider conflict resolution controls, payload-backed Linear issue import, payload-backed Jira issue import, requester notification outbox/preferences, and a server-side JSONL notification delivery handoff exist; direct email/provider notification delivery, Linear/Jira hosted webhook creation, and billing are not implemented.
+- Payload-backed GitHub issue import, GitHub App installation verification, live issue fetch, signed GitHub/Linear/Jira webhooks, hosted GitHub App webhook registration, safe disconnect APIs, encrypted server-only provider credential storage, provider-neutral background sync job metadata, GitHub/Linear/Jira workers for already-linked issue mappings, Linear/Jira OAuth callback exchange and refresh-token rotation, explicit provider write-back for linked GitHub/Linear/Jira issues, provider conflict resolution controls, payload-backed Linear issue import, payload-backed Jira issue import, requester notification outbox/preferences, JSONL notification delivery handoff, and HTTP requester notification provider delivery exist; Linear/Jira hosted webhook creation and billing are not implemented.
 - Docker images are build-local by default; release manifests can record publishing metadata, but registry publishing infrastructure is not bundled yet.
 - Signed artifact infrastructure is not bundled yet; release manifests record signing as not configured unless an operator supplies signing metadata.
 - Named Docker volume backup requires an operator copy step or a future packaged volume helper.

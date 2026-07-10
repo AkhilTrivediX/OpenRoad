@@ -1,6 +1,6 @@
 # Requester Notifications
 
-OpenRoad now includes a production-safe notification foundation: preferences, a workspace outbox, and an explicit server-side delivery handoff. It queues messages when request status changes or when linked work appears in a public changelog, and can hand those queued messages to a local JSONL file adapter without sending external email or provider messages itself.
+OpenRoad now includes a production-safe notification foundation: preferences, a workspace outbox, and explicit server-side delivery adapters. It queues messages when request status changes or when linked work appears in a public changelog, and can hand those queued messages to either a local JSONL file adapter or an operator-controlled HTTP provider.
 
 ## Implemented
 
@@ -13,6 +13,7 @@ OpenRoad now includes a production-safe notification foundation: preferences, a 
 - Delivery status metadata for queued, delivered, failed, and held events.
 - Private `POST /api/openroad/notifications/deliver` endpoint guarded by global write access.
 - Disabled-by-default JSONL file adapter for self-host delivery handoff.
+- Disabled-by-default HTTP provider adapter for operator-controlled mail/helpdesk/webhook delivery.
 - Compact request inspector controls for the selected request.
 - Schema migration through version `7`.
 
@@ -49,16 +50,26 @@ Changelog updates queue when:
 Delivery processing:
 
 - Requires private global write access.
-- Requires `OPENROAD_NOTIFICATION_DELIVERY_MODE=file`.
+- Requires `OPENROAD_NOTIFICATION_DELIVERY_MODE=file` or `OPENROAD_NOTIFICATION_DELIVERY_MODE=http`.
 - Appends one public-safe JSONL record per queued event to `OPENROAD_NOTIFICATION_DELIVERY_FILE`.
+- Or posts one public-safe JSON payload per queued event to `OPENROAD_NOTIFICATION_DELIVERY_HTTP_URL`.
 - Marks successful events `delivered` with attempt metadata.
 - Keeps adapter failures queued with bounded error text so the next delivery run can retry them.
 - Skips already delivered events on later runs.
 
+HTTP provider mode:
+
+- Uses `OPENROAD_NOTIFICATION_DELIVERY_HTTP_URL`, optional `OPENROAD_NOTIFICATION_DELIVERY_HTTP_BEARER_TOKEN`, and `OPENROAD_NOTIFICATION_DELIVERY_HTTP_TIMEOUT_MS`.
+- Requires HTTPS except localhost/loopback development URLs.
+- Rejects provider URLs with embedded credentials.
+- Blocks redirects.
+- Sends the bearer token only as an outbound `Authorization` header.
+- Stores only bounded redacted provider message ids and failure text.
+
 ## Deferred
 
-- Email delivery.
-- Slack, Discord, web push, SMS, or provider write-back delivery.
+- Built-in SMTP or provider-specific delivery clients.
+- Slack, Discord, web push, SMS, or provider-specific templates.
 - Verified requester identity.
 - Unsubscribe links and preference center.
 - Background delivery workers or cron packaging.

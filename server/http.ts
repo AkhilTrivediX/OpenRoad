@@ -1,5 +1,5 @@
 import { Buffer } from "node:buffer";
-import { randomUUID, timingSafeEqual } from "node:crypto";
+import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
@@ -159,12 +159,16 @@ import {
 import {
   createSafeLinearOAuthSetup,
   linearOAuthConfigFromEnv,
-  type LinearOAuthConfig
+  linearWebhookConfigFromEnv,
+  type LinearOAuthConfig,
+  type LinearWebhookConfig
 } from "./linear.js";
 import {
   createSafeJiraOAuthSetup,
   jiraOAuthConfigFromEnv,
-  type JiraOAuthConfig
+  jiraWebhookConfigFromEnv,
+  type JiraOAuthConfig,
+  type JiraWebhookConfig
 } from "./jira.js";
 import {
   FetchJiraApiClient,
@@ -202,8 +206,10 @@ type CreateOpenRoadServerOptions = {
   invitationDeliveryPublicBaseUrl?: string;
   jiraApiClient?: JiraApiClient;
   jiraOAuthConfig?: JiraOAuthConfig;
+  jiraWebhookConfig?: JiraWebhookConfig;
   linearApiClient?: LinearApiClient;
   linearOAuthConfig?: LinearOAuthConfig;
+  linearWebhookConfig?: LinearWebhookConfig;
   logger?: Pick<Console, "error" | "log">;
   notificationDeliveryAdapter?: NotificationDeliveryAdapter;
   portalRateLimiter?: PortalRateLimiter;
@@ -336,8 +342,10 @@ export function createOpenRoadServer({
   invitationDeliveryPublicBaseUrl = resolveInvitationDeliveryPublicBaseUrl(),
   jiraApiClient = new FetchJiraApiClient(),
   jiraOAuthConfig = jiraOAuthConfigFromEnv(),
+  jiraWebhookConfig = jiraWebhookConfigFromEnv(),
   linearApiClient = new FetchLinearApiClient(),
   linearOAuthConfig = linearOAuthConfigFromEnv(),
+  linearWebhookConfig = linearWebhookConfigFromEnv(),
   logger = console,
   notificationDeliveryAdapter = createNotificationDeliveryAdapterFromEnv(),
   portalRateLimiter = createPortalRateLimiterFromEnv(),
@@ -348,6 +356,8 @@ export function createOpenRoadServer({
 }: CreateOpenRoadServerOptions): Server {
   const resolvedDistDir = resolve(distDir);
   const activeGitHubWebhookDeliveries = new Set<string>();
+  const activeJiraWebhookDeliveries = new Set<string>();
+  const activeLinearWebhookDeliveries = new Set<string>();
   const runNotificationDeliveryExclusive = createExclusiveRunner();
   const runIntegrationMutationExclusive = createExclusiveRunner();
   const runIntegrationSyncExclusive = createExclusiveRunner();
@@ -392,7 +402,9 @@ export function createOpenRoadServer({
           resolvedIntegrationSyncWorker,
           configuredIntegrationSyncProviders,
           jiraOAuthConfig,
+          jiraWebhookConfig,
           linearOAuthConfig,
+          linearWebhookConfig,
           accountRecoveryDeliveryAdapter,
           accountRecoveryPublicBaseUrl,
           invitationDeliveryAdapter,
@@ -404,6 +416,8 @@ export function createOpenRoadServer({
           teamStore,
           portalRateLimiter,
           activeGitHubWebhookDeliveries,
+          activeJiraWebhookDeliveries,
+          activeLinearWebhookDeliveries,
           tokenVault
         );
         return;
@@ -480,6 +494,24 @@ function createConfiguredIntegrationSyncWorkers({
   };
 }
 
+function createConfiguredWebhookProviders({
+  githubAppConfig,
+  jiraWebhookConfig,
+  linearWebhookConfig
+}: {
+  githubAppConfig: GitHubAppConfig;
+  jiraWebhookConfig: JiraWebhookConfig;
+  linearWebhookConfig: LinearWebhookConfig;
+}) {
+  return new Set<IntegrationProvider>(
+    [
+      githubAppConfig.webhookSecret ? "github" : undefined,
+      jiraWebhookConfig.webhookSecret ? "jira" : undefined,
+      linearWebhookConfig.webhookSecret ? "linear" : undefined
+    ].filter((provider): provider is IntegrationProvider => Boolean(provider))
+  );
+}
+
 async function handleApiRequest(
   request: IncomingMessage,
   response: ServerResponse,
@@ -494,7 +526,9 @@ async function handleApiRequest(
   integrationSyncWorker: IntegrationSyncWorker | undefined,
   configuredIntegrationSyncProviders: Set<IntegrationProvider>,
   jiraOAuthConfig: JiraOAuthConfig,
+  jiraWebhookConfig: JiraWebhookConfig,
   linearOAuthConfig: LinearOAuthConfig,
+  linearWebhookConfig: LinearWebhookConfig,
   accountRecoveryDeliveryAdapter: AccountRecoveryDeliveryAdapter | undefined,
   accountRecoveryPublicBaseUrl: string | undefined,
   invitationDeliveryAdapter: InvitationDeliveryAdapter | undefined,
@@ -506,6 +540,8 @@ async function handleApiRequest(
   teamStore: TeamStore | undefined,
   portalRateLimiter: PortalRateLimiter,
   activeGitHubWebhookDeliveries: Set<string>,
+  activeJiraWebhookDeliveries: Set<string>,
+  activeLinearWebhookDeliveries: Set<string>,
   tokenVault: IntegrationTokenVault
 ) {
   if (requestUrl.pathname === "/api/health") {
@@ -862,6 +898,36 @@ async function handleApiRequest(
     return;
   }
 
+  if (requestUrl.pathname === "/api/openroad/integrations/linear/webhook") {
+    await handleLinearWebhookRequest(
+      request,
+      response,
+      store,
+      access,
+      teamStore,
+      integrationStore,
+      linearWebhookConfig,
+      runIntegrationMutationExclusive,
+      activeLinearWebhookDeliveries
+    );
+    return;
+  }
+
+  if (requestUrl.pathname === "/api/openroad/integrations/jira/webhook") {
+    await handleJiraWebhookRequest(
+      request,
+      response,
+      store,
+      access,
+      teamStore,
+      integrationStore,
+      jiraWebhookConfig,
+      runIntegrationMutationExclusive,
+      activeJiraWebhookDeliveries
+    );
+    return;
+  }
+
   const githubInstallationDisconnectMatch = requestUrl.pathname.match(
     /^\/api\/openroad\/workspaces\/([^/]+)\/integrations\/github\/app\/installations\/([^/]+)\/disconnect$/
   );
@@ -897,6 +963,7 @@ async function handleApiRequest(
       githubAppConfig,
       linearOAuthConfig,
       jiraOAuthConfig,
+      createConfiguredWebhookProviders({ githubAppConfig, jiraWebhookConfig, linearWebhookConfig }),
       integrationStatusMatch[1]
     );
     return;
@@ -3310,10 +3377,15 @@ function parseLinearIntegrationPermissions(value: unknown): IntegrationPermissio
 function parseJiraIntegrationPermissions(value: unknown): IntegrationPermission[] {
   if (!Array.isArray(value)) return jiraRequiredInstallationPermissions;
 
+  const allowed = new Set<IntegrationPermission>([
+    ...jiraRequiredInstallationPermissions,
+    "webhook:receive"
+  ]);
+
   return value
     .map((permission) => getBoundedText(permission, 80))
     .filter((permission): permission is IntegrationPermission =>
-      jiraRequiredInstallationPermissions.includes(permission as IntegrationPermission)
+      allowed.has(permission as IntegrationPermission)
     );
 }
 
@@ -3754,6 +3826,7 @@ async function handleIntegrationStatusRequest(
   githubAppConfig: GitHubAppConfig,
   linearOAuthConfig: LinearOAuthConfig,
   jiraOAuthConfig: JiraOAuthConfig,
+  configuredWebhookProviders: Set<IntegrationProvider>,
   encodedWorkspaceId: string
 ) {
   if (request.method !== "GET") {
@@ -3796,6 +3869,7 @@ async function handleIntegrationStatusRequest(
         providers: integrationProviders.map((provider) =>
           createIntegrationStatusProviderSummary({
             githubAppConfig,
+            configuredWebhookProviders,
             integrationState: integrationResult.state,
             syncWorkerConfigured: configuredIntegrationSyncProviders.has(provider),
             jiraOAuthConfig,
@@ -3816,6 +3890,7 @@ async function handleIntegrationStatusRequest(
 
 function createIntegrationStatusProviderSummary({
   githubAppConfig,
+  configuredWebhookProviders,
   integrationState,
   syncWorkerConfigured,
   jiraOAuthConfig,
@@ -3824,6 +3899,7 @@ function createIntegrationStatusProviderSummary({
   workspaceId
 }: {
   githubAppConfig: GitHubAppConfig;
+  configuredWebhookProviders: Set<IntegrationProvider>;
   integrationState: IntegrationState;
   syncWorkerConfigured: boolean;
   jiraOAuthConfig: JiraOAuthConfig;
@@ -3893,7 +3969,9 @@ function createIntegrationStatusProviderSummary({
       }),
       manualSync: canManualSync,
       setup: setupConfigured,
-      webhooks: provider === "github" && activeInstallations.length > 0
+      webhooks:
+        configuredWebhookProviders.has(provider) &&
+        activeInstallations.some((installation) => installation.permissions.includes("webhook:receive"))
     },
     connection,
     disconnectedAccounts: disconnectedInstallations
@@ -4518,7 +4596,7 @@ function parseManualIntegrationInstallationPermissions(
   }
 
   const optional: IntegrationPermission[] =
-    provider === "jira" ? [] : ["write:external", "webhook:receive"];
+    provider === "jira" ? ["webhook:receive"] : ["write:external", "webhook:receive"];
   const allowed = new Set<IntegrationPermission>([...required, ...optional]);
   const permissions = value.map((item) => {
     const permission = getBoundedText(item, 80);
@@ -5286,6 +5364,292 @@ async function handleGitHubWebhookRequest(
   }
 }
 
+async function handleLinearWebhookRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  store: OpenRoadStore,
+  access: AccessContext,
+  teamStore: TeamStore | undefined,
+  integrationStore: IntegrationStore | undefined,
+  linearWebhookConfig: LinearWebhookConfig,
+  runIntegrationMutationExclusive: NotificationDeliveryRunner,
+  activeLinearWebhookDeliveries: Set<string>
+) {
+  if (request.method !== "POST") {
+    writeApiError(response, 405, "invalid_method", "This endpoint only supports POST.", access);
+    return;
+  }
+
+  try {
+    if (!integrationStore) {
+      throw new ApiRequestError(
+        "not_configured",
+        503,
+        "OpenRoad integration metadata store is not configured."
+      );
+    }
+
+    if (!linearWebhookConfig.webhookSecret) {
+      throw new ApiRequestError(
+        "not_configured",
+        503,
+        "OPENROAD_LINEAR_WEBHOOK_SECRET is required before receiving webhooks."
+      );
+    }
+
+    const rawBody = await readRawBody(request, 2_000_000);
+    const signatureHeader = getSingleHeader(request.headers, "linear-signature");
+
+    if (
+      !verifyHexHmacSha256Signature({
+        payload: rawBody,
+        secret: linearWebhookConfig.webhookSecret,
+        signatureHeader
+      })
+    ) {
+      throw new AccessDeniedError("Linear webhook signature is invalid.");
+    }
+
+    const payload = parseJsonBuffer(rawBody);
+    assertLinearWebhookTimestampIsCurrent(payload);
+    const deliveryId =
+      getBoundedIdentifier(getSingleHeader(request.headers, "linear-delivery"), 200) ??
+      getLinearWebhookDeliveryId(payload);
+    const eventName = getLinearWebhookEventName(payload);
+
+    if (activeLinearWebhookDeliveries.has(deliveryId)) {
+      writeJson(
+        response,
+        200,
+        {
+          event: createIntegrationSyncEvent({
+            deliveryId,
+            eventName,
+            now: new Date().toISOString(),
+            provider: "linear",
+            result: "duplicate",
+            summary: `Duplicate Linear delivery ${deliveryId} is already processing.`
+          }),
+          status: "duplicate"
+        },
+        access
+      );
+      return;
+    }
+
+    activeLinearWebhookDeliveries.add(deliveryId);
+
+    try {
+      const webhookResponse = await runIntegrationMutationExclusive(async () => {
+        const current = await store.load();
+        const integrationResult = await integrationStore.load();
+        const duplicateEvent = integrationResult.state.syncEvents.find(
+          (item) => item.provider === "linear" && item.deliveryId === deliveryId
+        );
+
+        if (duplicateEvent) {
+          return {
+            body: {
+              event: sanitizeIntegrationSyncEvent({
+                ...duplicateEvent,
+                result: "duplicate",
+                summary: `Duplicate Linear delivery ${deliveryId} ignored.`
+              }),
+              status: "duplicate"
+            },
+            statusCode: 200
+          };
+        }
+
+        const result = processLinearWebhookDelivery({
+          deliveryId,
+          eventName,
+          integrationState: integrationResult.state,
+          now: new Date().toISOString(),
+          openRoadState: current.state,
+          payload
+        });
+        const state =
+          result.openRoadState === current.state
+            ? current.state
+            : await store.replaceState(result.openRoadState);
+        const integrationState = await integrationStore.replaceState(result.integrationState);
+
+        if (result.audit && result.audit.workspaceId) {
+          await recordAuditEvent(
+            teamStore,
+            state,
+            createIntegrationAccess(access, result.audit.workspaceId, result.audit.installationId),
+            result.audit
+          );
+        }
+
+        return {
+          body: {
+            event: sanitizeIntegrationSyncEvent(result.event),
+            status: result.event.result,
+            totals: {
+              installations: integrationState.installations.length,
+              mappings: integrationState.mappings.length,
+              syncEvents: integrationState.syncEvents.length
+            }
+          },
+          statusCode: 202
+        };
+      });
+
+      writeJson(response, webhookResponse.statusCode, webhookResponse.body, access);
+    } finally {
+      activeLinearWebhookDeliveries.delete(deliveryId);
+    }
+  } catch (error) {
+    writeKnownApiError(response, error, access);
+  }
+}
+
+async function handleJiraWebhookRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  store: OpenRoadStore,
+  access: AccessContext,
+  teamStore: TeamStore | undefined,
+  integrationStore: IntegrationStore | undefined,
+  jiraWebhookConfig: JiraWebhookConfig,
+  runIntegrationMutationExclusive: NotificationDeliveryRunner,
+  activeJiraWebhookDeliveries: Set<string>
+) {
+  if (request.method !== "POST") {
+    writeApiError(response, 405, "invalid_method", "This endpoint only supports POST.", access);
+    return;
+  }
+
+  try {
+    if (!integrationStore) {
+      throw new ApiRequestError(
+        "not_configured",
+        503,
+        "OpenRoad integration metadata store is not configured."
+      );
+    }
+
+    if (!jiraWebhookConfig.webhookSecret) {
+      throw new ApiRequestError(
+        "not_configured",
+        503,
+        "OPENROAD_JIRA_WEBHOOK_SECRET is required before receiving webhooks."
+      );
+    }
+
+    const rawBody = await readRawBody(request, 2_000_000);
+    const signatureHeader = getSingleHeader(request.headers, "x-hub-signature");
+    const deliveryId = getRequiredHeaderText(
+      request,
+      "x-atlassian-webhook-identifier",
+      "Jira webhook delivery id is required."
+    );
+
+    if (
+      !verifyWebSubHmacSha256Signature({
+        payload: rawBody,
+        secret: jiraWebhookConfig.webhookSecret,
+        signatureHeader
+      })
+    ) {
+      throw new AccessDeniedError("Jira webhook signature is invalid.");
+    }
+
+    if (activeJiraWebhookDeliveries.has(deliveryId)) {
+      writeJson(
+        response,
+        200,
+        {
+          event: createIntegrationSyncEvent({
+            deliveryId,
+            eventName: "jira:webhook",
+            now: new Date().toISOString(),
+            provider: "jira",
+            result: "duplicate",
+            summary: `Duplicate Jira delivery ${deliveryId} is already processing.`
+          }),
+          status: "duplicate"
+        },
+        access
+      );
+      return;
+    }
+
+    activeJiraWebhookDeliveries.add(deliveryId);
+
+    try {
+      const payload = parseJsonBuffer(rawBody);
+      const eventName = getJiraWebhookEventName(payload);
+      const webhookResponse = await runIntegrationMutationExclusive(async () => {
+        const current = await store.load();
+        const integrationResult = await integrationStore.load();
+        const duplicateEvent = integrationResult.state.syncEvents.find(
+          (item) => item.provider === "jira" && item.deliveryId === deliveryId
+        );
+
+        if (duplicateEvent) {
+          return {
+            body: {
+              event: sanitizeIntegrationSyncEvent({
+                ...duplicateEvent,
+                result: "duplicate",
+                summary: `Duplicate Jira delivery ${deliveryId} ignored.`
+              }),
+              status: "duplicate"
+            },
+            statusCode: 200
+          };
+        }
+
+        const result = processJiraWebhookDelivery({
+          deliveryId,
+          eventName,
+          integrationState: integrationResult.state,
+          now: new Date().toISOString(),
+          openRoadState: current.state,
+          payload
+        });
+        const state =
+          result.openRoadState === current.state
+            ? current.state
+            : await store.replaceState(result.openRoadState);
+        const integrationState = await integrationStore.replaceState(result.integrationState);
+
+        if (result.audit && result.audit.workspaceId) {
+          await recordAuditEvent(
+            teamStore,
+            state,
+            createIntegrationAccess(access, result.audit.workspaceId, result.audit.installationId),
+            result.audit
+          );
+        }
+
+        return {
+          body: {
+            event: sanitizeIntegrationSyncEvent(result.event),
+            status: result.event.result,
+            totals: {
+              installations: integrationState.installations.length,
+              mappings: integrationState.mappings.length,
+              syncEvents: integrationState.syncEvents.length
+            }
+          },
+          statusCode: 202
+        };
+      });
+
+      writeJson(response, webhookResponse.statusCode, webhookResponse.body, access);
+    } finally {
+      activeJiraWebhookDeliveries.delete(deliveryId);
+    }
+  } catch (error) {
+    writeKnownApiError(response, error, access);
+  }
+}
+
 async function handleGitHubInstallationDisconnectRequest(
   request: IncomingMessage,
   response: ServerResponse,
@@ -5675,6 +6039,288 @@ function processGitHubInstallationWebhook(
   };
 }
 
+type ProviderIssueWebhookProcessInput = {
+  deliveryId: string;
+  eventName: string;
+  integrationState: IntegrationState;
+  now: string;
+  openRoadState: OpenRoadState;
+  payload: unknown;
+};
+
+type ProviderIssueWebhookProcessResult = {
+  audit?: Pick<AuditEvent, "summary" | "type" | "workspaceId"> & { installationId: string };
+  event: IntegrationSyncEvent;
+  integrationState: IntegrationState;
+  openRoadState: OpenRoadState;
+};
+
+function processLinearWebhookDelivery(
+  input: ProviderIssueWebhookProcessInput
+): ProviderIssueWebhookProcessResult {
+  if (!isLinearIssueWebhookEvent(input.payload)) {
+    const event = createIntegrationSyncEvent({
+      deliveryId: input.deliveryId,
+      eventName: input.eventName,
+      now: input.now,
+      provider: "linear",
+      result: "ignored",
+      summary: `Linear webhook event ${input.eventName} is not handled yet.`
+    });
+
+    return {
+      event,
+      integrationState: appendIntegrationSyncEvent(input.integrationState, event),
+      openRoadState: input.openRoadState
+    };
+  }
+
+  return processLinearIssueWebhook(input);
+}
+
+function processLinearIssueWebhook(
+  input: ProviderIssueWebhookProcessInput
+): ProviderIssueWebhookProcessResult {
+  const { deliveryId, eventName, integrationState, now, openRoadState, payload } = input;
+  const issue = parseLinearWebhookIssue(payload);
+  const issueRef = createLinearIssueExternalRef(issue);
+  const activeInstallations = integrationState.installations.filter(
+    (installation) =>
+      installation.provider === "linear" &&
+      installation.status === "active" &&
+      installation.permissions.includes("webhook:receive") &&
+      doesLinearInstallationMatchWebhookPayload(installation, payload)
+  );
+  const eligibleMappings = integrationState.mappings.filter((mapping) =>
+    activeInstallations.some(
+      (installation) =>
+        mapping.installationId === installation.id &&
+        mapping.openRoad.workspaceId === installation.workspaceId &&
+        isSameExternalObject(mapping, issueRef)
+    )
+  );
+
+  if (eligibleMappings.length === 0) {
+    const event = createIntegrationSyncEvent({
+      deliveryId,
+      eventName,
+      installationId: activeInstallations[0]?.id,
+      now,
+      provider: "linear",
+      result: "ignored",
+      summary: `No webhook-enabled linked OpenRoad request for Linear issue ${issue.identifier}.`
+    });
+
+    return {
+      event,
+      integrationState: appendIntegrationSyncEvent(integrationState, event),
+      openRoadState
+    };
+  }
+
+  let nextOpenRoadState = openRoadState;
+  let nextMappings = integrationState.mappings;
+  const workspaceIds = new Set<string>();
+  let syncedCount = 0;
+
+  for (const mapping of eligibleMappings) {
+    const workspace = nextOpenRoadState.workspaces.find(
+      (item) => item.id === mapping.openRoad.workspaceId
+    );
+    const request = workspace?.requests.find((item) => item.id === mapping.openRoad.id);
+
+    if (!workspace || !request || mapping.openRoad.type !== "request") {
+      continue;
+    }
+
+    const nextRequest = syncOpenRoadRequestFromLinearIssue(request, issue, now);
+    nextOpenRoadState = parseOpenRoadState(
+      openRoadReducer(nextOpenRoadState, {
+        request: nextRequest,
+        type: "replace-request",
+        workspaceId: workspace.id
+      })
+    );
+    nextMappings = upsertById(nextMappings, { ...mapping, lastSyncedAt: now });
+    workspaceIds.add(workspace.id);
+    syncedCount += 1;
+  }
+
+  const result = syncedCount > 0 ? "synced" : "ignored";
+  const summary =
+    syncedCount > 0
+      ? `Synced Linear issue ${issue.identifier} to ${syncedCount} OpenRoad request${syncedCount === 1 ? "" : "s"}.`
+      : `Linked Linear issue ${issue.identifier} had no matching request to update.`;
+  const installationId = eligibleMappings[0]?.installationId;
+  const workspaceId = [...workspaceIds][0];
+  const event = createIntegrationSyncEvent({
+    deliveryId,
+    eventName,
+    installationId,
+    now,
+    provider: "linear",
+    result,
+    summary,
+    workspaceId
+  });
+
+  return {
+    audit:
+      syncedCount > 0 && installationId && workspaceId
+        ? {
+            installationId,
+            summary,
+            type: "integration.linear.webhook.issue",
+            workspaceId
+          }
+        : undefined,
+    event,
+    integrationState: appendIntegrationSyncEvent(
+      parseIntegrationState({
+        ...integrationState,
+        mappings: nextMappings
+      }),
+      event
+    ),
+    openRoadState: nextOpenRoadState
+  };
+}
+
+function processJiraWebhookDelivery(
+  input: ProviderIssueWebhookProcessInput
+): ProviderIssueWebhookProcessResult {
+  if (!isJiraIssueWebhookEvent(input.payload, input.eventName)) {
+    const event = createIntegrationSyncEvent({
+      deliveryId: input.deliveryId,
+      eventName: input.eventName,
+      now: input.now,
+      provider: "jira",
+      result: "ignored",
+      summary: `Jira webhook event ${input.eventName} is not handled yet.`
+    });
+
+    return {
+      event,
+      integrationState: appendIntegrationSyncEvent(input.integrationState, event),
+      openRoadState: input.openRoadState
+    };
+  }
+
+  return processJiraIssueWebhook(input);
+}
+
+function processJiraIssueWebhook(
+  input: ProviderIssueWebhookProcessInput
+): ProviderIssueWebhookProcessResult {
+  const { deliveryId, eventName, integrationState, now, openRoadState, payload } = input;
+  const issue = parseJiraWebhookIssue(payload);
+  const webhookCloudId = getJiraWebhookCloudId(payload, issue);
+  const activeInstallations = integrationState.installations.filter(
+    (installation) =>
+      installation.provider === "jira" &&
+      installation.status === "active" &&
+      installation.permissions.includes("webhook:receive") &&
+      doesJiraInstallationMatchWebhookCloudId(installation, webhookCloudId)
+  );
+  const eligibleMappings = integrationState.mappings.filter((mapping) =>
+    activeInstallations.some(
+      (installation) =>
+        mapping.installationId === installation.id &&
+        mapping.openRoad.workspaceId === installation.workspaceId &&
+        isJiraWebhookMappingForIssue(mapping, installation, issue)
+    )
+  );
+
+  if (eligibleMappings.length === 0) {
+    const event = createIntegrationSyncEvent({
+      deliveryId,
+      eventName,
+      installationId: activeInstallations[0]?.id,
+      now,
+      provider: "jira",
+      result: "ignored",
+      summary: `No webhook-enabled linked OpenRoad request for Jira issue ${issue.key}.`
+    });
+
+    return {
+      event,
+      integrationState: appendIntegrationSyncEvent(integrationState, event),
+      openRoadState
+    };
+  }
+
+  let nextOpenRoadState = openRoadState;
+  let nextMappings = integrationState.mappings;
+  const workspaceIds = new Set<string>();
+  let syncedCount = 0;
+
+  for (const mapping of eligibleMappings) {
+    const installation = activeInstallations.find(
+      (item) => item.id === mapping.installationId && item.workspaceId === mapping.openRoad.workspaceId
+    );
+    const workspace = nextOpenRoadState.workspaces.find(
+      (item) => item.id === mapping.openRoad.workspaceId
+    );
+    const request = workspace?.requests.find((item) => item.id === mapping.openRoad.id);
+
+    if (!installation || !workspace || !request || mapping.openRoad.type !== "request") {
+      continue;
+    }
+
+    const scopedIssue = scopeJiraIssueToCloudId(issue, installation.providerAccountId);
+    const nextRequest = syncOpenRoadRequestFromJiraIssue(request, scopedIssue, now);
+    nextOpenRoadState = parseOpenRoadState(
+      openRoadReducer(nextOpenRoadState, {
+        request: nextRequest,
+        type: "replace-request",
+        workspaceId: workspace.id
+      })
+    );
+    nextMappings = upsertById(nextMappings, { ...mapping, lastSyncedAt: now });
+    workspaceIds.add(workspace.id);
+    syncedCount += 1;
+  }
+
+  const result = syncedCount > 0 ? "synced" : "ignored";
+  const summary =
+    syncedCount > 0
+      ? `Synced Jira issue ${issue.key} to ${syncedCount} OpenRoad request${syncedCount === 1 ? "" : "s"}.`
+      : `Linked Jira issue ${issue.key} had no matching request to update.`;
+  const installationId = eligibleMappings[0]?.installationId;
+  const workspaceId = [...workspaceIds][0];
+  const event = createIntegrationSyncEvent({
+    deliveryId,
+    eventName,
+    installationId,
+    now,
+    provider: "jira",
+    result,
+    summary,
+    workspaceId
+  });
+
+  return {
+    audit:
+      syncedCount > 0 && installationId && workspaceId
+        ? {
+            installationId,
+            summary,
+            type: "integration.jira.webhook.issue",
+            workspaceId
+          }
+        : undefined,
+    event,
+    integrationState: appendIntegrationSyncEvent(
+      parseIntegrationState({
+        ...integrationState,
+        mappings: nextMappings
+      }),
+      event
+    ),
+    openRoadState: nextOpenRoadState
+  };
+}
+
 function disconnectGitHubInstallationState(
   integrationState: IntegrationState,
   workspaceId: string,
@@ -5836,6 +6482,194 @@ function getGitHubWebhookAction(payload: unknown) {
   return getBoundedText(payload.action, 80);
 }
 
+function getLinearWebhookDeliveryId(payload: unknown) {
+  if (!isRecord(payload)) {
+    throw new ApiRequestError("invalid_request", 400, "Linear webhook payload must be an object.");
+  }
+
+  const deliveryId = getBoundedIdentifier(payload.webhookId, 200);
+  if (!deliveryId) {
+    throw new ApiRequestError("invalid_request", 400, "Linear webhook id is required.");
+  }
+
+  return deliveryId;
+}
+
+function getLinearWebhookEventName(payload: unknown) {
+  if (!isRecord(payload)) return "linear:webhook";
+  const type = getBoundedText(payload.type, 80) ?? "unknown";
+  const action = getBoundedText(payload.action, 80) ?? "unknown";
+  return `${type}:${action}`;
+}
+
+function assertLinearWebhookTimestampIsCurrent(payload: unknown) {
+  if (!isRecord(payload)) {
+    throw new ApiRequestError("invalid_request", 400, "Linear webhook payload must be an object.");
+  }
+
+  const timestamp = parseLinearWebhookTimestamp(payload.webhookTimestamp);
+  if (!timestamp) {
+    throw new ApiRequestError("invalid_request", 400, "Linear webhook timestamp is required.");
+  }
+
+  if (Math.abs(Date.now() - timestamp) > 5 * 60 * 1000) {
+    throw new AccessDeniedError("Linear webhook timestamp is outside the replay window.");
+  }
+}
+
+function parseLinearWebhookTimestamp(value: unknown) {
+  if (typeof value === "number" && Number.isFinite(value)) return Math.round(value);
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number.parseInt(value, 10);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+
+  return undefined;
+}
+
+function isLinearIssueWebhookEvent(payload: unknown) {
+  if (!isRecord(payload)) return false;
+  const type = getBoundedText(payload.type, 80)?.toLowerCase();
+  const action = getBoundedText(payload.action, 80)?.toLowerCase();
+  return type === "issue" && action !== "remove" && isRecord(payload.data);
+}
+
+function parseLinearWebhookIssue(payload: unknown) {
+  if (!isRecord(payload)) {
+    throw new ApiRequestError("invalid_request", 400, "Linear issue webhook payload is invalid.");
+  }
+
+  try {
+    return parseLinearIssuePayload(payload.data);
+  } catch (error) {
+    throw new ApiRequestError(
+      "invalid_request",
+      400,
+      error instanceof Error ? error.message : "Linear issue webhook payload is invalid."
+    );
+  }
+}
+
+function doesLinearInstallationMatchWebhookPayload(
+  installation: IntegrationInstallation,
+  payload: unknown
+) {
+  const scopedIds = getLinearWebhookScopeIds(payload);
+  if (scopedIds.length === 0) return true;
+
+  return scopedIds.some(
+    (id) =>
+      idsMatch(installation.providerAccountId, id) ||
+      idsMatch(installation.id, id) ||
+      idsMatch(installation.providerAccountName, id)
+  );
+}
+
+function getLinearWebhookScopeIds(payload: unknown) {
+  const ids = new Set<string>();
+
+  if (isRecord(payload)) {
+    for (const key of ["organizationId", "teamId", "workspaceId", "providerAccountId", "accountId"]) {
+      const value = getBoundedIdentifier(payload[key], 160);
+      if (value) ids.add(value);
+    }
+
+    if (isRecord(payload.organization)) {
+      const id = getBoundedIdentifier(payload.organization.id, 160);
+      if (id) ids.add(id);
+    }
+  }
+
+  return [...ids];
+}
+
+function getJiraWebhookEventName(payload: unknown) {
+  if (!isRecord(payload)) return "jira:webhook";
+  return (
+    getBoundedText(payload.webhookEvent, 120) ??
+    getBoundedText(payload.issue_event_type_name, 120) ??
+    getBoundedText(payload.event, 120) ??
+    "jira:webhook"
+  );
+}
+
+function isJiraIssueWebhookEvent(payload: unknown, eventName: string) {
+  if (!isRecord(payload) || !isRecord(payload.issue)) return false;
+  const normalizedEvent = eventName.toLowerCase();
+  return normalizedEvent.startsWith("jira:issue_") || normalizedEvent.includes("issue");
+}
+
+function parseJiraWebhookIssue(payload: unknown) {
+  if (!isRecord(payload) || !isRecord(payload.issue)) {
+    throw new ApiRequestError("invalid_request", 400, "Jira issue webhook payload is invalid.");
+  }
+
+  const cloudId =
+    getJiraWebhookCloudId(payload) ??
+    getBoundedIdentifier(payload.issue.cloudId, 160) ??
+    getBoundedIdentifier(payload.issue.providerAccountId, 160);
+
+  try {
+    return parseJiraIssuePayload({
+      ...payload.issue,
+      ...(cloudId ? { cloudId } : {})
+    });
+  } catch (error) {
+    throw new ApiRequestError(
+      "invalid_request",
+      400,
+      error instanceof Error ? error.message : "Jira issue webhook payload is invalid."
+    );
+  }
+}
+
+function getJiraWebhookCloudId(payload: unknown, issue?: JiraIssue) {
+  if (!isRecord(payload)) return issue?.cloudId;
+
+  const issuePayload = isRecord(payload.issue) ? payload.issue : undefined;
+  const site = isRecord(payload.site) ? payload.site : undefined;
+  return (
+    getBoundedIdentifier(payload.cloudId, 160) ??
+    getBoundedIdentifier(payload.cloudID, 160) ??
+    getBoundedIdentifier(payload.providerAccountId, 160) ??
+    getBoundedIdentifier(payload.accountId, 160) ??
+    getBoundedIdentifier(payload.siteId, 160) ??
+    getBoundedIdentifier(site?.cloudId, 160) ??
+    getBoundedIdentifier(issuePayload?.cloudId, 160) ??
+    getBoundedIdentifier(issuePayload?.providerAccountId, 160) ??
+    issue?.cloudId
+  );
+}
+
+function doesJiraInstallationMatchWebhookCloudId(
+  installation: IntegrationInstallation,
+  cloudId: string | undefined
+) {
+  return !cloudId || idsMatch(installation.providerAccountId, cloudId);
+}
+
+function isJiraWebhookMappingForIssue(
+  mapping: ExternalObjectMapping,
+  installation: IntegrationInstallation,
+  issue: JiraIssue
+) {
+  if (mapping.status === "disconnected" || mapping.external.provider !== "jira") return false;
+
+  const scopedIssue = scopeJiraIssueToCloudId(issue, installation.providerAccountId);
+  const scopedRef = createJiraIssueExternalRef(scopedIssue);
+
+  return (
+    isSameExternalObject(mapping, scopedRef) ||
+    mapping.external.key === issue.key ||
+    mapping.external.id === issue.id ||
+    mapping.external.id.endsWith(`:${issue.id}`)
+  );
+}
+
+function idsMatch(left: string, right: string) {
+  return left.trim().toLowerCase() === right.trim().toLowerCase();
+}
+
 function doesGitHubInstallationIdMatch(storedId: string, candidateId: string) {
   const normalizedCandidate = normalizeGitHubInstallationId(candidateId);
   return (
@@ -5865,6 +6699,7 @@ function createIntegrationSyncEvent({
   eventName,
   installationId,
   now,
+  provider = "github",
   result,
   summary,
   workspaceId
@@ -5873,6 +6708,7 @@ function createIntegrationSyncEvent({
   eventName: string;
   installationId?: string;
   now: string;
+  provider?: IntegrationProvider;
   result: IntegrationSyncEvent["result"];
   summary: string;
   workspaceId?: string;
@@ -5881,9 +6717,9 @@ function createIntegrationSyncEvent({
     createdAt: now,
     deliveryId,
     event: eventName,
-    id: `github-webhook-${normalizeIdentifier(deliveryId)}`,
+    id: `${provider}-webhook-${normalizeIdentifier(deliveryId)}`,
     ...(installationId ? { installationId } : {}),
-    provider: "github",
+    provider,
     result,
     summary: summary.slice(0, 500),
     ...(workspaceId ? { workspaceId } : {})
@@ -6625,6 +7461,54 @@ function parseJsonBuffer(body: Buffer) {
   } catch {
     throw new ApiBodyError("invalid_json", "Request body must be valid JSON.");
   }
+}
+
+function verifyHexHmacSha256Signature({
+  payload,
+  secret,
+  signatureHeader
+}: {
+  payload: Buffer;
+  secret: string;
+  signatureHeader?: string;
+}) {
+  const signature = parseHexSha256Signature(signatureHeader);
+  if (!signature) return false;
+
+  const expected = createHmac("sha256", secret).update(payload).digest("hex");
+  return timingSafeHexEqual(expected, signature);
+}
+
+function verifyWebSubHmacSha256Signature({
+  payload,
+  secret,
+  signatureHeader
+}: {
+  payload: Buffer;
+  secret: string;
+  signatureHeader?: string;
+}) {
+  if (!signatureHeader) return false;
+
+  const [algorithm, signature] = signatureHeader.split("=", 2);
+  if (algorithm?.toLowerCase() !== "sha256") return false;
+
+  return verifyHexHmacSha256Signature({ payload, secret, signatureHeader: signature });
+}
+
+function parseHexSha256Signature(signatureHeader: string | undefined) {
+  const signature = signatureHeader?.startsWith("sha256=")
+    ? signatureHeader.slice("sha256=".length)
+    : signatureHeader;
+
+  if (!signature || !/^[a-f0-9]{64}$/i.test(signature)) return undefined;
+  return signature.toLowerCase();
+}
+
+function timingSafeHexEqual(expected: string, actual: string) {
+  const expectedBuffer = Buffer.from(expected, "hex");
+  const actualBuffer = Buffer.from(actual, "hex");
+  return expectedBuffer.length === actualBuffer.length && timingSafeEqual(expectedBuffer, actualBuffer);
 }
 
 function writeKnownApiError(

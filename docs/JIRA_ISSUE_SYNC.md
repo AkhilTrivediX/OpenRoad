@@ -1,6 +1,6 @@
 # Jira Issue Sync
 
-OpenRoad supports Jira import, linking, encrypted credential storage, and live sync while keeping Jira complexity outside the core OpenRoad domain.
+OpenRoad supports Jira import, linking, encrypted credential storage, live sync, and signed webhooks while keeping Jira complexity outside the core OpenRoad domain.
 
 ## Implemented
 
@@ -12,6 +12,7 @@ OpenRoad supports Jira import, linking, encrypted credential storage, and live s
 - Encrypted server-only credential records through the provider-neutral credential API when `OPENROAD_TOKEN_ENCRYPTION_KEY` is configured.
 - Provider-neutral background sync jobs for active Jira installations.
 - Live Jira Cloud REST sync for already-linked issue mappings through the private sync runner when an active encrypted Jira credential is stored.
+- Signed Jira issue webhooks for already-linked issue mappings.
 - Provider/id-scoped integration actors, for example `jira:jira-install-jira-cloud-id`.
 - Audit events for Jira issue import/update.
 
@@ -33,6 +34,7 @@ $env:OPENROAD_JIRA_CLIENT_ID="jira-client-id"
 $env:OPENROAD_JIRA_CLIENT_SECRET="replace-with-jira-client-secret"
 $env:OPENROAD_JIRA_REDIRECT_URI="https://openroad.example.com/api/openroad/integrations/jira/oauth/callback"
 $env:OPENROAD_JIRA_API_BASE_URL="https://api.atlassian.com/ex/jira"
+$env:OPENROAD_JIRA_WEBHOOK_SECRET="replace-with-jira-webhook-secret"
 ```
 
 The setup endpoint returns:
@@ -122,9 +124,16 @@ When `OPENROAD_TOKEN_ENCRYPTION_KEY` is configured and an active Jira credential
 
 The Jira REST client defaults to `https://api.atlassian.com/ex/jira/{cloudId}/rest/api/2/issue/{issueIdOrKey}` and can be pointed at a fake/self-host test endpoint with `OPENROAD_JIRA_API_BASE_URL`. It uses OAuth bearer authorization server-side and requests a bounded field set for issue sync. Jira `429`, `408`, `409`, and `5xx` responses become retryable sync failures with bounded backoff; malformed responses fail without persisting raw provider payloads.
 
+## Webhook Endpoint
+
+`POST /api/openroad/integrations/jira/webhook`
+
+The endpoint requires `OPENROAD_JIRA_WEBHOOK_SECRET`. It verifies the raw request body with the Jira `X-Hub-Signature` HMAC-SHA256 header before parsing JSON or mutating state. It requires `X-Atlassian-Webhook-Identifier` for idempotency across retries.
+
+Only Jira issue webhooks for active installations with `webhook:receive` can update OpenRoad, and only when the Jira issue is already linked to an OpenRoad request for the same installation/site. Jira issue ids stay scoped by cloud/site id before mapping updates are applied. Unmapped issues are logged as ignored sync events without creating requests. Responses and persisted events never include raw Jira payloads, signatures, webhook secrets, access tokens, refresh tokens, or encrypted credential material.
+
 ## Deferred
 
 - OAuth callback and token exchange.
-- Jira webhook endpoint and signature/idempotency handling.
 - Conflict UI.
-- Full browser connect/import/disconnect flows and Jira sync logs.
+- Full browser import UI and Jira sync logs.

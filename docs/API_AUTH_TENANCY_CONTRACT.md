@@ -188,6 +188,8 @@ Member management routes require `integration:manage`, which is reserved for loc
 ## Provider-Signature Routes
 
 - `POST /api/openroad/integrations/github/webhook`
+- `POST /api/openroad/integrations/linear/webhook`
+- `POST /api/openroad/integrations/jira/webhook`
 
 ## Global Private Worker Routes
 
@@ -195,9 +197,13 @@ Member management routes require `integration:manage`, which is reserved for loc
 
 The sync runner route requires global owner/admin write access. It auto-configures a GitHub worker when GitHub App credentials are available and Linear/Jira workers when `OPENROAD_TOKEN_ENCRYPTION_KEY` plus active provider credentials are available. It stays disabled with `503 not_configured` when no server-side integration sync worker adapter can be configured. The runner claims due queued or stale-running jobs, processes them server-side, redacts worker failure text before persistence, and returns sanitized processing counts.
 
-The GitHub webhook route is not authorized by OpenRoad actor headers. It is provider-signature protected: the server requires `OPENROAD_GITHUB_APP_WEBHOOK_SECRET` and verifies `X-Hub-Signature-256` against the raw request body with HMAC-SHA256 before parsing JSON or mutating state.
+Webhook routes are not authorized by OpenRoad actor headers. They are provider-signature protected and verify raw request bytes before mutating state:
 
-Valid deliveries are processed as integration actor work after the target workspace is derived from existing installation/mapping metadata. Duplicate delivery IDs are idempotent no-ops. Webhook secrets, raw payloads, signatures, and request headers must not be persisted or returned.
+- GitHub requires `OPENROAD_GITHUB_APP_WEBHOOK_SECRET` and verifies `X-Hub-Signature-256` with HMAC-SHA256.
+- Linear requires `OPENROAD_LINEAR_WEBHOOK_SECRET`, verifies `Linear-Signature` with HMAC-SHA256, and rejects stale `webhookTimestamp` payloads.
+- Jira requires `OPENROAD_JIRA_WEBHOOK_SECRET`, verifies `X-Hub-Signature` with HMAC-SHA256, and dedupes `X-Atlassian-Webhook-Identifier`.
+
+Valid deliveries are processed as integration actor work after the target workspace is derived from existing installation/mapping metadata. Linear and Jira issue webhooks update already-linked issue mappings only when the active installation has `webhook:receive`; they do not create OpenRoad requests from provider payloads. Duplicate delivery IDs are idempotent no-ops. Webhook secrets, raw payloads, signatures, and request headers must not be persisted or returned.
 
 ## Environment
 
@@ -226,11 +232,13 @@ $env:OPENROAD_LINEAR_CLIENT_ID="lin_..."
 $env:OPENROAD_LINEAR_CLIENT_SECRET="replace-with-linear-client-secret"
 $env:OPENROAD_LINEAR_REDIRECT_URI="https://openroad.example.com/api/openroad/integrations/linear/oauth/callback"
 $env:OPENROAD_LINEAR_API_URL="https://api.linear.app/graphql"
+$env:OPENROAD_LINEAR_WEBHOOK_SECRET="replace-with-linear-webhook-secret"
 $env:OPENROAD_JIRA_AUTH_BASE_URL="https://auth.atlassian.com"
 $env:OPENROAD_JIRA_CLIENT_ID="jira-client-id"
 $env:OPENROAD_JIRA_CLIENT_SECRET="replace-with-jira-client-secret"
 $env:OPENROAD_JIRA_REDIRECT_URI="https://openroad.example.com/api/openroad/integrations/jira/oauth/callback"
 $env:OPENROAD_JIRA_API_BASE_URL="https://api.atlassian.com/ex/jira"
+$env:OPENROAD_JIRA_WEBHOOK_SECRET="replace-with-jira-webhook-secret"
 $env:OPENROAD_TRUST_PROXY_HEADERS="false"
 $env:OPENROAD_SINGLE_USER_MODE="false"
 ```

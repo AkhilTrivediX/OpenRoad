@@ -40,7 +40,7 @@ OpenRoad now has a working standalone product loop, production server foundation
 - Provider-neutral integration mappings plus a payload-backed GitHub issue import/link API.
 - Server-only GitHub App setup and installation verification foundation.
 - Live GitHub issue fetch through verified installations without persisted tokens.
-- Signed GitHub App webhook ingestion, idempotent linked issue sync, and safe disconnect handling.
+- Signed GitHub App, Linear, and Jira webhook ingestion for idempotent linked issue sync, plus safe GitHub installation disconnect handling.
 - Encrypted server-only provider credential storage primitives for GitHub, Linear, and Jira.
 - Provider-neutral background sync job foundation with private runner boundary and GitHub/Linear/Jira linked-issue workers.
 - Settings-managed provider installation bootstrap, credential metadata listing/storage/revoke, and provider-neutral disconnect for GitHub, Linear, and Jira.
@@ -51,7 +51,7 @@ OpenRoad now has a working standalone product loop, production server foundation
 - Release candidate manifest tooling for version, checksum, support-window, and dry-run publishing verification.
 - Docker Compose, backup/restore, and smoke-check commands for self-host operators.
 
-Current production limits are explicit: built-in SMTP delivery, provider-specific invitation/recovery templates, direct recovery provider delivery, OAuth login, email verification, managed database migrations, hosted release promotion, deeper observability, hosted organization administration, bulk member operations, full integration connect/disconnect Settings flows, OAuth callback exchange, Linear/Jira webhooks, provider write-back, direct provider notification delivery, real model-backed AI adapters with consent/prompt redaction/audit logs, and conflict UI are planned next-stage work. Admin-token self-hosting has an httpOnly owner browser session path, invitation tokens can create scoped member browser sessions, existing users can sign in with account passwords, and password recovery can be routed through a sensitive JSONL handoff without exposing raw reset tokens in team metadata.
+Current production limits are explicit: built-in SMTP delivery, provider-specific invitation/recovery templates, direct recovery provider delivery, OAuth login, email verification, managed database migrations, hosted release promotion, deeper observability, hosted organization administration, bulk member operations, OAuth callback exchange, provider write-back, direct provider notification delivery, hosted webhook registration automation, real model-backed AI adapters with consent/prompt redaction/audit logs, and conflict UI are planned next-stage work. Admin-token self-hosting has an httpOnly owner browser session path, invitation tokens can create scoped member browser sessions, existing users can sign in with account passwords, and password recovery can be routed through a sensitive JSONL handoff without exposing raw reset tokens in team metadata.
 
 Current docs:
 
@@ -161,6 +161,8 @@ The server exposes:
 - `POST /api/openroad/workspaces/:workspaceId/integrations/github/app/installations/verify`
 - `POST /api/openroad/workspaces/:workspaceId/integrations/github/app/installations/:installationId/disconnect`
 - `POST /api/openroad/integrations/github/webhook`
+- `POST /api/openroad/integrations/linear/webhook`
+- `POST /api/openroad/integrations/jira/webhook`
 - `POST /api/openroad/workspaces/:workspaceId/integrations/linear/issues/import`
 - `GET /api/openroad/workspaces/:workspaceId/integrations/linear/oauth/setup`
 - `POST /api/openroad/workspaces/:workspaceId/integrations/jira/issues/import`

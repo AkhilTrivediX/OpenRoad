@@ -50,8 +50,8 @@ As a workspace owner with Linear or Jira connected, I want OpenRoad to refresh a
 - Linear webhook route rejects missing/invalid signature or secret.
 - Jira webhook route rejects missing/invalid signature or secret.
 - Linear/Jira webhook routes return `503 not_configured` when secrets are absent.
-- Valid Linear issue update webhook refreshes an existing active Linear mapping and records sanitized sync event/job metadata.
-- Valid Jira issue update webhook refreshes an existing active Jira mapping and records sanitized sync event/job metadata.
+- Valid Linear issue update webhook refreshes an existing active Linear mapping and records sanitized sync event metadata.
+- Valid Jira issue update webhook refreshes an existing active Jira mapping and records sanitized sync event metadata.
 - Unknown installation or issue mapping is ignored without creating OpenRoad requests.
 - Duplicate delivery/event id returns a duplicate/noop response and does not apply twice.
 - Disconnected installation webhook does not update OpenRoad request data.

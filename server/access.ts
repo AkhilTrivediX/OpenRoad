@@ -336,6 +336,18 @@ export const routeProtections: RouteProtection[] = [
   },
   {
     methods: ["POST"],
+    path: "/api/openroad/integrations/linear/webhook",
+    permission: "integration:sync",
+    scope: "provider-signature"
+  },
+  {
+    methods: ["POST"],
+    path: "/api/openroad/integrations/jira/webhook",
+    permission: "integration:sync",
+    scope: "provider-signature"
+  },
+  {
+    methods: ["POST"],
     path: "/api/openroad/workspaces/:workspaceId/integrations/github/app/installations/:installationId/disconnect",
     permission: "integration:manage",
     scope: "workspace"

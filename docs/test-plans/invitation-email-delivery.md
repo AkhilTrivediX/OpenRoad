@@ -98,11 +98,17 @@ As a workspace owner, I can invite a teammate and have OpenRoad prepare a delive
 ## Evidence
 
 - Branch: `feat/invitation-email-delivery`
-- Implementation commit SHA: Pending.
-- Date: Pending.
-- Commands run: Pending.
-- Browser/viewports tested: No UI changes planned.
-- Accessibility checks: No UI changes planned.
-- Reviewer notes: Pending.
-- Known unresolved risks: Direct SMTP/provider sending, hosted background queue infrastructure, password/OAuth login, account recovery, HTML email templates, and full member management UI remain future production slices.
-- Rollback notes: Pending.
+- Implementation commit SHA: `852bcb9d8da609f1c4c0966a97f5c6133b192bbf`.
+- Date: 2026-07-10.
+- Commands run:
+  - `pnpm vitest run server/invitation-delivery.test.ts server/team.test.ts server/http.test.ts src/persistence/openroadInvitations.test.ts src/App.test.tsx`: 158 tests passed.
+  - `pnpm vitest run scripts/openroad-ops.test.mjs scripts/openroad-release.test.mjs`: 15 tests passed.
+  - `node C:\Users\PC\.agents\skills\impeccable\scripts\detect.mjs --json src\App.tsx src\styles.css`: no findings.
+  - `pnpm check`: 352 tests passed; client and server production builds passed.
+  - Built-server invite-delivery smoke in admin-token mode: invitation create, JSONL delivery record, no token hash in delivery artifact, no raw token in team metadata, member session acceptance, httpOnly cookie, full-state denial, scoped workspace read, and token reuse denial all passed.
+  - `pnpm release:verify`: dry-run release manifest generated with `team metadata schema 3` rollback notes.
+- Browser/viewports tested: Static design detector returned no findings for touched UI files. Live URL scan was attempted against a built-server invite URL, but the detector reported `puppeteer is required for URL scanning`; App regression tests cover invite-link token prefill, browser-history token removal, member session acceptance, and token secrecy.
+- Accessibility checks: No new controls were introduced. Existing invitation token/name inputs retain labels, and invite-link prefill uses the existing member join form.
+- Reviewer notes: Invitation delivery is server-side only, disabled by default, and file mode writes a sensitive JSONL handoff for external workers. Team metadata stores delivery status only; raw accept tokens remain limited to the create response and the operator-configured delivery file.
+- Known unresolved risks: Direct SMTP/provider sending, hosted background queue infrastructure, password/OAuth login, account recovery, HTML email templates, full member management UI, and automated browser E2E remain future production slices.
+- Rollback notes: Revert this branch and restore a pre-schema-3 team metadata backup before downgrading to a build that only understands schema `1` or `2`. JSONL invitation delivery files are operational handoff artifacts and are not required for state restore.

@@ -863,6 +863,27 @@ Acceptance:
 - Accept-provider updates only the linked OpenRoad request through the existing provider sync transforms.
 - Disconnect-mapping affects only the selected mapping.
 
+## Feature 11I: Hosted Webhook Registration
+
+Branch: `feat/hosted-webhook-registration`
+
+Status: planned.
+
+Build:
+
+- Provider-neutral webhook registration metadata.
+- Workspace-scoped webhook registration API.
+- Safe GitHub App webhook configuration from server-only settings.
+- Blocked/not-supported registration states for providers where OpenRoad cannot verify future deliveries from a server-known secret.
+- Compact Settings registration controls only when the server reports a safe capability.
+
+Acceptance:
+
+- Hosted registration never asks the browser for provider secrets, webhook secrets, callback URLs, private keys, or raw provider config.
+- GitHub App webhook registration is auditable, idempotent, and sanitized.
+- OpenRoad does not create Linear or Jira provider webhooks that its current signature verifier cannot validate.
+- Existing signed webhook ingestion, provider sync, write-back, conflict resolution, standalone, and release gates remain green.
+
 ## Feature 12: Requester Notifications
 
 Branch: `feat/requester-notifications`

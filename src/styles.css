@@ -1867,6 +1867,84 @@ dd {
   white-space: nowrap;
 }
 
+.provider-conflict-panel {
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 9px;
+  grid-column: 1 / -1;
+  padding-top: 10px;
+}
+
+.provider-conflict-heading {
+  align-items: start;
+  color: var(--amber);
+  display: flex;
+  gap: 8px;
+}
+
+.provider-conflict-heading > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.provider-conflict-heading strong {
+  color: var(--ink);
+  font-family: var(--label-font);
+  font-size: 12px;
+}
+
+.provider-conflict-heading p {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+  margin: 0;
+}
+
+.provider-conflict-list {
+  border: 1px solid var(--line);
+  display: grid;
+}
+
+.provider-conflict-item {
+  align-items: center;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  min-width: 0;
+  padding: 9px;
+}
+
+.provider-conflict-item + .provider-conflict-item {
+  border-top: 1px solid var(--line);
+}
+
+.provider-conflict-item > div:first-child {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.provider-conflict-item strong,
+.provider-conflict-item small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.provider-conflict-item small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.provider-conflict-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
 .provider-details {
   border-top: 1px solid var(--line);
   grid-column: 1 / -1;
@@ -3066,6 +3144,7 @@ dd {
 
   .settings-section-header,
   .provider-row,
+  .provider-conflict-item,
   .member-row,
   .invitation-row,
   .provider-controls {
@@ -3080,8 +3159,14 @@ dd {
   }
 
   .provider-controls .provider-action,
+  .provider-conflict-actions .provider-action,
   .provider-action-note {
     min-height: 44px;
+    width: 100%;
+  }
+
+  .provider-conflict-actions {
+    display: grid;
     width: 100%;
   }
 

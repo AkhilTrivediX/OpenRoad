@@ -417,6 +417,32 @@ describe("OpenRoad workspace shell", () => {
     expect(document.body.textContent).not.toContain("installation-token");
   });
 
+  it("resolves a provider conflict from Settings without exposing provider secrets", async () => {
+    vi.stubEnv("VITE_OPENROAD_SERVER_SYNC", "on");
+    const fetchMock = createSettingsIntegrationFetchMock({ githubConflict: true });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    expect(await screen.findByText("1 conflict")).toBeInTheDocument();
+    expect(screen.getByText("Choose the source of truth for linked issue mappings.")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /GitHub Keep OpenRoad/ }));
+
+    expect(await screen.findByText("Resolved GitHub conflict by keeping the OpenRoad request.")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/openroad/workspaces/acme/integrations/github/conflicts/mapping-github/resolve",
+      expect.objectContaining({
+        body: JSON.stringify({ resolution: "keep-openroad" }),
+        credentials: "same-origin",
+        method: "POST"
+      })
+    );
+    expect(document.body.textContent).not.toContain("raw-secret");
+    expect(document.body.textContent).not.toContain("installation-token");
+  });
+
   it("connects, stores credentials, and disconnects providers from Settings", async () => {
     vi.stubEnv("VITE_OPENROAD_SERVER_SYNC", "on");
     const fetchMock = createSettingsProviderSetupFetchMock();
@@ -2005,6 +2031,7 @@ function createMemberInvitationLoginFetchMock() {
 
 function createSettingsIntegrationFetchMock(
   options: {
+    githubConflict?: boolean;
     githubWriteBack?: boolean;
     jiraReady?: boolean;
     linearReady?: boolean;
@@ -2012,6 +2039,7 @@ function createSettingsIntegrationFetchMock(
   } = {}
 ) {
   const state = createInitialOpenRoadState();
+  let githubConflictResolved = false;
   if (options.requestSource) {
     state.workspaces[0].requests[0] = {
       ...state.workspaces[0].requests[0],
@@ -2054,11 +2082,36 @@ function createSettingsIntegrationFetchMock(
               import: true,
               liveSync: true,
               manualSync: true,
+              resolveConflicts: Boolean(options.githubConflict && !githubConflictResolved),
               setup: true,
               webhooks: true,
               writeBack: Boolean(options.githubWriteBack)
             },
             connection: "connected",
+            conflictedMappings: options.githubConflict && !githubConflictResolved ? 1 : 0,
+            conflicts:
+              options.githubConflict && !githubConflictResolved
+                ? [
+                    {
+                      connectedAt: "2026-07-04T00:00:00Z",
+                      external: {
+                        id: "I_kwDOGH123",
+                        key: "AkhilTrivediX/OpenRoad#42",
+                        type: "issue",
+                        url: "https://github.com/AkhilTrivediX/OpenRoad/issues/42?token=raw-secret"
+                      },
+                      installationId: "github-install",
+                      mappingId: "mapping-github",
+                      openRoad: {
+                        id: "dark-mode-docs",
+                        status: "Needs decision",
+                        title: "GitHub conflict request",
+                        type: "request"
+                      },
+                      providerAccountName: "AkhilTrivediX"
+                    }
+                  ]
+                : [],
             label: "GitHub",
             lastSyncedAt: "2026-07-04T00:30:00Z",
             linkedIssueMappings: 1,
@@ -2104,10 +2157,13 @@ function createSettingsIntegrationFetchMock(
               import: Boolean(options.jiraReady),
               liveSync: Boolean(options.jiraReady),
               manualSync: Boolean(options.jiraReady),
+              resolveConflicts: false,
               setup: false,
               webhooks: false,
               writeBack: Boolean(options.jiraReady)
             },
+            conflictedMappings: 0,
+            conflicts: [],
             connection: options.jiraReady ? "connected" : "optional",
             label: "Jira",
             linkedIssueMappings: options.jiraReady ? 1 : 0,
@@ -2141,10 +2197,13 @@ function createSettingsIntegrationFetchMock(
               import: Boolean(options.linearReady),
               liveSync: Boolean(options.linearReady),
               manualSync: Boolean(options.linearReady),
+              resolveConflicts: false,
               setup: false,
               webhooks: false,
               writeBack: Boolean(options.linearReady)
             },
+            conflictedMappings: 0,
+            conflicts: [],
             connection: options.linearReady ? "connected" : "optional",
             label: "Linear",
             linkedIssueMappings: options.linearReady ? 1 : 0,
@@ -2193,6 +2252,28 @@ function createSettingsIntegrationFetchMock(
         requestId: body.requestId,
         status: "written",
         writtenAt: "2026-07-04T01:00:00.000Z"
+      });
+    }
+
+    if (
+      url === "/api/openroad/workspaces/acme/integrations/github/conflicts/mapping-github/resolve" &&
+      method === "POST"
+    ) {
+      githubConflictResolved = true;
+      return jsonResponse({
+        external: {
+          id: "I_kwDOGH123",
+          key: "AkhilTrivediX/OpenRoad#42",
+          type: "issue"
+        },
+        installationId: "github-install",
+        mappingId: "mapping-github",
+        message: "Resolved GitHub conflict by keeping the OpenRoad request.",
+        provider: "github",
+        requestId: "dark-mode-docs",
+        resolution: "keep-openroad",
+        resolvedAt: "2026-07-04T01:00:00.000Z",
+        status: "resolved"
       });
     }
 

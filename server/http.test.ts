@@ -17,6 +17,9 @@ import {
   type RequestItem,
   type RoadmapItem
 } from "../src/domain/openroad";
+import { parseGitHubIssuePayload } from "../src/integrations/github";
+import { parseLinearIssuePayload } from "../src/integrations/linear";
+import { parseJiraIssuePayload, scopeJiraIssueToCloudId } from "../src/integrations/jira";
 import { InMemoryPortalRateLimiter, createOpenRoadServer, type PortalRateLimiter } from "./http";
 import {
   JsonlAccountRecoveryDeliveryAdapter,
@@ -3864,6 +3867,291 @@ describe("OpenRoad production server", () => {
     expect(responseText).not.toContain("linear-access-secret");
   });
 
+  it("reports and resolves conflicted provider mappings by keeping OpenRoad", async () => {
+    const { integrationStore, store, url } = await startTestServer({
+      githubAppClient: fakeGitHubAppClient(),
+      githubAppConfig: completeGitHubAppConfig()
+    });
+    const imported = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/github/issues/import`, {
+      body: JSON.stringify(gitHubImportPayload()),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    await updateStoredRequest(store, "acme", imported.body.request.id, {
+      description: "OpenRoad conflict description stays local.",
+      title: "OpenRoad conflict title"
+    });
+    const conflict = await markFirstIssueMappingConflicted(integrationStore, "github");
+
+    const status = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/status`);
+    const github = status.body.providers.find((provider: { provider: string }) => provider.provider === "github");
+    const response = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/github/conflicts/${encodeURIComponent(conflict.id)}/resolve`,
+      {
+        body: JSON.stringify({ resolution: "keep-openroad" }),
+        headers: { "Content-Type": "application/json" },
+        method: "POST"
+      }
+    );
+    const [openRoadResult, integrationResult] = await Promise.all([
+      store.load(),
+      integrationStore.load()
+    ]);
+    const request = openRoadResult.state.workspaces[0].requests.find(
+      (item) => item.id === imported.body.request.id
+    );
+    const mapping = integrationResult.state.mappings.find((item) => item.id === conflict.id);
+    const event = integrationResult.state.syncEvents.find((item) => item.event === "conflict_resolved");
+
+    expect(github).toMatchObject({
+      capabilities: { resolveConflicts: true },
+      conflictedMappings: 1,
+      conflicts: [
+        expect.objectContaining({
+          mappingId: conflict.id,
+          openRoad: expect.objectContaining({ title: "OpenRoad conflict title" })
+        })
+      ]
+    });
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      mappingId: conflict.id,
+      provider: "github",
+      requestId: imported.body.request.id,
+      resolution: "keep-openroad",
+      status: "resolved"
+    });
+    expect(request?.title).toBe("OpenRoad conflict title");
+    expect(mapping?.status).toBe("active");
+    expect(mapping?.lastSyncedAt).toBeUndefined();
+    expect(event).toMatchObject({ provider: "github", result: "synced" });
+  });
+
+  it("accepts a GitHub provider issue while resolving a conflict", async () => {
+    const { integrationStore, store, url } = await startTestServer({
+      githubAppClient: {
+        ...fakeGitHubAppClient(),
+        async getRepositoryIssue() {
+          return parseGitHubIssuePayload(
+            gitHubIssuePayload({
+              body: "Provider conflict body wins.",
+              title: "Provider conflict title"
+            })
+          );
+        }
+      },
+      githubAppConfig: completeGitHubAppConfig()
+    });
+    const imported = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/github/issues/import`, {
+      body: JSON.stringify(gitHubImportPayload()),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    await updateStoredRequest(store, "acme", imported.body.request.id, {
+      description: "Local draft body",
+      title: "Local draft title"
+    });
+    const conflict = await markFirstIssueMappingConflicted(integrationStore, "github");
+
+    const response = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/github/conflicts/${encodeURIComponent(conflict.id)}/resolve`,
+      {
+        body: JSON.stringify({ resolution: "accept-provider" }),
+        headers: { "Content-Type": "application/json" },
+        method: "POST"
+      }
+    );
+    const [openRoadResult, integrationResult] = await Promise.all([
+      store.load(),
+      integrationStore.load()
+    ]);
+    const request = openRoadResult.state.workspaces[0].requests.find(
+      (item) => item.id === imported.body.request.id
+    );
+    const mapping = integrationResult.state.mappings.find((item) => item.id === conflict.id);
+    const responseText = JSON.stringify(response.body);
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      provider: "github",
+      resolution: "accept-provider",
+      status: "resolved"
+    });
+    expect(request?.title).toBe("Provider conflict title");
+    expect(request?.description).toContain("Provider conflict body wins.");
+    expect(mapping?.status).toBe("active");
+    expect(mapping?.lastSyncedAt).toBe(response.body.resolvedAt);
+    expect(responseText).not.toContain("installation-token");
+  });
+
+  it("accepts Linear and Jira provider issues through server-only credentials", async () => {
+    const linearReads: string[] = [];
+    const jiraReads: string[] = [];
+    const { integrationStore, store, url } = await startTestServer({
+      jiraApiClient: {
+        async getIssue(options) {
+          jiraReads.push(options.credential.accessToken);
+          return scopeJiraIssueToCloudId(
+            parseJiraIssuePayload(
+              jiraIssuePayload({
+                fields: jiraFieldsPayload({
+                  description: {
+                    content: [
+                      {
+                        content: [{ text: "Provider Jira conflict body wins.", type: "text" }],
+                        type: "paragraph"
+                      }
+                    ],
+                    type: "doc",
+                    version: 1
+                  },
+                  summary: "Provider Jira conflict title"
+                })
+              })
+            ),
+            "jira-cloud"
+          );
+        },
+        async updateIssue() {
+          throw new Error("Unexpected Jira issue write during conflict resolution.");
+        }
+      },
+      linearApiClient: {
+        async getIssue(options) {
+          linearReads.push(options.credential.accessToken);
+          return parseLinearIssuePayload(
+            linearIssuePayload({
+              description: "Provider Linear conflict body wins.",
+              title: "Provider Linear conflict title"
+            })
+          );
+        },
+        async updateIssue() {
+          throw new Error("Unexpected Linear issue write during conflict resolution.");
+        }
+      },
+      tokenVault: testTokenVault()
+    });
+    const linearImported = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/linear/issues/import`, {
+      body: JSON.stringify(linearImportPayload()),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const jiraImported = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/jira/issues/import`, {
+      body: JSON.stringify(jiraImportPayload()),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/linear/credentials`, {
+      body: JSON.stringify(linearCredentialPayload()),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/jira/credentials`, {
+      body: JSON.stringify(jiraCredentialPayload()),
+      headers: { "Content-Type": "application/json" },
+      method: "POST"
+    });
+    const linearConflict = await markFirstIssueMappingConflicted(integrationStore, "linear");
+    const jiraConflict = await markFirstIssueMappingConflicted(integrationStore, "jira");
+
+    const linearResponse = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/linear/conflicts/${encodeURIComponent(linearConflict.id)}/resolve`,
+      {
+        body: JSON.stringify({ resolution: "accept-provider" }),
+        headers: { "Content-Type": "application/json" },
+        method: "POST"
+      }
+    );
+    const jiraResponse = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/jira/conflicts/${encodeURIComponent(jiraConflict.id)}/resolve`,
+      {
+        body: JSON.stringify({ resolution: "accept-provider" }),
+        headers: { "Content-Type": "application/json" },
+        method: "POST"
+      }
+    );
+    const openRoadResult = await store.load();
+    const requests = openRoadResult.state.workspaces[0].requests;
+    const linearRequest = requests.find((item) => item.id === linearImported.body.request.id);
+    const jiraRequest = requests.find((item) => item.id === jiraImported.body.request.id);
+    const responseText = `${JSON.stringify(linearResponse.body)} ${JSON.stringify(jiraResponse.body)}`;
+
+    expect(linearResponse.status).toBe(200);
+    expect(jiraResponse.status).toBe(200);
+    expect(linearReads).toEqual(["linear-access-secret"]);
+    expect(jiraReads).toEqual(["jira-access-secret"]);
+    expect(linearRequest?.title).toBe("Provider Linear conflict title");
+    expect(jiraRequest?.title).toBe("Provider Jira conflict title");
+    expect(responseText).not.toContain("linear-access-secret");
+    expect(responseText).not.toContain("jira-access-secret");
+    expect(responseText).not.toContain("ciphertext");
+  });
+
+  it("disconnects only the requested conflicted mapping and rejects unsafe conflict resolution", async () => {
+    const { integrationStore, url } = await startTestServer({
+      auth: { adminToken: "secret", singleUserMode: false, trustProxyHeaders: true }
+    });
+    const adminHeaders = {
+      Authorization: "Bearer secret",
+      "Content-Type": "application/json"
+    };
+    const first = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/linear/issues/import`, {
+      body: JSON.stringify(linearImportPayload()),
+      headers: adminHeaders,
+      method: "POST"
+    });
+    await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/jira/issues/import`, {
+      body: JSON.stringify(jiraImportPayload()),
+      headers: adminHeaders,
+      method: "POST"
+    });
+    const conflict = await markFirstIssueMappingConflicted(integrationStore, "linear");
+    const forbidden = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/linear/conflicts/${encodeURIComponent(conflict.id)}/resolve`,
+      {
+        body: JSON.stringify({ resolution: "keep-openroad" }),
+        headers: {
+          "Content-Type": "application/json",
+          ...workspaceActorHeaders("acme", "Viewer")
+        },
+        method: "POST"
+      }
+    );
+    const wrongProvider = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/jira/conflicts/${encodeURIComponent(conflict.id)}/resolve`,
+      {
+        body: JSON.stringify({ resolution: "disconnect-mapping" }),
+        headers: adminHeaders,
+        method: "POST"
+      }
+    );
+    const disconnected = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/linear/conflicts/${encodeURIComponent(conflict.id)}/resolve`,
+      {
+        body: JSON.stringify({ resolution: "disconnect-mapping" }),
+        headers: adminHeaders,
+        method: "POST"
+      }
+    );
+    const integrationResult = await integrationStore.load();
+    const targetMapping = integrationResult.state.mappings.find((item) => item.id === conflict.id);
+    const jiraMapping = integrationResult.state.mappings.find((item) => item.external.provider === "jira");
+
+    expect(first.status).toBe(201);
+    expect(forbidden.status).toBe(403);
+    expect(wrongProvider.status).toBe(404);
+    expect(disconnected.status).toBe(200);
+    expect(disconnected.body).toMatchObject({
+      mappingId: conflict.id,
+      provider: "linear",
+      resolution: "disconnect-mapping",
+      status: "resolved"
+    });
+    expect(targetMapping?.status).toBe("disconnected");
+    expect(jiraMapping?.status).toBe("active");
+  });
+
   it("keeps refreshable expired OAuth credentials eligible for manual sync status", async () => {
     const { url } = await startTestServer({
       auth: { adminToken: "secret", singleUserMode: false, trustProxyHeaders: true },
@@ -6479,6 +6767,28 @@ async function updateStoredRequest(
         : workspace
     )
   });
+}
+
+async function markFirstIssueMappingConflicted(
+  integrationStore: FileIntegrationStore,
+  provider: "github" | "jira" | "linear"
+) {
+  const current = await integrationStore.load();
+  const mapping = current.state.mappings.find(
+    (item) => item.external.provider === provider && item.external.type === "issue"
+  );
+
+  if (!mapping) {
+    throw new Error(`Expected ${provider} issue mapping.`);
+  }
+
+  const conflicted = { ...mapping, status: "conflicted" as const };
+  await integrationStore.replaceState({
+    ...current.state,
+    mappings: current.state.mappings.map((item) => (item.id === mapping.id ? conflicted : item))
+  });
+
+  return conflicted;
 }
 
 function cookiePair(value: string) {

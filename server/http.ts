@@ -162,6 +162,11 @@ import {
   writeBackOpenRoadRequestToProvider
 } from "./provider-writeback.js";
 import {
+  ProviderConflictResolutionError,
+  resolveProviderMappingConflict,
+  type ProviderConflictResolution
+} from "./provider-conflicts.js";
+import {
   createSafeLinearOAuthSetup,
   decodeLinearOAuthState,
   linearOAuthConfigFromEnv,
@@ -1125,6 +1130,34 @@ async function handleApiRequest(
       integrationCredentialRevokeMatch[1],
       integrationCredentialRevokeMatch[2],
       integrationCredentialRevokeMatch[3]
+    );
+    return;
+  }
+
+  const integrationConflictResolveMatch = requestUrl.pathname.match(
+    /^\/api\/openroad\/workspaces\/([^/]+)\/integrations\/([^/]+)\/conflicts\/([^/]+)\/resolve$/
+  );
+
+  if (integrationConflictResolveMatch) {
+    await handleProviderConflictResolveRequest(
+      request,
+      response,
+      store,
+      access,
+      teamStore,
+      integrationStore,
+      githubAppClient,
+      jiraApiClient,
+      jiraOAuthConfig,
+      jiraOAuthExchangeClient,
+      linearApiClient,
+      linearOAuthConfig,
+      linearOAuthExchangeClient,
+      runIntegrationMutationExclusive,
+      tokenVault,
+      integrationConflictResolveMatch[1],
+      integrationConflictResolveMatch[2],
+      integrationConflictResolveMatch[3]
     );
     return;
   }
@@ -4218,6 +4251,7 @@ async function handleIntegrationStatusRequest(
             jiraOAuthConfig,
             linearOAuthConfig,
             provider,
+            workspace,
             workspaceId
           })
         ),
@@ -4239,6 +4273,7 @@ function createIntegrationStatusProviderSummary({
   jiraOAuthConfig,
   linearOAuthConfig,
   provider,
+  workspace,
   workspaceId
 }: {
   githubAppConfig: GitHubAppConfig;
@@ -4248,6 +4283,7 @@ function createIntegrationStatusProviderSummary({
   jiraOAuthConfig: JiraOAuthConfig;
   linearOAuthConfig: LinearOAuthConfig;
   provider: IntegrationProvider;
+  workspace: Workspace;
   workspaceId: string;
 }) {
   const installations = integrationState.installations.filter(
@@ -4261,6 +4297,12 @@ function createIntegrationStatusProviderSummary({
     (mapping) => mapping.openRoad.workspaceId === workspaceId && mapping.external.provider === provider
   );
   const activeMappings = mappings.filter((mapping) => mapping.status === "active");
+  const conflictedMappings = mappings.filter((mapping) => mapping.status === "conflicted");
+  const conflicts = createIntegrationConflictSummaries({
+    conflictedMappings,
+    installations,
+    workspace
+  });
   const linkedIssueMappings = activeMappings.filter((mapping) => mapping.external.type === "issue");
   const activeCredentials = integrationState.credentials.filter(
     (credential) =>
@@ -4333,6 +4375,7 @@ function createIntegrationStatusProviderSummary({
       webhooks:
         configuredWebhookProviders.has(provider) &&
         activeInstallations.some((installation) => installation.permissions.includes("webhook:receive")),
+      resolveConflicts: conflicts.length > 0,
       writeBack: canProviderWriteBack({
         activeCredentials: activeWritableCredentials.length,
         activeInstallations: activeWritableInstallations.length,
@@ -4341,6 +4384,8 @@ function createIntegrationStatusProviderSummary({
         setupConfigured
       })
     },
+    conflictedMappings: conflictedMappings.length,
+    conflicts,
     connection,
     disconnectedAccounts: disconnectedInstallations
       .slice(0, 5)
@@ -4384,6 +4429,48 @@ function sanitizeIntegrationStatusAccount(installation: IntegrationInstallation)
     providerAccountName: installation.providerAccountName,
     status: installation.status
   };
+}
+
+function createIntegrationConflictSummaries({
+  conflictedMappings,
+  installations,
+  workspace
+}: {
+  conflictedMappings: ExternalObjectMapping[];
+  installations: IntegrationInstallation[];
+  workspace: Workspace;
+}) {
+  return conflictedMappings
+    .filter((mapping) => mapping.openRoad.type === "request" && mapping.external.type === "issue")
+    .slice(0, 5)
+    .flatMap((mapping) => {
+      const request = workspace.requests.find((item) => item.id === mapping.openRoad.id);
+      if (!request) return [];
+
+      const installation = installations.find((item) => item.id === mapping.installationId);
+
+      return [
+        {
+          connectedAt: mapping.connectedAt,
+          external: {
+            id: redactSensitiveText(mapping.external.id),
+            ...(mapping.external.key ? { key: redactSensitiveText(mapping.external.key) } : {}),
+            type: "issue" as const,
+            ...(mapping.external.url ? { url: redactSensitiveText(mapping.external.url) } : {})
+          },
+          installationId: mapping.installationId,
+          ...(mapping.lastSyncedAt ? { lastSyncedAt: mapping.lastSyncedAt } : {}),
+          mappingId: mapping.id,
+          openRoad: {
+            id: request.id,
+            status: request.status,
+            title: request.title,
+            type: "request" as const
+          },
+          providerAccountName: redactSensitiveText(installation?.providerAccountName ?? "Unknown account")
+        }
+      ];
+    });
 }
 
 function sanitizeIntegrationStatusJob(job: IntegrationSyncJob) {
@@ -4844,6 +4931,101 @@ async function handleProviderWriteBackRequest(
       {
         ...result,
         revision: auditEvent?.id ?? `integration-write-back-${Date.now()}`
+      },
+      access
+    );
+  } catch (error) {
+    writeKnownApiError(response, error, access);
+  }
+}
+
+async function handleProviderConflictResolveRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  store: OpenRoadStore,
+  access: AccessContext,
+  teamStore: TeamStore | undefined,
+  integrationStore: IntegrationStore | undefined,
+  githubAppClient: GitHubAppClient,
+  jiraApiClient: JiraApiClient,
+  jiraOAuthConfig: JiraOAuthConfig,
+  jiraOAuthExchangeClient: JiraOAuthExchangeClient,
+  linearApiClient: LinearApiClient,
+  linearOAuthConfig: LinearOAuthConfig,
+  linearOAuthExchangeClient: LinearOAuthExchangeClient,
+  runIntegrationMutationExclusive: NotificationDeliveryRunner,
+  tokenVault: IntegrationTokenVault,
+  encodedWorkspaceId: string,
+  encodedProvider: string,
+  encodedMappingId: string
+) {
+  if (request.method !== "POST") {
+    writeApiError(response, 405, "invalid_method", "This endpoint only supports POST.", access);
+    return;
+  }
+
+  const workspaceId = decodeURIComponent(encodedWorkspaceId);
+  const mappingId = decodeURIComponent(encodedMappingId);
+
+  try {
+    const provider = parseIntegrationProviderPath(encodedProvider);
+    requirePermission(access, "integration:manage", workspaceId);
+
+    if (!integrationStore) {
+      throw new ApiRequestError(
+        "not_configured",
+        503,
+        "OpenRoad integration metadata store is not configured."
+      );
+    }
+
+    const current = await store.load();
+    const workspace = current.state.workspaces.find((item) => item.id === workspaceId);
+
+    if (!workspace) {
+      throw new ApiRequestError("not_found", 404, "Workspace was not found.");
+    }
+
+    const payload = await readJsonBody(request, 4096);
+
+    if (!isRecord(payload)) {
+      throw new ApiRequestError("invalid_request", 400, "Conflict resolution payload must be an object.");
+    }
+
+    const resolution = parseConflictResolution(payload.resolution);
+    const result = await resolveProviderMappingConflict(
+      {
+        githubAppClient,
+        integrationStore,
+        jiraApiClient,
+        jiraOAuthConfig,
+        jiraOAuthExchangeClient,
+        linearApiClient,
+        linearOAuthConfig,
+        linearOAuthExchangeClient,
+        runIntegrationMutationExclusive,
+        store,
+        tokenVault
+      },
+      {
+        mappingId,
+        provider,
+        resolution,
+        workspaceId
+      }
+    );
+    const auditEvent = await recordAuditEvent(teamStore, current.state, access, {
+      summary: `Resolved ${provider} issue conflict ${mappingId} with ${resolution}.`,
+      type: "integration.conflict_resolved",
+      workspaceId
+    });
+
+    writeJson(
+      response,
+      200,
+      {
+        ...result,
+        revision: auditEvent?.id ?? `integration-conflict-resolution-${Date.now()}`
       },
       access
     );
@@ -5593,6 +5775,18 @@ function parseIntegrationProviderPath(encodedProvider: string): IntegrationProvi
   }
 
   throw new ApiRequestError("invalid_request", 400, "Integration provider is not supported.");
+}
+
+function parseConflictResolution(value: unknown): ProviderConflictResolution {
+  if (
+    value === "accept-provider" ||
+    value === "disconnect-mapping" ||
+    value === "keep-openroad"
+  ) {
+    return value;
+  }
+
+  throw new ApiRequestError("invalid_request", 400, "Conflict resolution is not supported.");
 }
 
 function parseCredentialPermissions(
@@ -8402,6 +8596,11 @@ function writeKnownApiError(
   }
 
   if (error instanceof ProviderWriteBackError) {
+    writeApiError(response, error.status, error.code, error.message, access);
+    return;
+  }
+
+  if (error instanceof ProviderConflictResolutionError) {
     writeApiError(response, error.status, error.code, error.message, access);
     return;
   }

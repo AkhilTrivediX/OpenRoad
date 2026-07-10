@@ -1,5 +1,6 @@
 import {
   Archive,
+  AlertTriangle,
   Bell,
   BookOpen,
   CheckCircle2,
@@ -132,13 +133,16 @@ import {
   disconnectProviderInstallation,
   listProviderCredentials,
   loadWorkspaceIntegrationStatus,
+  resolveProviderConflict,
   revokeProviderCredential,
   runProviderManualSync,
   storeProviderCredential,
   verifyGitHubAppInstallation,
   writeBackProviderIssue,
+  type IntegrationConflictSummary,
   type IntegrationCredentialMetadata,
   type IntegrationProviderStatus,
+  type ProviderConflictResolution,
   type WorkspaceIntegrationStatus
 } from "./persistence/openroadIntegrations";
 import {
@@ -1282,6 +1286,41 @@ export function App() {
       }
     } finally {
       setSyncingProvider(undefined);
+    }
+  }
+
+  async function resolveIntegrationConflict(
+    provider: IntegrationProviderStatus,
+    conflict: IntegrationConflictSummary,
+    resolution: ProviderConflictResolution
+  ) {
+    if (
+      integrationSetupBusy ||
+      (provider.provider !== "github" &&
+        provider.provider !== "jira" &&
+        provider.provider !== "linear")
+    ) {
+      return;
+    }
+
+    const busyKey = getConflictResolutionBusyKey(provider.provider, conflict.mappingId, resolution);
+    setIntegrationSetupBusy(busyKey);
+    setIntegrationActionMessage(getConflictResolutionProgressMessage(provider.label, resolution));
+
+    try {
+      const result = await resolveProviderConflict(
+        provider.provider,
+        workspace.id,
+        conflict.mappingId,
+        resolution
+      );
+      setIntegrationActionMessage(result.message);
+
+      if (result.status === "resolved") {
+        await refreshIntegrationWorkspaceState();
+      }
+    } finally {
+      setIntegrationSetupBusy(undefined);
     }
   }
 
@@ -5386,6 +5425,78 @@ export function App() {
                           </button>
                         </div>
 
+                        {provider.conflicts.length > 0 ? (
+                          <div
+                            className="provider-conflict-panel"
+                            aria-label={`${provider.label} sync conflicts`}
+                          >
+                            <div className="provider-conflict-heading">
+                              <AlertTriangle aria-hidden="true" size={14} />
+                              <div>
+                                <strong>
+                                  {provider.conflictedMappings} conflict
+                                  {provider.conflictedMappings === 1 ? "" : "s"}
+                                </strong>
+                                <p>Choose the source of truth for linked issue mappings.</p>
+                              </div>
+                            </div>
+
+                            <div className="provider-conflict-list">
+                              {provider.conflicts.map((conflict) => (
+                                <div className="provider-conflict-item" key={conflict.mappingId}>
+                                  <div>
+                                    <strong>{conflict.openRoad.title}</strong>
+                                    <small>
+                                      {conflict.external.key ?? conflict.external.id} -{" "}
+                                      {conflict.providerAccountName}
+                                    </small>
+                                  </div>
+                                  <div className="provider-conflict-actions">
+                                    {(["keep-openroad", "accept-provider", "disconnect-mapping"] as const).map(
+                                      (resolution) => {
+                                        const busyKey = getConflictResolutionBusyKey(
+                                          provider.provider,
+                                          conflict.mappingId,
+                                          resolution
+                                        );
+                                        const isBusy = integrationSetupBusy === busyKey;
+
+                                        return (
+                                          <button
+                                            aria-label={`${provider.label} ${getConflictResolutionLabel(
+                                              resolution
+                                            )} ${conflict.openRoad.title}`}
+                                            className="secondary-action compact provider-action"
+                                            disabled={
+                                              !canManageProvider ||
+                                              !provider.capabilities.resolveConflicts ||
+                                              Boolean(integrationSetupBusy)
+                                            }
+                                            key={resolution}
+                                            onClick={() =>
+                                              void resolveIntegrationConflict(provider, conflict, resolution)
+                                            }
+                                            type="button"
+                                          >
+                                            {resolution === "disconnect-mapping" ? (
+                                              <Unlink aria-hidden="true" size={13} />
+                                            ) : resolution === "accept-provider" ? (
+                                              <RotateCcw aria-hidden="true" size={13} />
+                                            ) : (
+                                              <CheckCircle2 aria-hidden="true" size={13} />
+                                            )}
+                                            {isBusy ? "Resolving..." : getConflictResolutionLabel(resolution)}
+                                          </button>
+                                        );
+                                      }
+                                    )}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ) : null}
+
                         <details
                           className="provider-details provider-management"
                           onToggle={(event) => {
@@ -5808,6 +5919,7 @@ function getIntegrationStatusLabel(status: WorkspaceIntegrationStatus) {
 }
 
 function getProviderTone(provider: IntegrationProviderStatus) {
+  if (provider.conflictedMappings > 0) return "warning";
   if (provider.connection === "connected") return "success";
   if (provider.connection === "attention") return "warning";
   if (provider.connection === "ready") return "info";
@@ -5815,13 +5927,41 @@ function getProviderTone(provider: IntegrationProviderStatus) {
 }
 
 function getProviderConnectionLabel(provider: IntegrationProviderStatus) {
+  if (provider.conflictedMappings > 0) return "Needs review";
   if (provider.connection === "connected") return "Connected";
   if (provider.connection === "attention") return "Needs review";
   if (provider.connection === "ready") return "Ready";
   return "Optional";
 }
 
+function getConflictResolutionBusyKey(
+  provider: IntegrationProviderId,
+  mappingId: string,
+  resolution: ProviderConflictResolution
+) {
+  return `${provider}:conflict:${mappingId}:${resolution}`;
+}
+
+function getConflictResolutionLabel(resolution: ProviderConflictResolution) {
+  if (resolution === "accept-provider") return "Accept provider";
+  if (resolution === "disconnect-mapping") return "Disconnect";
+  return "Keep OpenRoad";
+}
+
+function getConflictResolutionProgressMessage(
+  providerLabel: string,
+  resolution: ProviderConflictResolution
+) {
+  if (resolution === "accept-provider") return `Accepting ${providerLabel} issue...`;
+  if (resolution === "disconnect-mapping") return `Disconnecting ${providerLabel} mapping...`;
+  return `Keeping OpenRoad request for ${providerLabel} conflict...`;
+}
+
 function getProviderMetric(provider: IntegrationProviderStatus) {
+  if (provider.conflictedMappings > 0) {
+    return `${provider.conflictedMappings} conflict${provider.conflictedMappings === 1 ? "" : "s"} need review`;
+  }
+
   const linked =
     provider.linkedIssueMappings > 0
       ? `${provider.linkedIssueMappings} linked issue${provider.linkedIssueMappings === 1 ? "" : "s"}`

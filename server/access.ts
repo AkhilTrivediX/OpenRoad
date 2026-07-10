@@ -312,6 +312,12 @@ export const routeProtections: RouteProtection[] = [
   },
   {
     methods: ["POST"],
+    path: "/api/openroad/workspaces/:workspaceId/integrations/:provider/conflicts/:mappingId/resolve",
+    permission: "integration:manage",
+    scope: "workspace"
+  },
+  {
+    methods: ["POST"],
     path: "/api/openroad/workspaces/:workspaceId/integrations/:provider/sync/jobs",
     permission: "integration:manage",
     scope: "workspace"

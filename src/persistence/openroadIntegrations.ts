@@ -31,6 +31,26 @@ export type IntegrationStatusAccountSummary = {
   status: "active" | "disconnected" | "suspended";
 };
 
+export type IntegrationConflictSummary = {
+  connectedAt: string;
+  external: {
+    id: string;
+    key?: string;
+    type: "issue";
+    url?: string;
+  };
+  installationId: string;
+  lastSyncedAt?: string;
+  mappingId: string;
+  openRoad: {
+    id: string;
+    status: string;
+    title: string;
+    type: "request";
+  };
+  providerAccountName: string;
+};
+
 export type IntegrationProviderStatus = {
   accounts: IntegrationStatusAccountSummary[];
   activeCredentials: number;
@@ -40,10 +60,13 @@ export type IntegrationProviderStatus = {
     import: boolean;
     liveSync: boolean;
     manualSync: boolean;
+    resolveConflicts: boolean;
     setup: boolean;
     webhooks: boolean;
     writeBack: boolean;
   };
+  conflictedMappings: number;
+  conflicts: IntegrationConflictSummary[];
   connection: IntegrationConnectionState;
   disconnectedAccounts: IntegrationStatusAccountSummary[];
   label: string;
@@ -94,6 +117,25 @@ export type ProviderWriteBackResult = {
   requestId?: string;
   status: "forbidden" | "unavailable" | "written";
   writtenAt?: string;
+};
+
+export type ProviderConflictResolution = "accept-provider" | "disconnect-mapping" | "keep-openroad";
+
+export type ProviderConflictResolutionResult = {
+  external?: {
+    id: string;
+    key?: string;
+    type: "issue";
+    url?: string;
+  };
+  installationId?: string;
+  mappingId?: string;
+  message: string;
+  provider: IntegrationProvider;
+  requestId?: string;
+  resolution: ProviderConflictResolution;
+  resolvedAt?: string;
+  status: "forbidden" | "resolved" | "unavailable";
 };
 
 export type IntegrationCredentialSecretType = "access-token" | "refresh-token";
@@ -187,10 +229,13 @@ export function createStandaloneIntegrationStatus(
         import: false,
         liveSync: false,
         manualSync: false,
+        resolveConflicts: false,
         setup: false,
         webhooks: false,
         writeBack: false
       },
+      conflictedMappings: 0,
+      conflicts: [],
       connection: "optional",
       disconnectedAccounts: [],
       label: providerLabels[provider],
@@ -368,6 +413,43 @@ export async function writeBackProviderIssue(
     requestId: getRecordIdentifier(result.payload, "requestId") ?? requestId,
     status: "written",
     writtenAt: getRecordText(result.payload, "writtenAt")
+  };
+}
+
+export async function resolveProviderConflict(
+  provider: Extract<IntegrationProvider, "github" | "jira" | "linear">,
+  workspaceId: string,
+  mappingId: string,
+  resolution: ProviderConflictResolution,
+  fetchImpl: typeof fetch = fetch
+): Promise<ProviderConflictResolutionResult> {
+  const result = await postJsonSafely(
+    `/api/openroad/workspaces/${encodeURIComponent(workspaceId)}/integrations/${provider}/conflicts/${encodeURIComponent(mappingId)}/resolve`,
+    { resolution },
+    fetchImpl
+  );
+
+  if (!result.ok) {
+    return {
+      message: safeIntegrationErrorMessage(result.status, result.payload),
+      provider,
+      resolution,
+      status: result.status === 403 ? "forbidden" : "unavailable"
+    };
+  }
+
+  return {
+    external: parseIssueExternal(result.payload),
+    installationId: getRecordIdentifier(result.payload, "installationId"),
+    mappingId: getRecordIdentifier(result.payload, "mappingId") ?? mappingId,
+    message:
+      getRecordText(result.payload, "message") ??
+      `${providerLabels[provider]} conflict resolved.`,
+    provider,
+    requestId: getRecordIdentifier(result.payload, "requestId"),
+    resolution: parseConflictResolutionValue(result.payload, resolution),
+    resolvedAt: getRecordText(result.payload, "resolvedAt"),
+    status: "resolved"
   };
 }
 
@@ -670,6 +752,12 @@ function parseProviderStatus(value: unknown): IntegrationProviderStatus | undefi
     activeCredentials: getRecordNumber(value, "activeCredentials"),
     activeInstallations: getRecordNumber(value, "activeInstallations"),
     capabilities: parseCapabilities(value.capabilities),
+    conflictedMappings: getRecordNumber(value, "conflictedMappings"),
+    conflicts: Array.isArray(value.conflicts)
+      ? value.conflicts
+          .map(parseIntegrationConflictSummary)
+          .filter((conflict): conflict is IntegrationConflictSummary => Boolean(conflict))
+      : [],
     connection: getConnection(value.connection),
     disconnectedAccounts: Array.isArray(value.disconnectedAccounts)
       ? value.disconnectedAccounts
@@ -852,13 +940,57 @@ function parseCapabilities(value: unknown): IntegrationProviderStatus["capabilit
     import: getRecordBoolean(record, "import"),
     liveSync: getRecordBoolean(record, "liveSync"),
     manualSync: getRecordBoolean(record, "manualSync"),
+    resolveConflicts: getRecordBoolean(record, "resolveConflicts"),
     setup: getRecordBoolean(record, "setup"),
     webhooks: getRecordBoolean(record, "webhooks"),
     writeBack: getRecordBoolean(record, "writeBack")
   };
 }
 
+function parseIntegrationConflictSummary(value: unknown): IntegrationConflictSummary | undefined {
+  if (!isRecord(value) || !isRecord(value.external) || !isRecord(value.openRoad)) return undefined;
+
+  const connectedAt = getRecordText(value, "connectedAt");
+  const externalId = getRecordIdentifier(value.external, "id");
+  const installationId = getRecordIdentifier(value, "installationId");
+  const mappingId = getRecordIdentifier(value, "mappingId");
+  const requestId = getRecordIdentifier(value.openRoad, "id");
+  const requestTitle = getRecordText(value.openRoad, "title");
+
+  if (!connectedAt || !externalId || !installationId || !mappingId || !requestId || !requestTitle) {
+    return undefined;
+  }
+
+  return {
+    connectedAt,
+    external: {
+      id: externalId,
+      key: getRecordText(value.external, "key"),
+      type: "issue",
+      url: getRecordText(value.external, "url")
+    },
+    installationId,
+    lastSyncedAt: getRecordText(value, "lastSyncedAt"),
+    mappingId,
+    openRoad: {
+      id: requestId,
+      status: getRecordText(value.openRoad, "status") ?? "Unknown",
+      title: requestTitle,
+      type: "request"
+    },
+    providerAccountName: getRecordText(value, "providerAccountName") ?? "Unknown account"
+  };
+}
+
 function parseWriteBackExternal(value: unknown): ProviderWriteBackResult["external"] {
+  return parseIssueExternal(value);
+}
+
+function parseConflictResolutionExternal(value: unknown): ProviderConflictResolutionResult["external"] {
+  return parseIssueExternal(value);
+}
+
+function parseIssueExternal(value: unknown) {
   const external = isRecord(value) && isRecord(value.external) ? value.external : undefined;
   if (!external) return undefined;
 
@@ -869,9 +1001,21 @@ function parseWriteBackExternal(value: unknown): ProviderWriteBackResult["extern
   return {
     id,
     key: getRecordText(external, "key"),
-    type,
+    type: "issue" as const,
     url: getRecordText(external, "url")
   };
+}
+
+function parseConflictResolutionValue(
+  value: unknown,
+  fallback: ProviderConflictResolution
+): ProviderConflictResolution {
+  const resolution = isRecord(value) ? value.resolution : undefined;
+  return resolution === "accept-provider" ||
+    resolution === "disconnect-mapping" ||
+    resolution === "keep-openroad"
+    ? resolution
+    : fallback;
 }
 
 function mergeProviderFallbacks(

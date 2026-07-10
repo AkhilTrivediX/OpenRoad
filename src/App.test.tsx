@@ -417,6 +417,79 @@ describe("OpenRoad workspace shell", () => {
     expect(document.body.textContent).not.toContain("installation-token");
   });
 
+  it("connects, stores credentials, and disconnects providers from Settings", async () => {
+    vi.stubEnv("VITE_OPENROAD_SERVER_SYNC", "on");
+    const fetchMock = createSettingsProviderSetupFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    expect(await screen.findByText("Server metadata")).toBeInTheDocument();
+    const linearHeading = screen.getByRole("heading", { name: "Linear" });
+    const linearRow = linearHeading.closest("article");
+    expect(linearRow).not.toBeNull();
+
+    await user.click(within(linearRow as HTMLElement).getByText("Manage connection"));
+    await user.type(within(linearRow as HTMLElement).getByLabelText("Linear installation id"), "manual-linear");
+    await user.type(within(linearRow as HTMLElement).getByLabelText("Linear account id"), "linear-team");
+    await user.type(within(linearRow as HTMLElement).getByLabelText("Linear account name"), "Linear Team");
+    await user.click(within(linearRow as HTMLElement).getByRole("button", { name: "Connect" }));
+
+    expect(await screen.findByText("Linear connection is active.")).toBeInTheDocument();
+
+    const connectedLinearRow = screen.getByRole("heading", { name: "Linear" }).closest("article");
+    expect(connectedLinearRow).not.toBeNull();
+    const accessTokenInput = within(connectedLinearRow as HTMLElement).getByLabelText(
+      "Linear access token"
+    ) as HTMLInputElement;
+
+    await user.type(accessTokenInput, "linear-access-secret");
+    await user.type(
+      within(connectedLinearRow as HTMLElement).getByLabelText("Linear refresh token"),
+      "linear-refresh-secret"
+    );
+    await user.type(
+      within(connectedLinearRow as HTMLElement).getByLabelText("Linear credential label"),
+      "Production"
+    );
+    await user.click(within(connectedLinearRow as HTMLElement).getByRole("button", { name: "Store" }));
+
+    expect(await screen.findByText("Linear credential stored server-side.")).toBeInTheDocument();
+    expect(accessTokenInput.value).toBe("");
+    expect(document.body.textContent).not.toContain("linear-access-secret");
+    expect(document.body.textContent).not.toContain("linear-refresh-secret");
+
+    const storedLinearRow = screen.getByRole("heading", { name: "Linear" }).closest("article");
+    expect(storedLinearRow).not.toBeNull();
+    expect(within(storedLinearRow as HTMLElement).getByText("Production")).toBeInTheDocument();
+
+    await user.click(
+      within(storedLinearRow as HTMLElement).getByRole("button", {
+        name: "Linear disconnect account"
+      })
+    );
+
+    expect(await screen.findByText("Linear connection disconnected.")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/openroad/workspaces/acme/integrations/linear/installations",
+      expect.objectContaining({ credentials: "same-origin", method: "POST" })
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/openroad/workspaces/acme/integrations/linear/credentials",
+      expect.objectContaining({
+        body: expect.stringContaining("linear-access-secret"),
+        credentials: "same-origin",
+        method: "POST"
+      })
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/openroad/workspaces/acme/integrations/linear/installations/manual-linear/disconnect",
+      expect.objectContaining({ credentials: "same-origin", method: "POST" })
+    );
+    expect(document.body.textContent).not.toContain("ciphertext");
+  });
+
   it("runs GitHub manual sync from Settings when the server reports support", async () => {
     vi.stubEnv("VITE_OPENROAD_SERVER_SYNC", "on");
     const fetchMock = createSettingsIntegrationFetchMock();
@@ -2070,6 +2143,255 @@ function createSettingsIntegrationFetchMock(options: { jiraReady?: boolean; line
         claimed: 1,
         processed: [{ id: "sync-job-1", kind: "success", status: "succeeded" }],
         status: "processed"
+      });
+    }
+
+    return jsonResponse({ error: { message: "Unhandled test request." } }, 404);
+  });
+}
+
+function createSettingsProviderSetupFetchMock() {
+  const state = createInitialOpenRoadState();
+  let linearInstallation:
+    | {
+        createdAt: string;
+        id: string;
+        permissions: string[];
+        provider: "linear";
+        providerAccountId: string;
+        providerAccountName: string;
+        status: "active" | "disconnected";
+        workspaceId: string;
+      }
+    | undefined;
+  let credentials: Array<{
+    createdAt: string;
+    id: string;
+    installationId: string;
+    label?: string;
+    permissions: string[];
+    provider: "linear";
+    providerScopes: string[];
+    revokedAt?: string;
+    secretTypes: string[];
+    status: "active" | "revoked";
+    updatedAt: string;
+    workspaceId: string;
+  }> = [];
+
+  return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input.toString();
+    const method = init?.method ?? "GET";
+    const activeLinear = linearInstallation?.status === "active" ? linearInstallation : undefined;
+    const disconnectedLinear =
+      linearInstallation?.status === "disconnected" ? linearInstallation : undefined;
+
+    if (url === "/api/openroad/state") {
+      return jsonResponse({
+        state,
+        status: method === "PUT" ? "saved" : "ready"
+      });
+    }
+
+    if (url === "/api/openroad/workspaces/acme/invitations") {
+      return jsonResponse({ invitations: [] });
+    }
+
+    if (url === "/api/openroad/workspaces/acme/members") {
+      return jsonResponse({ members: [] });
+    }
+
+    if (url === "/api/openroad/workspaces/acme/integrations/status") {
+      return jsonResponse({
+        integrationMetadata: {
+          recovered: false,
+          schemaVersion: 3,
+          status: "ready"
+        },
+        providers: [
+          {
+            accounts: [],
+            activeCredentials: 0,
+            activeInstallations: 0,
+            capabilities: {
+              disconnect: false,
+              import: false,
+              liveSync: false,
+              manualSync: false,
+              setup: true,
+              webhooks: false
+            },
+            connection: "ready",
+            disconnectedAccounts: [],
+            label: "GitHub",
+            linkedIssueMappings: 0,
+            linkedMappings: 0,
+            provider: "github",
+            queuedSyncJobs: 0,
+            recentJobs: [],
+            runningSyncJobs: 0,
+            setupConfigured: true,
+            statusText: "Ready. Verify a GitHub App installation to connect.",
+            syncWorkerConfigured: false,
+            totalInstallations: 0
+          },
+          {
+            accounts: activeLinear
+              ? [
+                  {
+                    createdAt: activeLinear.createdAt,
+                    id: activeLinear.id,
+                    providerAccountName: activeLinear.providerAccountName,
+                    status: activeLinear.status
+                  }
+                ]
+              : [],
+            activeCredentials: credentials.filter((credential) => credential.status === "active").length,
+            activeInstallations: activeLinear ? 1 : 0,
+            capabilities: {
+              disconnect: Boolean(activeLinear),
+              import: Boolean(activeLinear),
+              liveSync: Boolean(activeLinear),
+              manualSync: false,
+              setup: false,
+              webhooks: false
+            },
+            connection: activeLinear ? "connected" : "optional",
+            disconnectedAccounts: disconnectedLinear
+              ? [
+                  {
+                    createdAt: disconnectedLinear.createdAt,
+                    id: disconnectedLinear.id,
+                    providerAccountName: disconnectedLinear.providerAccountName,
+                    status: disconnectedLinear.status
+                  }
+                ]
+              : [],
+            label: "Linear",
+            linkedIssueMappings: 0,
+            linkedMappings: 0,
+            provider: "linear",
+            queuedSyncJobs: 0,
+            recentJobs: [],
+            runningSyncJobs: 0,
+            setupConfigured: false,
+            statusText: activeLinear ? "Connected." : "Optional. Server setup is not configured yet.",
+            syncWorkerConfigured: Boolean(activeLinear),
+            totalInstallations: linearInstallation ? 1 : 0
+          },
+          {
+            accounts: [],
+            activeCredentials: 0,
+            activeInstallations: 0,
+            capabilities: {
+              disconnect: false,
+              import: false,
+              liveSync: false,
+              manualSync: false,
+              setup: false,
+              webhooks: false
+            },
+            connection: "optional",
+            disconnectedAccounts: [],
+            label: "Jira",
+            linkedIssueMappings: 0,
+            linkedMappings: 0,
+            provider: "jira",
+            queuedSyncJobs: 0,
+            recentJobs: [],
+            runningSyncJobs: 0,
+            setupConfigured: false,
+            statusText: "Optional. Server setup is not configured yet.",
+            syncWorkerConfigured: false,
+            totalInstallations: 0
+          }
+        ],
+        status: "ready",
+        workspaceId: "acme"
+      });
+    }
+
+    if (url === "/api/openroad/workspaces/acme/integrations/linear/credentials" && method === "GET") {
+      return jsonResponse({
+        credentials,
+        status: "listed"
+      });
+    }
+
+    if (url === "/api/openroad/workspaces/acme/integrations/linear/installations" && method === "POST") {
+      const body = JSON.parse(String(init?.body ?? "{}")) as {
+        installationId: string;
+        providerAccountId: string;
+        providerAccountName: string;
+      };
+      linearInstallation = {
+        createdAt: "2026-07-04T00:00:00Z",
+        id: body.installationId,
+        permissions: ["read:external", "read:openroad", "write:openroad"],
+        provider: "linear",
+        providerAccountId: body.providerAccountId,
+        providerAccountName: body.providerAccountName,
+        status: "active",
+        workspaceId: "acme"
+      };
+      return jsonResponse(
+        {
+          installation: linearInstallation,
+          status: "connected"
+        },
+        201
+      );
+    }
+
+    if (url === "/api/openroad/workspaces/acme/integrations/linear/credentials" && method === "POST") {
+      const body = JSON.parse(String(init?.body ?? "{}")) as {
+        installationId: string;
+        label?: string;
+        providerScopes?: string[];
+        refreshToken?: string;
+      };
+      credentials = [
+        {
+          createdAt: "2026-07-04T00:01:00Z",
+          id: "credential-linear",
+          installationId: body.installationId,
+          label: body.label,
+          permissions: ["read:external"],
+          provider: "linear",
+          providerScopes: body.providerScopes ?? [],
+          secretTypes: body.refreshToken ? ["access-token", "refresh-token"] : ["access-token"],
+          status: "active",
+          updatedAt: "2026-07-04T00:01:00Z",
+          workspaceId: "acme"
+        }
+      ];
+      return jsonResponse(
+        {
+          credential: credentials[0],
+          status: "stored"
+        },
+        201
+      );
+    }
+
+    if (
+      url === "/api/openroad/workspaces/acme/integrations/linear/installations/manual-linear/disconnect" &&
+      method === "POST"
+    ) {
+      if (linearInstallation) {
+        linearInstallation = { ...linearInstallation, status: "disconnected" };
+      }
+      credentials = credentials.map((credential) => ({
+        ...credential,
+        revokedAt: "2026-07-04T00:02:00Z",
+        status: "revoked",
+        updatedAt: "2026-07-04T00:02:00Z"
+      }));
+      return jsonResponse({
+        changed: true,
+        installation: linearInstallation,
+        revokedCredentials: 1,
+        status: "disconnected"
       });
     }
 

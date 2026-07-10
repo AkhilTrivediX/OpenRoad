@@ -1,4 +1,8 @@
-import type { IntegrationProvider } from "../integrations/adapter";
+import type {
+  IntegrationInstallation,
+  IntegrationPermission,
+  IntegrationProvider
+} from "../integrations/adapter";
 
 export type IntegrationConnectionState = "attention" | "connected" | "optional" | "ready";
 export type IntegrationStatusState = "forbidden" | "ready" | "unavailable";
@@ -40,6 +44,7 @@ export type IntegrationProviderStatus = {
     webhooks: boolean;
   };
   connection: IntegrationConnectionState;
+  disconnectedAccounts: IntegrationStatusAccountSummary[];
   label: string;
   lastJobStatus?: IntegrationStatusJobSummary["status"];
   lastJobUpdatedAt?: string;
@@ -74,11 +79,81 @@ export type ProviderManualSyncResult = {
   status: "deduped" | "failed" | "forbidden" | "queued" | "succeeded" | "unavailable";
 };
 
+export type IntegrationCredentialSecretType = "access-token" | "refresh-token";
+
+export type IntegrationCredentialMetadata = {
+  createdAt: string;
+  expiresAt?: string;
+  id: string;
+  installationId: string;
+  label?: string;
+  permissions: IntegrationPermission[];
+  provider: IntegrationProvider;
+  providerScopes: string[];
+  revokedAt?: string;
+  secretTypes: IntegrationCredentialSecretType[];
+  status: "active" | "revoked";
+  tokenType?: string;
+  updatedAt: string;
+  workspaceId: string;
+};
+
+export type ProviderInstallationInput = {
+  installationId: string;
+  permissions?: IntegrationPermission[];
+  providerAccountId: string;
+  providerAccountName: string;
+};
+
+export type ProviderCredentialInput = {
+  accessToken: string;
+  expiresAt?: string;
+  installationId: string;
+  label?: string;
+  permissions?: IntegrationPermission[];
+  providerScopes?: string[];
+  refreshToken?: string;
+  tokenType?: string;
+};
+
+export type ProviderSetupResult = {
+  changed?: boolean;
+  credential?: IntegrationCredentialMetadata;
+  credentials?: IntegrationCredentialMetadata[];
+  installation?: IntegrationInstallation;
+  installations?: IntegrationInstallation[];
+  message: string;
+  provider: IntegrationProvider;
+  revokedCredentials?: number;
+  status:
+    | "connected"
+    | "disconnected"
+    | "forbidden"
+    | "listed"
+    | "revoked"
+    | "stored"
+    | "unavailable"
+    | "verified";
+};
+
 const providerLabels: Record<IntegrationProvider, string> = {
   github: "GitHub",
   jira: "Jira",
   linear: "Linear"
 };
+
+const integrationPermissionValues: IntegrationPermission[] = [
+  "read:external",
+  "write:external",
+  "read:openroad",
+  "write:openroad",
+  "webhook:receive"
+];
+
+const credentialSecretTypeValues: IntegrationCredentialSecretType[] = [
+  "access-token",
+  "refresh-token"
+];
 
 export function createStandaloneIntegrationStatus(
   workspaceId: string,
@@ -99,6 +174,7 @@ export function createStandaloneIntegrationStatus(
         webhooks: false
       },
       connection: "optional",
+      disconnectedAccounts: [],
       label: providerLabels[provider],
       linkedIssueMappings: 0,
       linkedMappings: 0,
@@ -125,7 +201,7 @@ export async function loadWorkspaceIntegrationStatus(
   try {
     response = await fetchImpl(
       `/api/openroad/workspaces/${encodeURIComponent(workspaceId)}/integrations/status`,
-      { headers: { Accept: "application/json" } }
+      { credentials: "same-origin", headers: { Accept: "application/json" } }
     );
   } catch {
     return createStandaloneIntegrationStatus(
@@ -140,7 +216,7 @@ export async function loadWorkspaceIntegrationStatus(
     return createUnavailableIntegrationStatus(
       workspaceId,
       response.status === 403 ? "forbidden" : "unavailable",
-      safeIntegrationErrorMessage(response.status, payload)
+      safeIntegrationErrorMessage(response.status, payload, "status")
     );
   }
 
@@ -241,6 +317,183 @@ export function runGitHubManualSync(
   return runProviderManualSync("github", workspaceId, installationId, fetchImpl);
 }
 
+export async function listProviderInstallations(
+  provider: IntegrationProvider,
+  workspaceId: string,
+  fetchImpl: typeof fetch = fetch
+): Promise<ProviderSetupResult> {
+  const result = await getJsonSafely(
+    providerWorkspaceUrl(workspaceId, provider, "installations"),
+    fetchImpl
+  );
+
+  if (!result.ok) {
+    return providerActionFailure(provider, result.status, result.payload);
+  }
+
+  const installations = parseInstallationList(result.payload);
+
+  return {
+    installations,
+    message: `${providerLabels[provider]} connection metadata loaded.`,
+    provider,
+    status: "listed"
+  };
+}
+
+export async function createProviderInstallation(
+  provider: IntegrationProvider,
+  workspaceId: string,
+  input: ProviderInstallationInput,
+  fetchImpl: typeof fetch = fetch
+): Promise<ProviderSetupResult> {
+  const result = await postJsonSafely(
+    providerWorkspaceUrl(workspaceId, provider, "installations"),
+    compactBody(input),
+    fetchImpl
+  );
+
+  if (!result.ok) {
+    return providerActionFailure(provider, result.status, result.payload);
+  }
+
+  return {
+    installation: parseInstallationFromPayload(result.payload),
+    message: `${providerLabels[provider]} connection is active.`,
+    provider,
+    status: "connected"
+  };
+}
+
+export async function verifyGitHubAppInstallation(
+  workspaceId: string,
+  installationId: string,
+  fetchImpl: typeof fetch = fetch
+): Promise<ProviderSetupResult> {
+  const result = await postJsonSafely(
+    `/api/openroad/workspaces/${encodeURIComponent(
+      workspaceId
+    )}/integrations/github/app/installations/verify`,
+    { installationId },
+    fetchImpl
+  );
+
+  if (!result.ok) {
+    return providerActionFailure("github", result.status, result.payload);
+  }
+
+  return {
+    installation: parseInstallationFromPayload(result.payload),
+    message: "GitHub App installation verified.",
+    provider: "github",
+    status: "verified"
+  };
+}
+
+export async function disconnectProviderInstallation(
+  provider: IntegrationProvider,
+  workspaceId: string,
+  installationId: string,
+  fetchImpl: typeof fetch = fetch
+): Promise<ProviderSetupResult> {
+  const result = await postJsonSafely(
+    providerWorkspaceUrl(
+      workspaceId,
+      provider,
+      `installations/${encodeURIComponent(installationId)}/disconnect`
+    ),
+    {},
+    fetchImpl
+  );
+
+  if (!result.ok) {
+    return providerActionFailure(provider, result.status, result.payload);
+  }
+
+  return {
+    changed: getRecordBoolean(result.payload, "changed"),
+    installation: parseInstallationFromPayload(result.payload),
+    message: `${providerLabels[provider]} connection disconnected.`,
+    provider,
+    revokedCredentials: getRecordNumber(result.payload, "revokedCredentials"),
+    status: "disconnected"
+  };
+}
+
+export async function listProviderCredentials(
+  provider: IntegrationProvider,
+  workspaceId: string,
+  fetchImpl: typeof fetch = fetch
+): Promise<ProviderSetupResult> {
+  const result = await getJsonSafely(
+    providerWorkspaceUrl(workspaceId, provider, "credentials"),
+    fetchImpl
+  );
+
+  if (!result.ok) {
+    return providerActionFailure(provider, result.status, result.payload);
+  }
+
+  return {
+    credentials: parseCredentialList(result.payload),
+    message: `${providerLabels[provider]} credential metadata loaded.`,
+    provider,
+    status: "listed"
+  };
+}
+
+export async function storeProviderCredential(
+  provider: IntegrationProvider,
+  workspaceId: string,
+  input: ProviderCredentialInput,
+  fetchImpl: typeof fetch = fetch
+): Promise<ProviderSetupResult> {
+  const result = await postJsonSafely(
+    providerWorkspaceUrl(workspaceId, provider, "credentials"),
+    compactBody(input),
+    fetchImpl
+  );
+
+  if (!result.ok) {
+    return providerActionFailure(provider, result.status, result.payload);
+  }
+
+  return {
+    credential: parseCredentialFromPayload(result.payload),
+    message: `${providerLabels[provider]} credential stored server-side.`,
+    provider,
+    status: "stored"
+  };
+}
+
+export async function revokeProviderCredential(
+  provider: IntegrationProvider,
+  workspaceId: string,
+  credentialId: string,
+  fetchImpl: typeof fetch = fetch
+): Promise<ProviderSetupResult> {
+  const result = await postJsonSafely(
+    providerWorkspaceUrl(
+      workspaceId,
+      provider,
+      `credentials/${encodeURIComponent(credentialId)}/revoke`
+    ),
+    {},
+    fetchImpl
+  );
+
+  if (!result.ok) {
+    return providerActionFailure(provider, result.status, result.payload);
+  }
+
+  return {
+    credential: parseCredentialFromPayload(result.payload),
+    message: `${providerLabels[provider]} credential revoked.`,
+    provider,
+    status: "revoked"
+  };
+}
+
 function parseWorkspaceIntegrationStatus(
   value: unknown,
   workspaceId: string
@@ -257,7 +510,7 @@ function parseWorkspaceIntegrationStatus(
     integrationMetadata: parseIntegrationMetadata(value.integrationMetadata),
     providers: mergeProviderFallbacks(workspaceId, providers),
     status: "ready",
-    workspaceId: getRecordText(value, "workspaceId") ?? workspaceId
+    workspaceId: getRecordIdentifier(value, "workspaceId") ?? workspaceId
   };
 }
 
@@ -275,6 +528,7 @@ async function postJsonSafely(
         Accept: "application/json",
         "Content-Type": "application/json"
       },
+      credentials: "same-origin",
       method: "POST"
     });
   } catch {
@@ -285,6 +539,58 @@ async function postJsonSafely(
     ok: response.ok,
     payload: await readJsonSafely(response),
     status: response.status
+  };
+}
+
+async function getJsonSafely(url: string, fetchImpl: typeof fetch) {
+  let response: Response;
+
+  try {
+    response = await fetchImpl(url, {
+      credentials: "same-origin",
+      headers: { Accept: "application/json" }
+    });
+  } catch {
+    return { ok: false, payload: undefined, status: 0 };
+  }
+
+  return {
+    ok: response.ok,
+    payload: await readJsonSafely(response),
+    status: response.status
+  };
+}
+
+function providerWorkspaceUrl(
+  workspaceId: string,
+  provider: IntegrationProvider,
+  path: string
+) {
+  return `/api/openroad/workspaces/${encodeURIComponent(
+    workspaceId
+  )}/integrations/${provider}/${path}`;
+}
+
+function compactBody(value: Record<string, unknown>) {
+  return Object.fromEntries(
+    Object.entries(value).filter(([, entry]) => {
+      if (entry === undefined || entry === null) return false;
+      if (typeof entry === "string") return Boolean(entry.trim());
+      if (Array.isArray(entry)) return entry.length > 0;
+      return true;
+    })
+  );
+}
+
+function providerActionFailure(
+  provider: IntegrationProvider,
+  status: number,
+  payload: unknown
+): ProviderSetupResult {
+  return {
+    message: safeIntegrationErrorMessage(status, payload, "action"),
+    provider,
+    status: status === 403 ? "forbidden" : "unavailable"
   };
 }
 
@@ -311,6 +617,11 @@ function parseProviderStatus(value: unknown): IntegrationProviderStatus | undefi
     activeInstallations: getRecordNumber(value, "activeInstallations"),
     capabilities: parseCapabilities(value.capabilities),
     connection: getConnection(value.connection),
+    disconnectedAccounts: Array.isArray(value.disconnectedAccounts)
+      ? value.disconnectedAccounts
+          .map(parseAccountSummary)
+          .filter((account): account is IntegrationStatusAccountSummary => Boolean(account))
+      : [],
     label: getRecordText(value, "label") ?? providerLabels[provider],
     lastJobStatus: getJobStatus(value.lastJobStatus),
     lastJobUpdatedAt: getRecordText(value, "lastJobUpdatedAt"),
@@ -344,7 +655,7 @@ function parseIntegrationMetadata(value: unknown): WorkspaceIntegrationStatus["i
 
 function parseAccountSummary(value: unknown): IntegrationStatusAccountSummary | undefined {
   if (!isRecord(value)) return undefined;
-  const id = getRecordText(value, "id");
+  const id = getRecordIdentifier(value, "id");
   const providerAccountName = getRecordText(value, "providerAccountName");
   const status = getInstallationStatus(value.status);
   if (!id || !providerAccountName || !status) return undefined;
@@ -356,10 +667,107 @@ function parseAccountSummary(value: unknown): IntegrationStatusAccountSummary | 
   };
 }
 
+function parseInstallationList(value: unknown) {
+  const installations = isRecord(value) && Array.isArray(value.installations) ? value.installations : [];
+  return installations
+    .map(parseInstallation)
+    .filter((installation): installation is IntegrationInstallation => Boolean(installation));
+}
+
+function parseInstallationFromPayload(value: unknown) {
+  return isRecord(value) ? parseInstallation(value.installation) : undefined;
+}
+
+function parseInstallation(value: unknown): IntegrationInstallation | undefined {
+  if (!isRecord(value)) return undefined;
+  const id = getRecordIdentifier(value, "id");
+  const provider = getProvider(value.provider);
+  const providerAccountId = getRecordIdentifier(value, "providerAccountId");
+  const providerAccountName = getRecordText(value, "providerAccountName");
+  const status = getInstallationStatus(value.status);
+  const workspaceId = getRecordIdentifier(value, "workspaceId");
+
+  if (!id || !provider || !providerAccountId || !providerAccountName || !status || !workspaceId) {
+    return undefined;
+  }
+
+  return {
+    createdAt: getRecordText(value, "createdAt") ?? "",
+    id,
+    permissions: parsePermissionList(value.permissions),
+    provider,
+    providerAccountId,
+    providerAccountName,
+    status,
+    workspaceId
+  };
+}
+
+function parseCredentialList(value: unknown) {
+  const credentials = isRecord(value) && Array.isArray(value.credentials) ? value.credentials : [];
+  return credentials
+    .map(parseCredentialMetadata)
+    .filter((credential): credential is IntegrationCredentialMetadata => Boolean(credential));
+}
+
+function parseCredentialFromPayload(value: unknown) {
+  return isRecord(value) ? parseCredentialMetadata(value.credential) : undefined;
+}
+
+function parseCredentialMetadata(value: unknown): IntegrationCredentialMetadata | undefined {
+  if (!isRecord(value)) return undefined;
+  const id = getRecordIdentifier(value, "id");
+  const installationId = getRecordIdentifier(value, "installationId");
+  const provider = getProvider(value.provider);
+  const status = getCredentialStatus(value.status);
+  const workspaceId = getRecordIdentifier(value, "workspaceId");
+
+  if (!id || !installationId || !provider || !status || !workspaceId) return undefined;
+
+  return {
+    createdAt: getRecordText(value, "createdAt") ?? "",
+    expiresAt: getRecordText(value, "expiresAt"),
+    id,
+    installationId,
+    label: getRecordText(value, "label"),
+    permissions: parsePermissionList(value.permissions),
+    provider,
+    providerScopes: parseTextList(value.providerScopes),
+    revokedAt: getRecordText(value, "revokedAt"),
+    secretTypes: parseSecretTypeList(value.secretTypes),
+    status,
+    tokenType: getRecordText(value, "tokenType"),
+    updatedAt: getRecordText(value, "updatedAt") ?? "",
+    workspaceId
+  };
+}
+
+function parsePermissionList(value: unknown): IntegrationPermission[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map(getPermission)
+    .filter((permission): permission is IntegrationPermission => Boolean(permission));
+}
+
+function parseSecretTypeList(value: unknown): IntegrationCredentialSecretType[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map(getCredentialSecretType)
+    .filter((secretType): secretType is IntegrationCredentialSecretType => Boolean(secretType));
+}
+
+function parseTextList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    const text = typeof item === "string" ? redactSensitiveText(item.trim()).slice(0, 120) : "";
+    return text ? [text] : [];
+  });
+}
+
 function parseJobSummary(value: unknown): IntegrationStatusJobSummary | undefined {
   if (!isRecord(value)) return undefined;
-  const id = getRecordText(value, "id");
-  const installationId = getRecordText(value, "installationId");
+  const id = getRecordIdentifier(value, "id");
+  const installationId = getRecordIdentifier(value, "installationId");
   const provider = getProvider(value.provider);
   const reason = getJobReason(value.reason);
   const status = getJobStatus(value.status);
@@ -379,7 +787,7 @@ function parseJobSummary(value: unknown): IntegrationStatusJobSummary | undefine
     resultSummary: getRecordText(value, "resultSummary"),
     status,
     updatedAt: getRecordText(value, "updatedAt") ?? "",
-    workspaceId: getRecordText(value, "workspaceId") ?? ""
+    workspaceId: getRecordIdentifier(value, "workspaceId") ?? ""
   };
 }
 
@@ -406,9 +814,15 @@ function mergeProviderFallbacks(
   );
 }
 
-function safeIntegrationErrorMessage(status: number, payload: unknown) {
+function safeIntegrationErrorMessage(
+  status: number,
+  payload: unknown,
+  context: "action" | "status" = "action"
+) {
   if (status === 403) {
-    return "Integration status requires workspace access in this deployment.";
+    return context === "status"
+      ? "Integration status requires workspace access in this deployment."
+      : "This integration action requires workspace owner access.";
   }
 
   if (status === 503) {
@@ -436,6 +850,24 @@ function getInstallationStatus(value: unknown): IntegrationStatusAccountSummary[
   return value === "active" || value === "disconnected" || value === "suspended" ? value : undefined;
 }
 
+function getCredentialStatus(value: unknown): IntegrationCredentialMetadata["status"] | undefined {
+  return value === "active" || value === "revoked" ? value : undefined;
+}
+
+function getPermission(value: unknown): IntegrationPermission | undefined {
+  return typeof value === "string" &&
+    integrationPermissionValues.includes(value as IntegrationPermission)
+    ? (value as IntegrationPermission)
+    : undefined;
+}
+
+function getCredentialSecretType(value: unknown): IntegrationCredentialSecretType | undefined {
+  return typeof value === "string" &&
+    credentialSecretTypeValues.includes(value as IntegrationCredentialSecretType)
+    ? (value as IntegrationCredentialSecretType)
+    : undefined;
+}
+
 function getJobStatus(value: unknown): IntegrationStatusJobSummary["status"] | undefined {
   return value === "failed" || value === "queued" || value === "running" || value === "succeeded"
     ? value
@@ -454,6 +886,12 @@ function getRecordText(value: unknown, key: string) {
   return typeof next === "string" && next.trim()
     ? redactSensitiveText(next.trim()).slice(0, 500)
     : undefined;
+}
+
+function getRecordIdentifier(value: unknown, key: string) {
+  if (!isRecord(value)) return undefined;
+  const next = value[key];
+  return typeof next === "string" && next.trim() ? next.trim().slice(0, 160) : undefined;
 }
 
 function getRecordNumber(value: unknown, key: string) {

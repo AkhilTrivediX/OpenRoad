@@ -177,7 +177,7 @@ These are known production gaps after the account recovery foundation.
 - Backup/restore, local self-host smoke commands, and release candidate manifests exist, but published Docker images and hosted release promotion are not implemented.
 - Observability is limited to process logs; structured operational events and dashboards are pending.
 - Public portal write controls, persisted anonymous visitor vote identity, idempotent vote dedupe, and process-local rate limits exist, but notification preferences, CAPTCHA/external bot checks, and distributed abuse controls are pending.
-- Payload-backed GitHub issue import/link, GitHub App installation verification, live issue fetch, signed webhook handling, safe disconnect APIs, encrypted server-only provider credential storage, provider-neutral background sync job metadata, GitHub/Linear/Jira workers for already-linked issue mappings, progressive browser Settings integration visibility with GitHub/Linear/Jira manual sync, payload-backed Linear issue import/link, payload-backed Jira issue import/link, requester notification outbox/preferences, and JSONL notification delivery handoff exist, but provider write-back, OAuth callback exchange, full connect/disconnect Settings flows, direct email/provider notification delivery, and conflict UI are not implemented yet.
+- Payload-backed GitHub issue import/link, GitHub App installation verification, live issue fetch, signed webhook handling, safe disconnect APIs, encrypted server-only provider credential storage, provider-neutral background sync job metadata, GitHub/Linear/Jira workers for already-linked issue mappings, progressive browser Settings integration visibility with GitHub/Linear/Jira connect, credential, disconnect, and manual sync controls, payload-backed Linear issue import/link, payload-backed Jira issue import/link, requester notification outbox/preferences, and JSONL notification delivery handoff exist, but provider write-back, hosted OAuth callback exchange, direct email/provider notification delivery, Linear/Jira webhooks, and conflict UI are not implemented yet.
 - Deterministic local assistant triage exists, but real model-backed adapters, prompt redaction, user consent controls, AI audit logs, and external-provider policy review are not implemented yet.
 - Browser QA is manual rather than automated end-to-end CI.
 
@@ -189,7 +189,7 @@ Purpose:
 
 - Make GitHub, Linear, and Jira connection management usable from Settings without requiring direct API scripting.
 - Keep provider credentials server-only, encrypted, scoped, and revocable while presenting only safe installation/credential metadata in the browser.
-- Add explicit disconnect confirmations that preserve OpenRoad source-of-truth data, deactivate provider credentials/installations, and keep already-linked requests intelligible.
+- Keep provider disconnect flows explicit, preserve OpenRoad source-of-truth data, deactivate provider credentials/installations, and keep already-linked requests intelligible.
 - Preserve the existing production gate: feature branch, test plan first, focused tests, `pnpm check`, browser QA when UI changes, smoke test, audit, merge, then push.
 
 Linear/Jira webhooks, provider write-back, OAuth callback exchange, direct provider notification delivery, conflict UI, SSO/MFA, bulk member operations, and hosted account management remain hardening work that should stay behind server-only secret management, background job controls, and/or explicit delivery infrastructure.

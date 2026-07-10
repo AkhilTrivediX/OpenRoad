@@ -53,8 +53,8 @@ Provider workers fetch/decrypt credentials server-side through the credential bo
 ## Deferred Work
 
 - Provider write-back.
-- OAuth callback token exchange.
-- Full browser connect/disconnect flows and credential management UI.
+- Hosted OAuth callback token exchange.
+- Linear and Jira webhook receivers.
 - Conflict detection/resolution UI.
 - External queue systems.
 - Distributed locks across multiple Node processes.

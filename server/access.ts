@@ -275,6 +275,18 @@ export const routeProtections: RouteProtection[] = [
     scope: "workspace"
   },
   {
+    methods: ["GET", "POST"],
+    path: "/api/openroad/workspaces/:workspaceId/integrations/:provider/installations",
+    permission: "integration:manage",
+    scope: "workspace"
+  },
+  {
+    methods: ["POST"],
+    path: "/api/openroad/workspaces/:workspaceId/integrations/:provider/installations/:installationId/disconnect",
+    permission: "integration:manage",
+    scope: "workspace"
+  },
+  {
     methods: ["POST"],
     path: "/api/openroad/workspaces/:workspaceId/integrations/:provider/credentials/:credentialId/revoke",
     permission: "integration:manage",

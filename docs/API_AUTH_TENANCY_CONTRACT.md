@@ -131,6 +131,9 @@ API-only invitation acceptance remains available at `POST /api/openroad/invitati
 - `GET /api/openroad/workspaces/:workspaceId/integrations/linear/oauth/setup`
 - `POST /api/openroad/workspaces/:workspaceId/integrations/jira/issues/import`
 - `GET /api/openroad/workspaces/:workspaceId/integrations/jira/oauth/setup`
+- `GET /api/openroad/workspaces/:workspaceId/integrations/:provider/installations`
+- `POST /api/openroad/workspaces/:workspaceId/integrations/:provider/installations`
+- `POST /api/openroad/workspaces/:workspaceId/integrations/:provider/installations/:installationId/disconnect`
 - `GET /api/openroad/workspaces/:workspaceId/integrations/:provider/credentials`
 - `POST /api/openroad/workspaces/:workspaceId/integrations/:provider/credentials`
 - `POST /api/openroad/workspaces/:workspaceId/integrations/:provider/credentials/:credentialId/revoke`
@@ -158,6 +161,8 @@ GitHub App setup and installation verification require `integration:manage`, whi
 
 GitHub App disconnect also requires `integration:manage`. It marks installation metadata and mappings disconnected without deleting OpenRoad objects.
 
+Provider-neutral installation list/create/disconnect routes require `integration:manage`, which is reserved for local owners/admins and workspace owners. Manual installation creation accepts bounded installation/account identifiers and provider-appropriate permissions only; it does not accept provider tokens, OAuth codes, private keys, webhook secrets, or raw provider payloads. Disconnect marks the scoped installation disconnected, disconnects matching mappings, revokes active scoped credentials, and preserves OpenRoad requests, work, roadmap, changelog, and portal data. Responses return sanitized installation metadata and bounded counts only.
+
 Linear issue import is workspace-scoped and requires workspace write permission. It accepts fixture/API payloads only in the current slice; it must not accept Linear OAuth tokens, refresh tokens, client secrets, webhook secrets, or raw OAuth codes.
 
 Linear OAuth setup requires `integration:manage`, which is reserved for local owners/admins and workspace owners. It returns a safe authorization URL and setup state, but does not exchange OAuth codes or persist tokens.
@@ -168,7 +173,7 @@ Jira OAuth setup requires `integration:manage`, which is reserved for local owne
 
 Jira live sync requires a queued sync job, an active Jira installation, an active encrypted Jira credential with `read:external`, and the private sync runner. It fetches already-linked issues server-side through Jira Cloud REST and must never return access tokens, authorization headers, encrypted credential internals, or raw Jira REST payloads.
 
-Provider credential create/list/revoke routes require `integration:manage`, which is reserved for local owners/admins and workspace owners. Credential storage requires `OPENROAD_TOKEN_ENCRYPTION_KEY`; credentials must be scoped to an active installation in the same workspace and provider. Responses return only metadata and never return access tokens, refresh tokens, ciphertext, IVs, tags, or encryption key material.
+Provider credential create/list/revoke routes require `integration:manage`, which is reserved for local owners/admins and workspace owners. Credential storage requires `OPENROAD_TOKEN_ENCRYPTION_KEY`; credentials must be scoped to an active installation in the same workspace and provider. Browser Settings submits tokens only through same-origin POST requests, clears token inputs after submit, and receives only sanitized metadata. Responses return only metadata and never return access tokens, refresh tokens, ciphertext, IVs, tags, or encryption key material.
 
 Integration sync job enqueue routes require `integration:manage`, which is reserved for local owners/admins and workspace owners. Jobs must be scoped to an active installation in the same workspace and provider. Responses return sanitized job metadata and never return provider tokens, encrypted credentials, raw provider payloads, webhook signatures, request headers, or request bodies. Concurrent integration metadata writes are serialized inside one Node process while OpenRoad uses file-backed stores.
 

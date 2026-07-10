@@ -127,9 +127,16 @@ import {
   type ServerOpenRoadScope
 } from "./persistence/openroadServer";
 import {
+  createProviderInstallation,
   createStandaloneIntegrationStatus,
+  disconnectProviderInstallation,
+  listProviderCredentials,
   loadWorkspaceIntegrationStatus,
+  revokeProviderCredential,
   runProviderManualSync,
+  storeProviderCredential,
+  verifyGitHubAppInstallation,
+  type IntegrationCredentialMetadata,
   type IntegrationProviderStatus,
   type WorkspaceIntegrationStatus
 } from "./persistence/openroadIntegrations";
@@ -168,6 +175,67 @@ const baseNavItems: NavItem[] = [
 const workNavItem: NavItem = { label: "Work", icon: ListChecks };
 const navTargets = new Set(["inbox", "work", "roadmap", "changelog", "portal", "settings"]);
 const invitationRoles: InvitationWorkspaceRole[] = ["Viewer", "Contributor", "Maintainer", "Owner"];
+type IntegrationProviderId = IntegrationProviderStatus["provider"];
+
+type ProviderInstallationDraft = {
+  installationId: string;
+  providerAccountId: string;
+  providerAccountName: string;
+};
+
+type ProviderCredentialDraft = {
+  accessToken: string;
+  installationId: string;
+  label: string;
+  providerScopes: string;
+  refreshToken: string;
+  tokenType: string;
+};
+
+function createProviderInstallationDrafts(): Record<IntegrationProviderId, ProviderInstallationDraft> {
+  return {
+    github: { installationId: "", providerAccountId: "", providerAccountName: "" },
+    jira: { installationId: "", providerAccountId: "", providerAccountName: "" },
+    linear: { installationId: "", providerAccountId: "", providerAccountName: "" }
+  };
+}
+
+function createProviderCredentialDrafts(): Record<IntegrationProviderId, ProviderCredentialDraft> {
+  return {
+    github: {
+      accessToken: "",
+      installationId: "",
+      label: "",
+      providerScopes: "",
+      refreshToken: "",
+      tokenType: ""
+    },
+    jira: {
+      accessToken: "",
+      installationId: "",
+      label: "",
+      providerScopes: "",
+      refreshToken: "",
+      tokenType: ""
+    },
+    linear: {
+      accessToken: "",
+      installationId: "",
+      label: "",
+      providerScopes: "",
+      refreshToken: "",
+      tokenType: ""
+    }
+  };
+}
+
+function createProviderCredentialMetadata(): Record<IntegrationProviderId, IntegrationCredentialMetadata[]> {
+  return {
+    github: [],
+    jira: [],
+    linear: []
+  };
+}
 
 function getActiveNavTarget() {
   if (typeof window === "undefined") return "inbox";
@@ -237,6 +305,15 @@ export function App() {
     createStandaloneIntegrationStatus(resolveInitialWorkspaceId(loadResult.state, loadSelectedWorkspaceId()))
   );
   const [integrationActionMessage, setIntegrationActionMessage] = useState("");
+  const [githubVerifyInstallationId, setGithubVerifyInstallationId] = useState("");
+  const [providerInstallationDrafts, setProviderInstallationDrafts] = useState(
+    createProviderInstallationDrafts
+  );
+  const [providerCredentialDrafts, setProviderCredentialDrafts] = useState(
+    createProviderCredentialDrafts
+  );
+  const [providerCredentials, setProviderCredentials] = useState(createProviderCredentialMetadata);
+  const [integrationSetupBusy, setIntegrationSetupBusy] = useState<string | undefined>();
   const [syncingProvider, setSyncingProvider] = useState<"github" | "jira" | "linear" | undefined>();
   const [invitationAccess, setInvitationAccess] = useState<WorkspaceInvitationAccess>(() =>
     createStandaloneInvitationAccess(resolveInitialWorkspaceId(loadResult.state, loadSelectedWorkspaceId()))
@@ -597,6 +674,11 @@ export function App() {
     let isCancelled = false;
 
     setIntegrationActionMessage("");
+    setIntegrationSetupBusy(undefined);
+    setGithubVerifyInstallationId("");
+    setProviderInstallationDrafts(createProviderInstallationDrafts());
+    setProviderCredentialDrafts(createProviderCredentialDrafts());
+    setProviderCredentials(createProviderCredentialMetadata());
 
     if (!serverPersistenceEnabled) {
       setIntegrationStatus(createStandaloneIntegrationStatus(workspaceId));
@@ -950,6 +1032,224 @@ export function App() {
     });
   }
 
+  async function refreshIntegrationWorkspaceState() {
+    if (!serverPersistenceEnabled) {
+      setIntegrationStatus(createStandaloneIntegrationStatus(workspace.id));
+      return;
+    }
+
+    const [status, serverState] = await Promise.all([
+      loadWorkspaceIntegrationStatus(workspace.id),
+      loadServerOpenRoadState().catch(() => undefined)
+    ]);
+    setIntegrationStatus(status);
+
+    if (serverState) {
+      skipNextServerSave.current = true;
+      dispatchOpenRoad({ type: "replace-state", state: serverState.state });
+    }
+  }
+
+  function updateProviderInstallationDraft(
+    provider: IntegrationProviderId,
+    patch: Partial<ProviderInstallationDraft>
+  ) {
+    setProviderInstallationDrafts((drafts) => ({
+      ...drafts,
+      [provider]: { ...drafts[provider], ...patch }
+    }));
+  }
+
+  function updateProviderCredentialDraft(
+    provider: IntegrationProviderId,
+    patch: Partial<ProviderCredentialDraft>
+  ) {
+    setProviderCredentialDrafts((drafts) => ({
+      ...drafts,
+      [provider]: { ...drafts[provider], ...patch }
+    }));
+  }
+
+  async function refreshProviderCredentials(provider: IntegrationProviderId) {
+    const result = await listProviderCredentials(provider, workspace.id);
+
+    if (result.credentials) {
+      setProviderCredentials((credentials) => ({
+        ...credentials,
+        [provider]: result.credentials ?? []
+      }));
+    } else if (result.status !== "listed") {
+      setIntegrationActionMessage(result.message);
+    }
+
+    return result;
+  }
+
+  async function loadProviderCredentialMetadata(provider: IntegrationProviderId) {
+    if (!serverPersistenceEnabled || integrationStatus.status !== "ready" || integrationSetupBusy) {
+      return;
+    }
+
+    setIntegrationSetupBusy(`${provider}:credentials`);
+
+    try {
+      await refreshProviderCredentials(provider);
+    } finally {
+      setIntegrationSetupBusy(undefined);
+    }
+  }
+
+  async function verifyGitHubProviderConnection(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const installationId = githubVerifyInstallationId.trim();
+    if (!installationId || integrationSetupBusy) return;
+
+    setIntegrationSetupBusy("github:verify");
+    setIntegrationActionMessage("Verifying GitHub App installation...");
+
+    try {
+      const result = await verifyGitHubAppInstallation(workspace.id, installationId);
+      setIntegrationActionMessage(result.message);
+
+      if (result.status === "verified") {
+        setGithubVerifyInstallationId("");
+        updateProviderCredentialDraft("github", {
+          installationId: result.installation?.id ?? installationId
+        });
+        await refreshIntegrationWorkspaceState();
+        await refreshProviderCredentials("github");
+      }
+    } finally {
+      setIntegrationSetupBusy(undefined);
+    }
+  }
+
+  async function createManualProviderConnection(
+    event: FormEvent<HTMLFormElement>,
+    provider: IntegrationProviderStatus
+  ) {
+    event.preventDefault();
+    const draft = providerInstallationDrafts[provider.provider];
+    const installationId = draft.installationId.trim();
+    const providerAccountId = draft.providerAccountId.trim();
+    const providerAccountName = draft.providerAccountName.trim();
+
+    if (!installationId || !providerAccountId || !providerAccountName || integrationSetupBusy) {
+      return;
+    }
+
+    setIntegrationSetupBusy(`${provider.provider}:connect`);
+    setIntegrationActionMessage(`Connecting ${provider.label}...`);
+
+    try {
+      const result = await createProviderInstallation(provider.provider, workspace.id, {
+        installationId,
+        providerAccountId,
+        providerAccountName
+      });
+      setIntegrationActionMessage(result.message);
+
+      if (result.status === "connected") {
+        updateProviderInstallationDraft(provider.provider, {
+          installationId: "",
+          providerAccountId: "",
+          providerAccountName: ""
+        });
+        updateProviderCredentialDraft(provider.provider, {
+          installationId: result.installation?.id ?? installationId
+        });
+        await refreshIntegrationWorkspaceState();
+        await refreshProviderCredentials(provider.provider);
+      }
+    } finally {
+      setIntegrationSetupBusy(undefined);
+    }
+  }
+
+  async function storeProviderCredentialMetadata(
+    event: FormEvent<HTMLFormElement>,
+    provider: IntegrationProviderStatus
+  ) {
+    event.preventDefault();
+    const draft = providerCredentialDrafts[provider.provider];
+    const installationId = draft.installationId.trim() || (provider.accounts[0]?.id ?? "");
+    const accessToken = draft.accessToken.trim();
+
+    if (!installationId || !accessToken || integrationSetupBusy) return;
+
+    setIntegrationSetupBusy(`${provider.provider}:credential`);
+    setIntegrationActionMessage(`Storing ${provider.label} credential...`);
+
+    try {
+      const result = await storeProviderCredential(provider.provider, workspace.id, {
+        accessToken,
+        installationId,
+        label: draft.label.trim() || undefined,
+        providerScopes: parseCommaSeparatedText(draft.providerScopes),
+        refreshToken: draft.refreshToken.trim() || undefined,
+        tokenType: draft.tokenType.trim() || undefined
+      });
+      setIntegrationActionMessage(result.message);
+      updateProviderCredentialDraft(provider.provider, {
+        accessToken: "",
+        installationId,
+        label: result.status === "stored" ? "" : draft.label,
+        providerScopes: result.status === "stored" ? "" : draft.providerScopes,
+        refreshToken: "",
+        tokenType: result.status === "stored" ? "" : draft.tokenType
+      });
+
+      if (result.status === "stored") {
+        await refreshIntegrationWorkspaceState();
+        await refreshProviderCredentials(provider.provider);
+      }
+    } finally {
+      setIntegrationSetupBusy(undefined);
+    }
+  }
+
+  async function disconnectProviderConnection(provider: IntegrationProviderStatus) {
+    const installationId = provider.accounts[0]?.id;
+    if (!installationId || integrationSetupBusy) return;
+
+    setIntegrationSetupBusy(`${provider.provider}:disconnect`);
+    setIntegrationActionMessage(`Disconnecting ${provider.label}...`);
+
+    try {
+      const result = await disconnectProviderInstallation(provider.provider, workspace.id, installationId);
+      setIntegrationActionMessage(result.message);
+
+      if (result.status === "disconnected") {
+        await refreshIntegrationWorkspaceState();
+        await refreshProviderCredentials(provider.provider);
+      }
+    } finally {
+      setIntegrationSetupBusy(undefined);
+    }
+  }
+
+  async function revokeProviderCredentialMetadata(
+    provider: IntegrationProviderStatus,
+    credentialId: string
+  ) {
+    if (integrationSetupBusy) return;
+
+    setIntegrationSetupBusy(`${provider.provider}:revoke:${credentialId}`);
+    setIntegrationActionMessage(`Revoking ${provider.label} credential...`);
+
+    try {
+      const result = await revokeProviderCredential(provider.provider, workspace.id, credentialId);
+      setIntegrationActionMessage(result.message);
+
+      if (result.status === "revoked") {
+        await refreshIntegrationWorkspaceState();
+        await refreshProviderCredentials(provider.provider);
+      }
+    } finally {
+      setIntegrationSetupBusy(undefined);
+    }
+  }
+
   async function syncProviderLinkedIssues(provider: IntegrationProviderStatus) {
     if (provider.provider !== "github" && provider.provider !== "jira" && provider.provider !== "linear") {
       return;
@@ -965,16 +1265,7 @@ export function App() {
       setIntegrationActionMessage(result.message);
 
       if (serverPersistenceEnabled) {
-        const [status, serverState] = await Promise.all([
-          loadWorkspaceIntegrationStatus(workspace.id),
-          loadServerOpenRoadState().catch(() => undefined)
-        ]);
-        setIntegrationStatus(status);
-
-        if (serverState) {
-          skipNextServerSave.current = true;
-          dispatchOpenRoad({ type: "replace-state", state: serverState.state });
-        }
+        await refreshIntegrationWorkspaceState();
       }
     } finally {
       setSyncingProvider(undefined);
@@ -4980,55 +5271,354 @@ export function App() {
                 ) : null}
 
                 <div className="provider-list" aria-label="Provider readiness">
-                  {integrationStatus.providers.map((provider) => (
-                    <article className="provider-row" key={provider.provider}>
-                      <div className="provider-main">
-                        <span className="provider-code" aria-hidden="true">
-                          {getProviderCode(provider)}
-                        </span>
-                        <div>
-                          <h3>{provider.label}</h3>
-                          <p>{provider.statusText}</p>
-                          <small>{getProviderMetric(provider)}</small>
+                  {integrationStatus.providers.map((provider) => {
+                    const canManageProvider =
+                      serverPersistenceEnabled && integrationStatus.status === "ready";
+                    const installationDraft = providerInstallationDrafts[provider.provider];
+                    const credentialDraft = providerCredentialDrafts[provider.provider];
+                    const credentials = providerCredentials[provider.provider];
+                    const activeAccount = provider.accounts[0];
+                    const disconnectedAccount = provider.disconnectedAccounts[0];
+                    const credentialInstallationId =
+                      credentialDraft.installationId || activeAccount?.id || "";
+                    const isProviderBusy = Boolean(
+                      integrationSetupBusy?.startsWith(`${provider.provider}:`)
+                    );
+
+                    return (
+                      <article className="provider-row" key={provider.provider}>
+                        <div className="provider-main">
+                          <span className="provider-code" aria-hidden="true">
+                            {getProviderCode(provider)}
+                          </span>
+                          <div>
+                            <h3>{provider.label}</h3>
+                            <p>{provider.statusText}</p>
+                            <small>{getProviderMetric(provider)}</small>
+                          </div>
                         </div>
-                      </div>
 
-                      <div className="provider-controls">
-                        <span className={`status-badge ${getProviderTone(provider)}`}>
-                          {getProviderConnectionLabel(provider)}
-                        </span>
-                        <button
-                          aria-label={`${provider.label} sync linked issues`}
-                          className="secondary-action compact provider-action"
-                          disabled={
-                            !provider.capabilities.manualSync || syncingProvider === provider.provider
-                          }
-                          onClick={() => void syncProviderLinkedIssues(provider)}
-                          type="button"
+                        <div className="provider-controls">
+                          <span className={`status-badge ${getProviderTone(provider)}`}>
+                            {getProviderConnectionLabel(provider)}
+                          </span>
+                          <button
+                            aria-label={`${provider.label} sync linked issues`}
+                            className="secondary-action compact provider-action"
+                            disabled={
+                              !provider.capabilities.manualSync || syncingProvider === provider.provider
+                            }
+                            onClick={() => void syncProviderLinkedIssues(provider)}
+                            type="button"
+                          >
+                            <RotateCcw aria-hidden="true" size={14} />
+                            {syncingProvider === provider.provider ? "Syncing..." : "Sync linked issues"}
+                          </button>
+                          <button
+                            aria-label={`${provider.label} disconnect account`}
+                            className="secondary-action compact provider-action"
+                            disabled={
+                              !canManageProvider ||
+                              !activeAccount ||
+                              !provider.capabilities.disconnect ||
+                              Boolean(integrationSetupBusy)
+                            }
+                            onClick={() => void disconnectProviderConnection(provider)}
+                            type="button"
+                          >
+                            <Unlink aria-hidden="true" size={14} />
+                            {integrationSetupBusy === `${provider.provider}:disconnect`
+                              ? "Disconnecting..."
+                              : "Disconnect"}
+                          </button>
+                        </div>
+
+                        <details
+                          className="provider-details provider-management"
+                          onToggle={(event) => {
+                            if (event.currentTarget.open) {
+                              void loadProviderCredentialMetadata(provider.provider);
+                            }
+                          }}
                         >
-                          <RotateCcw aria-hidden="true" size={14} />
-                          {syncingProvider === provider.provider ? "Syncing..." : "Sync linked issues"}
-                        </button>
-                      </div>
+                          <summary>Manage connection</summary>
+                          <div className="provider-management-grid">
+                            <div className="provider-state-line">
+                              <span>{activeAccount ? "Active account" : "Account"}</span>
+                              <strong>
+                                {activeAccount?.providerAccountName ??
+                                  disconnectedAccount?.providerAccountName ??
+                                  "Not connected"}
+                              </strong>
+                              <small>{activeAccount?.id ?? disconnectedAccount?.id ?? "Standalone"}</small>
+                            </div>
 
-                      <details className="provider-details">
-                        <summary>Recent activity</summary>
-                        {provider.recentJobs.length ? (
-                          <ol>
-                            {provider.recentJobs.map((job) => (
-                              <li key={job.id}>
-                                <span>{job.status}</span>
-                                <strong>{job.reason}</strong>
-                                <small>{formatIntegrationTime(job.completedAt ?? job.updatedAt)}</small>
-                              </li>
-                            ))}
-                          </ol>
-                        ) : (
-                          <p>No sync activity for this provider yet.</p>
-                        )}
-                      </details>
-                    </article>
-                  ))}
+                            {canManageProvider ? (
+                              <>
+                                {provider.provider === "github" && provider.setupConfigured ? (
+                                  <form
+                                    className="provider-form provider-github-form"
+                                    onSubmit={verifyGitHubProviderConnection}
+                                  >
+                                    <div className="provider-form-title">
+                                      <strong>GitHub App</strong>
+                                      <small>Verified installation</small>
+                                    </div>
+                                    <label>
+                                      <span>Installation id</span>
+                                      <input
+                                        aria-label="GitHub App installation id"
+                                        onChange={(event) => setGithubVerifyInstallationId(event.target.value)}
+                                        placeholder={activeAccount?.id ?? "98765"}
+                                        value={githubVerifyInstallationId}
+                                      />
+                                    </label>
+                                    <button
+                                      className="secondary-action compact provider-action"
+                                      disabled={
+                                        !githubVerifyInstallationId.trim() || Boolean(integrationSetupBusy)
+                                      }
+                                      type="submit"
+                                    >
+                                      <ShieldCheck aria-hidden="true" size={14} />
+                                      {integrationSetupBusy === "github:verify" ? "Verifying..." : "Verify"}
+                                    </button>
+                                  </form>
+                                ) : null}
+
+                                <form
+                                  className="provider-form provider-manual-form"
+                                  onSubmit={(event) => void createManualProviderConnection(event, provider)}
+                                >
+                                  <div className="provider-form-title">
+                                    <strong>Manual connection</strong>
+                                    <small>{provider.label}</small>
+                                  </div>
+                                  <label>
+                                    <span>Installation id</span>
+                                    <input
+                                      aria-label={`${provider.label} installation id`}
+                                      onChange={(event) =>
+                                        updateProviderInstallationDraft(provider.provider, {
+                                          installationId: event.target.value
+                                        })
+                                      }
+                                      placeholder={`${provider.provider}-install`}
+                                      value={installationDraft.installationId}
+                                    />
+                                  </label>
+                                  <label>
+                                    <span>Account id</span>
+                                    <input
+                                      aria-label={`${provider.label} account id`}
+                                      onChange={(event) =>
+                                        updateProviderInstallationDraft(provider.provider, {
+                                          providerAccountId: event.target.value
+                                        })
+                                      }
+                                      placeholder={`${provider.provider}-account`}
+                                      value={installationDraft.providerAccountId}
+                                    />
+                                  </label>
+                                  <label>
+                                    <span>Account name</span>
+                                    <input
+                                      aria-label={`${provider.label} account name`}
+                                      onChange={(event) =>
+                                        updateProviderInstallationDraft(provider.provider, {
+                                          providerAccountName: event.target.value
+                                        })
+                                      }
+                                      placeholder={provider.label}
+                                      value={installationDraft.providerAccountName}
+                                    />
+                                  </label>
+                                  <button
+                                    className="secondary-action compact provider-action"
+                                    disabled={
+                                      !installationDraft.installationId.trim() ||
+                                      !installationDraft.providerAccountId.trim() ||
+                                      !installationDraft.providerAccountName.trim() ||
+                                      Boolean(integrationSetupBusy)
+                                    }
+                                    type="submit"
+                                  >
+                                    <Link2 aria-hidden="true" size={14} />
+                                    {integrationSetupBusy === `${provider.provider}:connect`
+                                      ? "Connecting..."
+                                      : "Connect"}
+                                  </button>
+                                </form>
+
+                                <form
+                                  className="provider-form provider-credential-form"
+                                  onSubmit={(event) => void storeProviderCredentialMetadata(event, provider)}
+                                >
+                                  <div className="provider-form-title">
+                                    <strong>Credential</strong>
+                                    <small>{provider.activeCredentials} active</small>
+                                  </div>
+                                  <label>
+                                    <span>Installation id</span>
+                                    <input
+                                      aria-label={`${provider.label} credential installation id`}
+                                      onChange={(event) =>
+                                        updateProviderCredentialDraft(provider.provider, {
+                                          installationId: event.target.value
+                                        })
+                                      }
+                                      placeholder={activeAccount?.id ?? "Connected installation"}
+                                      value={credentialDraft.installationId}
+                                    />
+                                  </label>
+                                  <label>
+                                    <span>Access token</span>
+                                    <input
+                                      aria-label={`${provider.label} access token`}
+                                      autoComplete="off"
+                                      onChange={(event) =>
+                                        updateProviderCredentialDraft(provider.provider, {
+                                          accessToken: event.target.value
+                                        })
+                                      }
+                                      type="password"
+                                      value={credentialDraft.accessToken}
+                                    />
+                                  </label>
+                                  <label>
+                                    <span>Refresh token</span>
+                                    <input
+                                      aria-label={`${provider.label} refresh token`}
+                                      autoComplete="off"
+                                      onChange={(event) =>
+                                        updateProviderCredentialDraft(provider.provider, {
+                                          refreshToken: event.target.value
+                                        })
+                                      }
+                                      type="password"
+                                      value={credentialDraft.refreshToken}
+                                    />
+                                  </label>
+                                  <label>
+                                    <span>Label</span>
+                                    <input
+                                      aria-label={`${provider.label} credential label`}
+                                      onChange={(event) =>
+                                        updateProviderCredentialDraft(provider.provider, {
+                                          label: event.target.value
+                                        })
+                                      }
+                                      placeholder="Production"
+                                      value={credentialDraft.label}
+                                    />
+                                  </label>
+                                  <label>
+                                    <span>Scopes</span>
+                                    <input
+                                      aria-label={`${provider.label} provider scopes`}
+                                      onChange={(event) =>
+                                        updateProviderCredentialDraft(provider.provider, {
+                                          providerScopes: event.target.value
+                                        })
+                                      }
+                                      placeholder="read:issues, write:issues"
+                                      value={credentialDraft.providerScopes}
+                                    />
+                                  </label>
+                                  <label>
+                                    <span>Token type</span>
+                                    <input
+                                      aria-label={`${provider.label} token type`}
+                                      onChange={(event) =>
+                                        updateProviderCredentialDraft(provider.provider, {
+                                          tokenType: event.target.value
+                                        })
+                                      }
+                                      placeholder="Bearer"
+                                      value={credentialDraft.tokenType}
+                                    />
+                                  </label>
+                                  <button
+                                    className="secondary-action compact provider-action"
+                                    disabled={
+                                      !credentialInstallationId ||
+                                      !credentialDraft.accessToken.trim() ||
+                                      Boolean(integrationSetupBusy)
+                                    }
+                                    type="submit"
+                                  >
+                                    <KeyRound aria-hidden="true" size={14} />
+                                    {integrationSetupBusy === `${provider.provider}:credential`
+                                      ? "Storing..."
+                                      : "Store"}
+                                  </button>
+                                </form>
+
+                                <div className="provider-credentials" aria-label={`${provider.label} credentials`}>
+                                  <div className="provider-form-title">
+                                    <strong>Stored credentials</strong>
+                                    <small>{credentials.length} total</small>
+                                  </div>
+                                  {credentials.length ? (
+                                    <ol>
+                                      {credentials.map((credential) => (
+                                        <li key={credential.id}>
+                                          <span>{credential.status}</span>
+                                          <strong>{credential.label ?? credential.id}</strong>
+                                          <small>{credential.installationId}</small>
+                                          <button
+                                            className="secondary-action compact provider-action"
+                                            disabled={
+                                              credential.status === "revoked" ||
+                                              Boolean(integrationSetupBusy)
+                                            }
+                                            onClick={() =>
+                                              void revokeProviderCredentialMetadata(provider, credential.id)
+                                            }
+                                            type="button"
+                                          >
+                                            <Unlink aria-hidden="true" size={14} />
+                                            {integrationSetupBusy ===
+                                            `${provider.provider}:revoke:${credential.id}`
+                                              ? "Revoking..."
+                                              : "Revoke"}
+                                          </button>
+                                        </li>
+                                      ))}
+                                    </ol>
+                                  ) : (
+                                    <p>No credential metadata loaded.</p>
+                                  )}
+                                </div>
+                              </>
+                            ) : (
+                              <p>Integration management requires server metadata and owner access.</p>
+                            )}
+
+                            <div className="provider-activity">
+                              <div className="provider-form-title">
+                                <strong>Recent activity</strong>
+                                <small>{provider.recentJobs.length} jobs</small>
+                              </div>
+                              {provider.recentJobs.length ? (
+                                <ol>
+                                  {provider.recentJobs.map((job) => (
+                                    <li key={job.id}>
+                                      <span>{job.status}</span>
+                                      <strong>{job.reason}</strong>
+                                      <small>{formatIntegrationTime(job.completedAt ?? job.updatedAt)}</small>
+                                    </li>
+                                  ))}
+                                </ol>
+                              ) : (
+                                <p>No sync activity for this provider yet.</p>
+                              )}
+                            </div>
+                          </div>
+                        </details>
+                      </article>
+                    );
+                  })}
                 </div>
               </section>
 
@@ -5186,6 +5776,13 @@ function getProviderMetric(provider: IntegrationProviderStatus) {
     (provider.setupConfigured ? "Setup configured" : "Setup not configured");
 
   return `${account} / ${linked} / ${queue}`;
+}
+
+function parseCommaSeparatedText(value: string) {
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
 
 function getAccessControlTone(

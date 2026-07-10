@@ -2448,6 +2448,287 @@ describe("OpenRoad production server", () => {
     expect(disconnected.body.error.code).toBe("invalid_state");
   });
 
+  it("creates manual provider installations with owner-only integration management", async () => {
+    const { integrationFile, url } = await startTestServer({
+      auth: { adminToken: "secret", singleUserMode: false, trustProxyHeaders: true }
+    });
+
+    const publicCreate = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/linear/installations`,
+      {
+        body: JSON.stringify({
+          installationId: "manual-linear",
+          providerAccountId: "linear-team",
+          providerAccountName: "Linear Team"
+        }),
+        headers: { "Content-Type": "application/json" },
+        method: "POST"
+      }
+    );
+    const viewerCreate = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/linear/installations`,
+      {
+        body: JSON.stringify({
+          installationId: "manual-linear",
+          providerAccountId: "linear-team",
+          providerAccountName: "Linear Team"
+        }),
+        headers: {
+          ...workspaceActorHeaders("acme", "Viewer"),
+          "Content-Type": "application/json"
+        },
+        method: "POST"
+      }
+    );
+    const github = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/github/installations`,
+      {
+        body: JSON.stringify({
+          installationId: "manual-github",
+          permissions: ["read:external", "read:openroad", "write:openroad", "webhook:receive"],
+          providerAccountId: "gh-org",
+          providerAccountName: "GitHub Org"
+        }),
+        headers: {
+          ...workspaceActorHeaders("acme", "Owner"),
+          "Content-Type": "application/json"
+        },
+        method: "POST"
+      }
+    );
+    const linear = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/linear/installations`,
+      {
+        body: JSON.stringify({
+          installationId: "manual-linear",
+          permissions: ["read:external", "read:openroad", "write:openroad", "write:external"],
+          providerAccountId: "linear-team",
+          providerAccountName: "Linear Team"
+        }),
+        headers: {
+          ...workspaceActorHeaders("acme", "Owner"),
+          "Content-Type": "application/json"
+        },
+        method: "POST"
+      }
+    );
+    const jira = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/jira/installations`, {
+      body: JSON.stringify({
+        installationId: "manual-jira",
+        permissions: ["read:external", "read:openroad", "write:openroad"],
+        providerAccountId: "jira-cloud",
+        providerAccountName: "Jira Cloud"
+      }),
+      headers: {
+        ...workspaceActorHeaders("acme", "Owner"),
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    const invalidPermission = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/jira/installations`,
+      {
+        body: JSON.stringify({
+          installationId: "manual-jira-invalid",
+          permissions: ["read:external", "read:openroad", "write:openroad", "webhook:receive"],
+          providerAccountId: "jira-cloud",
+          providerAccountName: "Jira Cloud"
+        }),
+        headers: {
+          ...workspaceActorHeaders("acme", "Owner"),
+          "Content-Type": "application/json"
+        },
+        method: "POST"
+      }
+    );
+    const listed = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/linear/installations`,
+      {
+        headers: workspaceActorHeaders("acme", "Owner")
+      }
+    );
+    const status = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/status`, {
+      headers: workspaceActorHeaders("acme", "Owner")
+    });
+    const integrationStateText = await readFile(integrationFile, "utf8");
+
+    expect(publicCreate.status).toBe(403);
+    expect(viewerCreate.status).toBe(403);
+    expect(github.status).toBe(201);
+    expect(github.body.installation).toMatchObject({
+      id: "manual-github",
+      provider: "github",
+      providerAccountName: "GitHub Org",
+      status: "active"
+    });
+    expect(linear.status).toBe(201);
+    expect(linear.body.installation).toMatchObject({
+      id: "manual-linear",
+      permissions: ["read:external", "read:openroad", "write:openroad", "write:external"],
+      provider: "linear",
+      status: "active"
+    });
+    expect(jira.status).toBe(201);
+    expect(jira.body.installation).toMatchObject({
+      id: "manual-jira-jira-cloud",
+      provider: "jira",
+      providerAccountName: "Jira Cloud",
+      status: "active"
+    });
+    expect(invalidPermission.status).toBe(400);
+    expect(listed.status).toBe(200);
+    expect(listed.body.installations).toEqual([
+      expect.objectContaining({ id: "manual-linear", provider: "linear", status: "active" })
+    ]);
+    expect(status.status).toBe(200);
+    expect(status.body.providers).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ activeInstallations: 1, provider: "github" }),
+        expect.objectContaining({ activeInstallations: 1, provider: "linear" }),
+        expect.objectContaining({ activeInstallations: 1, provider: "jira" })
+      ])
+    );
+    expect(JSON.stringify(github.body)).not.toContain("encryptedSecret");
+    expect(integrationStateText).not.toContain("accessToken");
+    expect(integrationStateText).not.toContain("refreshToken");
+  });
+
+  it("disconnects Linear and Jira installations through the provider-neutral route", async () => {
+    const { integrationStore, store, url } = await startTestServer({
+      auth: { adminToken: "secret", singleUserMode: false, trustProxyHeaders: true },
+      tokenVault: testTokenVault()
+    });
+    const linearImport = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/linear/issues/import`, {
+      body: JSON.stringify(linearImportPayload()),
+      headers: {
+        Authorization: "Bearer secret",
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    const jiraImport = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/jira/issues/import`, {
+      body: JSON.stringify(jiraImportPayload()),
+      headers: {
+        Authorization: "Bearer secret",
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    const linearCredential = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/linear/credentials`, {
+      body: JSON.stringify(linearCredentialPayload()),
+      headers: {
+        Authorization: "Bearer secret",
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    const jiraCredential = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/jira/credentials`, {
+      body: JSON.stringify(jiraCredentialPayload()),
+      headers: {
+        Authorization: "Bearer secret",
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+    const viewerDisconnect = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/linear/installations/linear-install/disconnect`,
+      {
+        headers: workspaceActorHeaders("acme", "Viewer"),
+        method: "POST"
+      }
+    );
+    const linearDisconnect = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/linear/installations/linear-install/disconnect`,
+      {
+        headers: workspaceActorHeaders("acme", "Owner"),
+        method: "POST"
+      }
+    );
+    const linearReplay = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/linear/installations/linear-install/disconnect`,
+      {
+        headers: workspaceActorHeaders("acme", "Owner"),
+        method: "POST"
+      }
+    );
+    const jiraDisconnect = await fetchJson(
+      `${url}/api/openroad/workspaces/acme/integrations/jira/installations/jira-install-jira-cloud/disconnect`,
+      {
+        headers: workspaceActorHeaders("acme", "Owner"),
+        method: "POST"
+      }
+    );
+    const status = await fetchJson(`${url}/api/openroad/workspaces/acme/integrations/status`, {
+      headers: workspaceActorHeaders("acme", "Owner")
+    });
+    const [integrations, openRoad] = await Promise.all([integrationStore.load(), store.load()]);
+    const linearStoredCredential = integrations.state.credentials.find(
+      (credential) => credential.id === linearCredential.body.credential.id
+    );
+    const jiraStoredCredential = integrations.state.credentials.find(
+      (credential) => credential.id === jiraCredential.body.credential.id
+    );
+    const statusProviders = status.body.providers as Array<{
+      activeInstallations: number;
+      disconnectedAccounts?: unknown[];
+      provider: string;
+    }>;
+    const linearStatus = statusProviders.find((provider) => provider.provider === "linear");
+    const jiraStatus = statusProviders.find((provider) => provider.provider === "jira");
+    const serializedResponses = JSON.stringify([linearDisconnect.body, jiraDisconnect.body, status.body]);
+
+    expect(linearImport.status).toBe(201);
+    expect(jiraImport.status).toBe(201);
+    expect(linearCredential.status).toBe(201);
+    expect(jiraCredential.status).toBe(201);
+    expect(viewerDisconnect.status).toBe(403);
+    expect(linearDisconnect.status).toBe(200);
+    expect(linearDisconnect.body).toMatchObject({
+      changed: true,
+      disconnectedMappings: 1,
+      installation: { id: "linear-install", provider: "linear", status: "disconnected" },
+      revokedCredentials: 1,
+      status: "disconnected"
+    });
+    expect(linearReplay.status).toBe(200);
+    expect(linearReplay.body).toMatchObject({
+      changed: false,
+      disconnectedMappings: 0,
+      revokedCredentials: 0,
+      status: "disconnected"
+    });
+    expect(jiraDisconnect.status).toBe(200);
+    expect(jiraDisconnect.body).toMatchObject({
+      changed: true,
+      disconnectedMappings: 1,
+      installation: { id: "jira-install-jira-cloud", provider: "jira", status: "disconnected" },
+      revokedCredentials: 1,
+      status: "disconnected"
+    });
+    expect(linearStoredCredential).toMatchObject({ status: "revoked" });
+    expect(linearStoredCredential?.encryptedSecret).toBeUndefined();
+    expect(jiraStoredCredential).toMatchObject({ status: "revoked" });
+    expect(jiraStoredCredential?.encryptedSecret).toBeUndefined();
+    expect(
+      integrations.state.mappings
+        .filter((mapping) => mapping.external.provider === "linear" || mapping.external.provider === "jira")
+        .every((mapping) => mapping.status === "disconnected")
+    ).toBe(true);
+    expect(
+      openRoad.state.workspaces[0].requests.some((request) => request.id === linearImport.body.request.id)
+    ).toBe(true);
+    expect(
+      openRoad.state.workspaces[0].requests.some((request) => request.id === jiraImport.body.request.id)
+    ).toBe(true);
+    expect(linearStatus).toMatchObject({ activeInstallations: 0, provider: "linear" });
+    expect(jiraStatus).toMatchObject({ activeInstallations: 0, provider: "jira" });
+    expect(linearStatus?.disconnectedAccounts).toHaveLength(1);
+    expect(jiraStatus?.disconnectedAccounts).toHaveLength(1);
+    expect(serializedResponses).not.toContain("linear-access-secret");
+    expect(serializedResponses).not.toContain("jira-access-secret");
+    expect(serializedResponses).not.toContain("ciphertext");
+  });
+
   it("revokes matching provider credentials when GitHub installations disconnect", async () => {
     const { integrationStore, url } = await startTestServer({
       auth: { adminToken: "secret", singleUserMode: false, trustProxyHeaders: true },

@@ -98,7 +98,7 @@ As a workspace owner, I want OpenRoad to push a refined request title/descriptio
 ## Evidence
 
 - Branch: `feat/provider-write-back`
-- Implementation commit SHA: Pending.
+- Implementation commit SHA: `0cb9aee7654155298069d5220d96de0a0e146cde`.
 - Date: 2026-07-10.
 - Commands run:
   - `pnpm vitest run server/github-app.test.ts server/linear-sync-worker.test.ts server/jira-sync-worker.test.ts` -> 3 files, 38 tests passed.

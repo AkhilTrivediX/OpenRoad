@@ -91,10 +91,15 @@ As a workspace owner who connected Linear or Jira through OAuth, I want OpenRoad
 ## Evidence
 
 - Branch: `feat/oauth-refresh-rotation`
-- Implementation commit SHA: Pending.
-- Date: Pending.
-- Commands run: Pending.
-- Browser/viewports tested: Pending.
-- Reviewer notes: Pending.
+- Implementation commit SHA: `7d6534a`
+- Date: July 10, 2026
+- Commands run:
+  - `pnpm exec tsc -p tsconfig.server.json --noEmit`
+  - `pnpm vitest run server/oauth-clients.test.ts server/linear-sync-worker.test.ts server/jira-sync-worker.test.ts server/http.test.ts`
+  - `pnpm check`
+  - `pnpm release:verify`
+  - Built `server-dist/server/index.js` smoke on `http://127.0.0.1:4201` with `OPENROAD_TOKEN_ENCRYPTION_KEY` configured: `OpenRoad smoke passed: health, contract, portal, private-denied, private-token`
+- Browser/viewports tested: Not required for this branch because no browser UI was changed. API-visible Settings status eligibility is covered by `server/http.test.ts`; built app/server artifacts were exercised through the smoke check.
+- Reviewer notes: Linear and Jira refresh clients follow provider-specific request formats; sync workers rotate expired or near-expired OAuth credentials before provider reads; rotation preserves credential scope/identity and reseals only access/refresh token material; retryable provider refresh failures leave old encrypted credentials untouched and do not call provider issue APIs with expired tokens.
 - Known unresolved risks: Provider write-back, conflict UI, hosted webhook registration automation, automatic reconnect UX for revoked consent, external callback/refresh state storage, and distributed refresh locking remain later production slices.
-- Rollback notes: Pending.
+- Rollback notes: Revert this branch. No schema shape changed; credentials already rotated by this branch remain valid credential records. If a bad provider token is stored, revoke that credential through Settings/API and reconnect OAuth.
